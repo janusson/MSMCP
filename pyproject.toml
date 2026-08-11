@@ -1,0 +1,20 @@
+[project]
+name = "msmcp"
+version = "0.1.0"
+description = "Model Context Protocol server for computational mass spectrometry"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp[cli]>=2.0.0",
+    "massflow>=0.1.0",
+    "massflow[chem]>=0.1.0",
+    "pydantic>=2.12.5",
+    "numpy>=1.26.4",
+]
+
+[project.scripts]
+msmcp = "src.msmcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
