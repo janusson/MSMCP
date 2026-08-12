@@ -1,11 +1,12 @@
-"""Spectral library search with chunked iteration, FDR, and p-value fallback."""
+"""Spectral library search with async dispatch, chunked iteration, FDR, and p-value fallback."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import math
 import random
 import sqlite3
+import uuid
 from typing import Any
 
 import numpy as np
@@ -31,10 +32,31 @@ class SearchInput(BaseModel):
     )
 
 
+class StatusInput(BaseModel):
+    """Validated input for the check_search_status tool."""
+
+    job_id: str = Field(
+        ...,
+        min_length=1,
+        description="The job_id returned by a previous search_library call.",
+    )
+
+
+# ======================================================================
+# Async job store — maps job_id → {status, result, error, …}
+# ======================================================================
+_JOB_STORE: dict[str, dict[str, Any]] = {}
+"""Module-level registry for tracking background search tasks.
+
+Each entry has keys:
+    status   – "pending" | "running" | "completed" | "failed"
+    result   – str | None  (the formatted Markdown report)
+    error    – str | None  (traceback message on failure)
+"""
+
 # ======================================================================
 # Mock spectral library (in-memory SQLite)
 # ======================================================================
-# Realistic compound pool for synthetic library generation.
 _COMPOUNDS: list[tuple[str, str, float]] = [
     ("Caffeine",         "C8H10N4O2",   194.0804),
     ("Theobromine",      "C7H8N4O2",    180.0647),
@@ -86,19 +108,15 @@ def _generate_peak_list(
 ) -> list[tuple[float, float]]:
     """Synthesize a realistic-looking MS/MS peak list."""
     peaks: list[tuple[float, float]] = []
-    # Fragment masses up to precursor
     frag_masses: list[float] = []
     for _ in range(num_peaks):
         frag_masses.append(rng.uniform(50.0, precursor_mz * 0.95))
 
     frag_masses.sort()
     for fm in frag_masses:
-        # Intensity roughly follows an exponential distribution with
-        # a few intense peaks and many weak ones.
         intensity = rng.expovariate(1.0 / 500.0) * rng.uniform(0.5, 2.0)
         peaks.append((round(fm, 4), round(intensity, 2)))
 
-    # Ensure there's a pseudo-molecular ion near the precursor
     peaks.append((
         round(precursor_mz + rng.uniform(-0.1, 0.1), 4),
         round(rng.uniform(100, 1000), 2),
@@ -110,10 +128,7 @@ def _build_mock_database(
     n_spectra: int = 2500,
     seed: int = 42,
 ) -> sqlite3.Connection:
-    """Create an in-memory SQLite spectral library with synthetic spectra.
-
-    Returns an open connection (caller is responsible for closing it).
-    """
+    """Create an in-memory SQLite spectral library with synthetic spectra."""
     rng = random.Random(seed)
     conn = sqlite3.connect(":memory:")
     conn.execute("PRAGMA journal_mode=OFF")
@@ -139,7 +154,6 @@ def _build_mock_database(
     for spec_id in range(1, n_spectra + 1):
         compound_idx = rng.randrange(len(_COMPOUNDS))
         name, formula, base_mass = _COMPOUNDS[compound_idx]
-        # Add small mass variation to simulate different adducts / isotopes
         precursor_mz = round(base_mass + rng.gauss(0, 0.05), 4)
 
         conn.execute(
@@ -166,11 +180,7 @@ def _iter_spectra_chunked(
     conn: sqlite3.Connection,
     chunk_size: int = 500,
 ) -> Any:
-    """Yield (chunk_id, list_of_spectrum_dicts) from the database.
-
-    Each spectrum dict contains ``id``, ``compound_name``, ``formula``,
-    ``precursor_mz``, and ``peaks`` (list of (mz, intensity) tuples).
-    """
+    """Yield (chunk_id, list_of_spectrum_dicts) from the database."""
     total = conn.execute("SELECT COUNT(*) FROM spectra").fetchone()[0]
     offset = 0
     chunk_id = 0
@@ -203,17 +213,17 @@ def _iter_spectra_chunked(
 
 
 # ======================================================================
-# Cosine similarity (same core as similarity.py, inlined for self-
-# containment of the search module)
+# Cosine similarity
 # ======================================================================
-def _cosine(peaks_a: list[tuple[float, float]],
-            peaks_b: list[tuple[float, float]],
-            tolerance: float = 0.02) -> float:
+def _cosine(
+    peaks_a: list[tuple[float, float]],
+    peaks_b: list[tuple[float, float]],
+    tolerance: float = 0.02,
+) -> float:
     """Cosine similarity between two peak lists with m/z tolerance."""
     if not peaks_a or not peaks_b:
         return 0.0
 
-    # Sort reference (b) by m/z
     b_sorted = sorted(peaks_b, key=lambda p: p[0])
     b_mz = np.array([p[0] for p in b_sorted], dtype=np.float64)
     b_int = np.array([p[1] for p in b_sorted], dtype=np.float64)
@@ -227,7 +237,6 @@ def _cosine(peaks_a: list[tuple[float, float]],
         hi = np.searchsorted(b_mz, amz + tolerance, side="right")
         if lo >= hi:
             continue
-        # Closest unused match
         best_dist = float("inf")
         best_j = -1
         for j in range(lo, hi):
@@ -266,9 +275,10 @@ def _benjamini_hochberg(p_values: list[float]) -> list[float]:
     for rank, (orig_idx, p) in enumerate(indexed, start=1):
         q = min(p * n / rank, 1.0)
         q_values[orig_idx] = q
-    # Ensure monotonicity (walk backward)
     for i in range(n - 2, -1, -1):
-        q_values[indexed[i][0]] = min(q_values[indexed[i][0]], q_values[indexed[i + 1][0]])
+        q_values[indexed[i][0]] = min(
+            q_values[indexed[i][0]], q_values[indexed[i + 1][0]]
+        )
     return q_values
 
 
@@ -284,7 +294,6 @@ def _estimate_empirical_p(
     n_null = len(null_arr)
     p_vals: list[float] = []
     for s in target_scores:
-        # Count null scores >= s
         exceed = np.searchsorted(null_arr, s, side="right")
         count_above = n_null - exceed
         p = (1.0 + count_above) / (1.0 + n_null)
@@ -299,212 +308,319 @@ def _mock_load_experimental(
     file_path: str,
     rng: random.Random | None = None,
 ) -> list[tuple[float, float]]:
-    """Return a synthetic experimental peak list from a file path.
-
-    Uses the file-path hash to seed the RNG so the same file always
-    produces the same spectrum.
-    """
+    """Return a synthetic experimental peak list from a file path."""
     if rng is None:
         rng = random.Random(hash(file_path) & 0x7FFFFFFF)
-    # Simulate a precursor around 180–900 Da
     precursor = rng.uniform(180.0, 900.0)
     return _generate_peak_list(precursor, rng.randint(15, 50), rng)
+
+
+# ======================================================================
+# Synchronous search engine (dispatched via asyncio.to_thread)
+# ======================================================================
+def _build_report(
+    experimental_file: str,
+    database_file: str,
+) -> str:
+    """Perform the full library search and return a formatted Markdown report.
+
+    This is a CPU-bound synchronous function.  It is called via
+    ``asyncio.to_thread()`` to avoid blocking the event loop.
+    """
+    rng = random.Random(hash(database_file) & 0x7FFFFFFF)
+    n_spectra = rng.randint(500, 5000)
+    conn = _build_mock_database(n_spectra=n_spectra, seed=rng.randint(0, 2**31))
+    try:
+        # --- load experimental spectrum -------------------------------------
+        exp_peaks = _mock_load_experimental(experimental_file, rng)
+        logger.info(
+            "Loaded experimental spectrum: %d peaks from %r",
+            len(exp_peaks), experimental_file,
+        )
+
+        # --- small-library guard --------------------------------------------
+        SMALL_LIBRARY_THRESHOLD = 2000
+        use_fdr = n_spectra >= SMALL_LIBRARY_THRESHOLD
+
+        small_lib_warning = ""
+        if not use_fdr:
+            small_lib_warning = (
+                f"⚠️  **SCIENTIFIC WARNING**\n"
+                f"The spectral library contains only **{n_spectra}** spectra "
+                f"(< {SMALL_LIBRARY_THRESHOLD} threshold).\n"
+                f"Target-Decoy FDR estimation is unreliable with small "
+                f"libraries.\n"
+                f"→ Automatically switching to **empirical p-value** "
+                f"calculation instead.\n\n"
+            )
+
+        # --- chunked search -------------------------------------------------
+        target_scores: list[float] = []
+        target_meta: list[dict[str, Any]] = []
+
+        chunk_size = 500
+        logger.info(
+            "Scanning %d spectra in chunks of %d (%s mode)",
+            n_spectra, chunk_size,
+            "FDR" if use_fdr else "p-value",
+        )
+
+        for chunk_id, chunk in _iter_spectra_chunked(conn, chunk_size):
+            for spec in chunk:
+                score = _cosine(exp_peaks, spec["peaks"])
+                target_scores.append(score)
+                target_meta.append({
+                    "id": spec["id"],
+                    "compound_name": spec["compound_name"],
+                    "formula": spec["formula"],
+                    "precursor_mz": spec["precursor_mz"],
+                    "score": score,
+                })
+            logger.debug("Chunk %d: processed %d spectra", chunk_id, len(chunk))
+
+        # --- null distribution (decoy scores) -------------------------------
+        n_null = n_spectra
+        null_scores: list[float] = []
+        for _ in range(n_null):
+            spec_idx = rng.randrange(len(target_meta))
+            orig_peaks = conn.execute(
+                "SELECT mz, intensity FROM peaks WHERE spectrum_id=?",
+                (target_meta[spec_idx]["id"],),
+            ).fetchall()
+            shuffled = [(p[0], p[1]) for p in orig_peaks]
+            rng.shuffle(shuffled)
+            null_scores.append(_cosine(exp_peaks, shuffled))
+
+        # --- FDR or p-value calculation -------------------------------------
+        REPORT_THRESHOLD = 0.05
+
+        if use_fdr:
+            p_values = _estimate_empirical_p(target_scores, null_scores)
+            q_values = _benjamini_hochberg(p_values)
+
+            hits = [
+                {**meta, "q_value": qv}
+                for meta, qv in zip(target_meta, q_values)
+                if qv <= REPORT_THRESHOLD
+            ]
+            hits.sort(key=lambda h: h["score"], reverse=True)
+            method_line = f"FDR threshold (Benjamini-Hochberg): {REPORT_THRESHOLD}"
+        else:
+            p_values = _estimate_empirical_p(target_scores, null_scores)
+
+            hits = [
+                {**meta, "p_value": pv}
+                for meta, pv in zip(target_meta, p_values)
+                if pv <= REPORT_THRESHOLD
+            ]
+            hits.sort(key=lambda h: h["score"], reverse=True)
+            method_line = f"Empirical p-value threshold: {REPORT_THRESHOLD}"
+
+        # --- format output --------------------------------------------------
+        top_n = min(len(hits), 20)
+
+        lines = [
+            "## Spectral Library Search Results",
+            "",
+            f"Database: `{database_file}`",
+            f"Experimental file: `{experimental_file}`",
+            f"Library size: {n_spectra:,} spectra",
+            f"Experimental peaks: {len(exp_peaks)}",
+            "",
+        ]
+
+        if small_lib_warning:
+            lines.append(small_lib_warning)
+
+        lines.append(method_line)
+        lines.append("")
+
+        if not hits:
+            lines.append(
+                "**No hits passed the significance threshold.**\n\n"
+                "Consider widening the precursor mass tolerance or "
+                "re-acquiring the spectrum with higher signal-to-noise."
+            )
+        else:
+            lines.append(f"Top {top_n} hit(s):")
+            lines.append("")
+            if use_fdr:
+                lines.append(
+                    "| Rank | Compound         | Score  | FDR (q-value) | Precursor m/z | Formula    |"
+                )
+                lines.append(
+                    "|------|-----------------|--------|---------------|---------------|------------|"
+                )
+                for i, h in enumerate(hits[:top_n], start=1):
+                    lines.append(
+                        f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | {h['q_value']:.4f}       | {h['precursor_mz']:>13.4f} | {h['formula']:<10} |"
+                    )
+            else:
+                lines.append(
+                    "| Rank | Compound         | Score  | p-value   | Precursor m/z | Formula    |"
+                )
+                lines.append(
+                    "|------|-----------------|--------|-----------|---------------|------------|"
+                )
+                for i, h in enumerate(hits[:top_n], start=1):
+                    lines.append(
+                        f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | {h['p_value']:.4f}   | {h['precursor_mz']:>13.4f} | {h['formula']:<10} |"
+                    )
+
+            lines.append("")
+            total_passing = len(hits)
+            if total_passing > top_n:
+                lines.append(
+                    f"{total_passing} hits passed the threshold "
+                    f"({top_n} shown above)."
+                )
+            else:
+                lines.append(
+                    f"{total_passing} hit(s) passed the threshold."
+                )
+
+        logger.info(
+            "_build_report(db=%r, n=%d, mode=%s) → %d hits (top %.4f)",
+            database_file, n_spectra,
+            "FDR" if use_fdr else "p-value",
+            len(hits),
+            hits[0]["score"] if hits else 0.0,
+        )
+
+        return "\n".join(lines)
+
+    finally:
+        conn.close()
+
+
+# ======================================================================
+# Async background task
+# ======================================================================
+async def _run_search_task(
+    job_id: str,
+    exp_file: str,
+    db_file: str,
+) -> None:
+    """Background coroutine: executes the library search via a thread.
+
+    Offloads the CPU-bound ``_build_report`` call to a thread-pool
+    executor so the asyncio event loop is never blocked.
+    """
+    try:
+        _JOB_STORE[job_id]["status"] = "running"
+        logger.info("Search task %s: started", job_id)
+
+        report = await asyncio.to_thread(_build_report, exp_file, db_file)
+
+        _JOB_STORE[job_id]["status"] = "completed"
+        _JOB_STORE[job_id]["result"] = report
+        logger.info("Search task %s: completed", job_id)
+
+    except Exception as exc:
+        logger.exception("Search task %s failed", job_id)
+        _JOB_STORE[job_id]["status"] = "failed"
+        _JOB_STORE[job_id]["error"] = f"{type(exc).__name__}: {exc}"
 
 
 # ======================================================================
 # Public registration
 # ======================================================================
 def register_tools(mcp: Any) -> None:
-    """Register the library-search tool on the FastMCP *mcp* instance."""
+    """Register the async library-search tools on the FastMCP instance."""
 
+    # ------------------------------------------------------------------
+    # Tool 1 — Dispatcher
+    # ------------------------------------------------------------------
     @mcp.tool()
-    def search_library(
+    async def search_library(
         experimental_file: str,
         database_file: str,
     ) -> str:
-        """Search a spectral library for matches to an experimental spectrum.
+        """Dispatch a spectral library search and return a job_id for polling.
 
-        Uses chunked iteration for memory safety on large databases.
-        Reports the top hits passing FDR control (or empirical p-value
-        threshold for small libraries).
+        The search runs asynchronously in the background.  Use
+        ``check_search_status`` with the returned *job_id* to retrieve
+        results once the scan completes.  This pattern prevents host
+        LLM timeouts on large libraries.
         """
         _ = SearchInput(
             experimental_file=experimental_file,
             database_file=database_file,
         )
 
-        # --- build / open database -----------------------------------------
-        # In production this would open *database_file*; here we always use
-        # an in-memory mock seeded from the filename for reproducibility.
-        rng = random.Random(hash(database_file) & 0x7FFFFFFF)
-        n_spectra = rng.randint(500, 5000)  # sometimes small, sometimes large
-        conn = _build_mock_database(n_spectra=n_spectra, seed=rng.randint(0, 2**31))
-        try:
-            # --- load experimental spectrum ---------------------------------
-            exp_peaks = _mock_load_experimental(experimental_file, rng)
-            logger.info(
-                "Loaded experimental spectrum: %d peaks from %r",
-                len(exp_peaks), experimental_file,
+        # Short, readable job identifier
+        job_id = uuid.uuid4().hex[:8]
+
+        _JOB_STORE[job_id] = {
+            "status": "pending",
+            "result": None,
+            "error": None,
+            "experimental_file": experimental_file,
+            "database_file": database_file,
+        }
+
+        asyncio.create_task(
+            _run_search_task(job_id, experimental_file, database_file)
+        )
+
+        logger.info(
+            "Dispatched search job %s (exp=%r, db=%r)",
+            job_id, experimental_file, database_file,
+        )
+
+        return (
+            f"## Search Dispatched\n\n"
+            f"**Job ID:** `{job_id}`\n\n"
+            f"The spectral library search is running in the background.\n"
+            f"Use `check_search_status` with this job ID to poll for results:\n\n"
+            f'    check_search_status(job_id="{job_id}")\n'
+        )
+
+    # ------------------------------------------------------------------
+    # Tool 2 — Poller
+    # ------------------------------------------------------------------
+    @mcp.tool()
+    async def check_search_status(job_id: str) -> str:
+        """Poll the status of a previously dispatched search job.
+
+        Returns:
+        - A "wait" message if the job is still pending or running.
+        - The full Markdown hit table when the search completes.
+        - An error message if the job failed.
+        """
+        _ = StatusInput(job_id=job_id)
+
+        job = _JOB_STORE.get(job_id)
+        if job is None:
+            return (
+                f"❓ **Unknown Job**\n\n"
+                f"No search job found with ID `{job_id}`.  "
+                f"Double-check the job ID or dispatch a new search via "
+                f"`search_library`."
             )
 
-            # --- small-library guard ----------------------------------------
-            SMALL_LIBRARY_THRESHOLD = 2000
-            use_fdr = n_spectra >= SMALL_LIBRARY_THRESHOLD
+        status = job["status"]
 
-            small_lib_warning = ""
-            if not use_fdr:
-                small_lib_warning = (
-                    f"⚠️  **SCIENTIFIC WARNING**\n"
-                    f"The spectral library contains only **{n_spectra}** spectra "
-                    f"(< {SMALL_LIBRARY_THRESHOLD} threshold).\n"
-                    f"Target-Decoy FDR estimation is unreliable with small "
-                    f"libraries.\n"
-                    f"→ Automatically switching to **empirical p-value** "
-                    f"calculation instead.\n\n"
-                )
-
-            # --- chunked search ---------------------------------------------
-            target_scores: list[float] = []
-            target_meta: list[dict[str, Any]] = []
-
-            chunk_size = 500
-            logger.info(
-                "Scanning %d spectra in chunks of %d (%s mode)",
-                n_spectra, chunk_size,
-                "FDR" if use_fdr else "p-value",
+        if status == "pending":
+            return (
+                f"⏳ **Pending** — Job `{job_id}` has been queued and will "
+                f"start shortly.  Poll again in a moment."
             )
-
-            for chunk_id, chunk in _iter_spectra_chunked(conn, chunk_size):
-                for spec in chunk:
-                    score = _cosine(exp_peaks, spec["peaks"])
-                    target_scores.append(score)
-                    target_meta.append({
-                        "id": spec["id"],
-                        "compound_name": spec["compound_name"],
-                        "formula": spec["formula"],
-                        "precursor_mz": spec["precursor_mz"],
-                        "score": score,
-                    })
-                logger.debug(
-                    "Chunk %d: processed %d spectra",
-                    chunk_id, len(chunk),
-                )
-
-            # --- null distribution (decoy scores) ---------------------------
-            # Generate null scores by matching experimental peaks against
-            # randomly shuffled peak lists.
-            n_null = n_spectra  # equal number of decoys
-            null_scores: list[float] = []
-            for _ in range(n_null):
-                # Shuffle m/z values of a random spectrum's peaks
-                spec_idx = rng.randrange(len(target_meta))
-                orig_peaks = conn.execute(
-                    "SELECT mz, intensity FROM peaks WHERE spectrum_id=?",
-                    (target_meta[spec_idx]["id"],),
-                ).fetchall()
-                shuffled = [(p[0], p[1]) for p in orig_peaks]
-                rng.shuffle(shuffled)
-                # Re-match m/z back to roughly correct range
-                null_scores.append(_cosine(exp_peaks, shuffled))
-
-            # --- FDR or p-value calculation ---------------------------------
-            REPORT_THRESHOLD = 0.05
-
-            if use_fdr:
-                p_values = _estimate_empirical_p(target_scores, null_scores)
-                q_values = _benjamini_hochberg(p_values)
-
-                # Combine and filter
-                hits = [
-                    {**meta, "q_value": qv}
-                    for meta, qv in zip(target_meta, q_values)
-                    if qv <= REPORT_THRESHOLD
-                ]
-                hits.sort(key=lambda h: h["score"], reverse=True)
-                method_line = f"FDR threshold (Benjamini-Hochberg): {REPORT_THRESHOLD}"
-            else:
-                p_values = _estimate_empirical_p(target_scores, null_scores)
-
-                hits = [
-                    {**meta, "p_value": pv}
-                    for meta, pv in zip(target_meta, p_values)
-                    if pv <= REPORT_THRESHOLD
-                ]
-                hits.sort(key=lambda h: h["score"], reverse=True)
-                method_line = f"Empirical p-value threshold: {REPORT_THRESHOLD}"
-
-            # --- format output ----------------------------------------------
-            top_n = min(len(hits), 20)
-
-            lines = [
-                "## Spectral Library Search Results",
-                "",
-                f"Database: `{database_file}`",
-                f"Experimental file: `{experimental_file}`",
-                f"Library size: {n_spectra:,} spectra",
-                f"Experimental peaks: {len(exp_peaks)}",
-                "",
-            ]
-
-            if small_lib_warning:
-                lines.append(small_lib_warning)
-
-            lines.append(method_line)
-            lines.append("")
-
-            if not hits:
-                lines.append(
-                    "**No hits passed the significance threshold.**\n\n"
-                    "Consider widening the precursor mass tolerance or "
-                    "re-acquiring the spectrum with higher signal-to-noise."
-                )
-            else:
-                lines.append(f"Top {top_n} hit(s):")
-                lines.append("")
-                if use_fdr:
-                    lines.append(
-                        "| Rank | Compound         | Score  | FDR (q-value) | Precursor m/z | Formula    |"
-                    )
-                    lines.append(
-                        "|------|-----------------|--------|---------------|---------------|------------|"
-                    )
-                    for i, h in enumerate(hits[:top_n], start=1):
-                        lines.append(
-                            f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | {h['q_value']:.4f}       | {h['precursor_mz']:>13.4f} | {h['formula']:<10} |"
-                        )
-                else:
-                    lines.append(
-                        "| Rank | Compound         | Score  | p-value   | Precursor m/z | Formula    |"
-                    )
-                    lines.append(
-                        "|------|-----------------|--------|-----------|---------------|------------|"
-                    )
-                    for i, h in enumerate(hits[:top_n], start=1):
-                        lines.append(
-                            f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | {h['p_value']:.4f}   | {h['precursor_mz']:>13.4f} | {h['formula']:<10} |"
-                        )
-
-                lines.append("")
-                total_passing = len(hits)
-                if total_passing > top_n:
-                    lines.append(
-                        f"{total_passing} hits passed the threshold "
-                        f"({top_n} shown above)."
-                    )
-                else:
-                    lines.append(
-                        f"{total_passing} hit(s) passed the threshold."
-                    )
-
-            logger.info(
-                "search_library(db=%r, n=%d, mode=%s) → %d hits (top %.4f)",
-                database_file, n_spectra,
-                "FDR" if use_fdr else "p-value",
-                len(hits),
-                hits[0]["score"] if hits else 0.0,
+        elif status == "running":
+            return (
+                f"🔄 **Running** — Job `{job_id}` is scanning the spectral "
+                f"library and computing statistics.  Poll again shortly."
             )
-
-            return "\n".join(lines)
-
-        finally:
-            conn.close()
+        elif status == "completed":
+            logger.info("check_search_status(%s): returning completed report", job_id)
+            return job["result"]
+        elif status == "failed":
+            return (
+                f"❌ **Failed** — Job `{job_id}` encountered an error:\n\n"
+                f"```\n{job['error']}\n```"
+            )
+        else:
+            return (
+                f"⚠️  **Unknown status** `{status}` for job `{job_id}`.  "
+                f"This may indicate an internal state corruption."
+            )
