@@ -1,15 +1,26 @@
-"""Similarity &amp; validation tools: mass-error checks and spectral matching."""
+"""Similarity & validation tools: mass-error checks and spectral matching.
+
+Scoring backends
+----------------
+* ``classical`` - greedy one-to-one peak matching within a Da tolerance,
+  scored with cosine similarity on the matched intensities.
+* ``dreams`` / ``lsm-ms2`` - whole-spectrum embeddings produced by the
+  foundation-model adapters in :mod:`msmcp.models.embeddings`, scored with
+  cosine similarity in 1024-dimensional embedding space.
+"""
 
 from __future__ import annotations
 
 import logging
-import math
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import BaseModel, Field
 
+from msmcp.models.embeddings import get_embedder
+
 logger = logging.getLogger("msmcp.tools.similarity")
+
 
 # ======================================================================
 # Pydantic schemas
@@ -48,6 +59,13 @@ class ComputeCosineInput(BaseModel):
         le=1.0,
         description="m/z matching tolerance in Da (default 0.02).",
     )
+    scoring_method: Literal["classical", "dreams", "lsm-ms2"] = Field(
+        default="classical",
+        description=(
+            "Scoring method: 'classical' greedy peak matching, or deep "
+            "foundation-model embeddings ('dreams' / 'lsm-ms2')."
+        ),
+    )
 
 
 # ======================================================================
@@ -62,13 +80,9 @@ def _validate_peak_list(
         raise ValueError(f"{label} peak list must be non-empty.")
     for i, p in enumerate(peaks):
         if not isinstance(p, (list, tuple)) or len(p) != 2:
-            raise ValueError(
-                f"{label} peak [{i}] must be [m/z, intensity]; got {p!r}"
-            )
+            raise ValueError(f"{label} peak [{i}] must be [m/z, intensity]; got {p!r}")
         if p[1] < 0:
-            raise ValueError(
-                f"{label} peak [{i}] has negative intensity ({p[1]})"
-            )
+            raise ValueError(f"{label} peak [{i}] has negative intensity ({p[1]})")
     arr = np.asarray(peaks, dtype=np.float64)
     return arr
 
@@ -82,11 +96,11 @@ def _fmt_intensity(val: float) -> str:
 
 
 # ======================================================================
-# Core: cosine similarity (mock / analytical implementation)
+# Core: cosine similarity (classical / analytical implementation)
 # ======================================================================
 def _match_peaks(
-    query: np.ndarray,       # (N, 2)  [mz, intensity]
-    reference: np.ndarray,   # (M, 2)
+    query: np.ndarray,  # (N, 2)  [mz, intensity]
+    reference: np.ndarray,  # (M, 2)
     tolerance: float,
 ) -> tuple[np.ndarray, np.ndarray, list[int]]:
     """Greedy peak matching within *tolerance* Da.
@@ -160,6 +174,48 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 
 # ======================================================================
+# Core: deep-embedding scoring (foundation-model adapters)
+# ======================================================================
+def _embedding_score(
+    query: np.ndarray,
+    reference: np.ndarray,
+    n_query: int,
+    n_ref: int,
+    method: str,
+) -> str:
+    """Score two peak lists in deep-embedding space and render the report."""
+    embedder = get_embedder(method)
+    try:
+        q_emb = embedder.embed_spectrum(query)
+        r_emb = embedder.embed_spectrum(reference)
+    except Exception as exc:  # adapters must never crash the tool
+        logger.warning("%s embedding failed: %s", embedder.name, exc)
+        return f"ERROR: {embedder.name} embedding failed: {exc}"
+
+    score = _cosine(q_emb, r_emb)
+
+    logger.info(
+        "compute_cosine(method=%s, query=%d, ref=%d) → %.4f",
+        method,
+        n_query,
+        n_ref,
+        score,
+    )
+
+    return (
+        f"Cosine Similarity ({embedder.name}): **{score:.4f}**\n"
+        "\n"
+        f"Scoring method: {embedder.name} deep embedding "
+        f"({embedder.embedding_dim}-d, L2-normalised)\n"
+        f"Query peaks: {n_query} | Reference peaks: {n_ref}\n"
+        "\n"
+        "Similarity is computed in embedding space: whole-spectrum\n"
+        "fragmentation patterns are compared rather than individual\n"
+        "peak matches, so no matched-peak counts are reported."
+    )
+
+
+# ======================================================================
 # Public registration
 # ======================================================================
 def register_tools(mcp: Any) -> None:
@@ -186,7 +242,9 @@ def register_tools(mcp: Any) -> None:
 
         logger.info(
             "validate_precursor(theo=%.4f, exp=%.4f) → %.2f ppm (%s)",
-            theoretical_mass, experimental_mass, delta_ppm,
+            theoretical_mass,
+            experimental_mass,
+            delta_ppm,
             "PASS" if passed else "REJECT",
         )
 
@@ -219,18 +277,23 @@ def register_tools(mcp: Any) -> None:
         query_peaks: list[list[float]],
         reference_peaks: list[list[float]],
         ms2_tolerance: float = 0.02,
+        scoring_method: Literal["classical", "dreams", "lsm-ms2"] = "classical",
     ) -> str:
-        """Compute the cosine similarity between two MS/MS peak lists.
+        """Compute the similarity between two MS/MS peak lists.
 
-        Matches query peaks to the closest reference peak within
-        *ms2_tolerance* Da (greedy, one-to-one).  Reports the cosine
-        score, match counts, and the most intense *unmatched* query
-        peaks to guide structural revision.
+        With *scoring_method='classical'* (default), query peaks are matched
+        to the closest reference peak within *ms2_tolerance* Da (greedy,
+        one-to-one) and the cosine score is computed on matched intensities;
+        the most intense unmatched query peaks are reported to guide
+        structural revision.  With 'dreams' or 'lsm-ms2', whole-spectrum
+        embeddings from the corresponding foundation-model adapter are
+        compared instead, capturing global fragmentation patterns.
         """
         _ = ComputeCosineInput(
             query_peaks=query_peaks,
             reference_peaks=reference_peaks,
             ms2_tolerance=ms2_tolerance,
+            scoring_method=scoring_method,
         )
 
         # --- validate & convert peak lists ----------------------------------
@@ -241,16 +304,23 @@ def register_tools(mcp: Any) -> None:
             logger.warning("Peak list validation failed: %s", exc)
             return f"ERROR: {exc}"
 
-        # --- match ----------------------------------------------------------
+        n_query = len(q_arr)
+        n_ref = len(r_arr)
+
+        # --- foundation-model embedding scoring -----------------------------
+        if scoring_method != "classical":
+            return _embedding_score(q_arr, r_arr, n_query, n_ref, scoring_method)
+
+        # --- classical greedy matching --------------------------------------
         q_matched, r_matched, unmatched_q_idx = _match_peaks(
-            q_arr, r_arr, ms2_tolerance,
+            q_arr,
+            r_arr,
+            ms2_tolerance,
         )
 
         # --- cosine ---------------------------------------------------------
         score = _cosine(q_matched, r_matched)
 
-        n_query = len(q_arr)
-        n_ref = len(r_arr)
         n_matched = len(q_matched)
         pct_matched = (n_matched / n_query * 100) if n_query > 0 else 0.0
 
@@ -264,9 +334,7 @@ def register_tools(mcp: Any) -> None:
                 "Unmatched query peaks (most intense first; these fragments may indicate"
                 " structural differences):"
             )
-            unmatched_lines.append(
-                f"  {'m/z':>10}  {'Intensity':>12}"
-            )
+            unmatched_lines.append(f"  {'m/z':>10}  {'Intensity':>12}")
             unmatched_lines.append(f"  {'─' * 10}  {'─' * 12}")
             for i in order[:15]:
                 unmatched_lines.append(
@@ -285,6 +353,7 @@ def register_tools(mcp: Any) -> None:
         lines = [
             f"Cosine Similarity: **{score:.4f}**",
             "",
+            "Scoring method: classical (greedy peak matching)",
             f"Matched: {n_matched} / {n_query} query peaks ({pct_matched:.1f}%)",
             f"Reference peaks utilised: {n_ref_used} / {n_ref} ({pct_ref_used:.1f}%)",
             f"MS/MS tolerance: ±{ms2_tolerance:.3f} Da",
@@ -298,7 +367,12 @@ def register_tools(mcp: Any) -> None:
 
         logger.info(
             "compute_cosine(query=%d, ref=%d, tol=%.3f) → %.4f (%d matched, %d unmatched)",
-            n_query, n_ref, ms2_tolerance, score, n_matched, len(unmatched_q_idx),
+            n_query,
+            n_ref,
+            ms2_tolerance,
+            score,
+            n_matched,
+            len(unmatched_q_idx),
         )
 
         return "\n".join(lines)

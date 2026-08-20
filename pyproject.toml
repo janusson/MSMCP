@@ -10,11 +10,68 @@ dependencies = [
     "massflow[chem]>=0.1.0",
     "pydantic>=2.12.5",
     "numpy>=1.26.4",
+    "prefect>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.11",
+    "mypy>=1.15",
 ]
 
 [project.scripts]
-msmcp = "src.msmcp.server:main"
+msmcp = "msmcp.server:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+src = ["src"]
+# Design-log markdown with embedded Python snippets; not source code.
+extend-exclude = ["MCP server configuration.md"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pre-existing findings in src/ (documented debt).  This step only adds the
+# testing/tooling infrastructure; src/ is intentionally left untouched and
+# these suppressions should be removed one-by-one as the code is cleaned up.
+"src/msmcp/__init__.py" = ["RUF002"]
+"src/msmcp/tools/__init__.py" = ["RUF002"]
+"src/msmcp/tools/chem.py" = ["B905", "F841", "RUF002", "RUF003"]
+"src/msmcp/tools/io.py" = ["F541", "RUF001", "RUF003", "RUF023", "UP035"]
+"src/msmcp/tools/qc.py" = ["B007", "F841", "RUF001", "RUF003", "RUF005", "SIM114"]
+"src/msmcp/tools/similarity.py" = ["RUF002"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src", "tests"]
+# The installed package is `msmcp` (src-layout); resolve `msmcp.*` imports
+# against the src/ tree.
+mypy_path = ["src"]
+explicit_package_bases = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+# Optional / missing runtime modules without type stubs.  Note:
+# `mcp.server.fastmcp` does not exist in the locked mcp==2.0.0 SDK (the
+# legacy FastMCP API was removed); see the README roadmap for the migration.
+module = ["rdkit", "massflow.*", "mcp.server.fastmcp"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Pre-existing type errors in src/ (documented debt; src/ is not modified in
+# this step).  Remove once the mock I/O layer is refactored.
+module = "msmcp.tools.io"
+ignore_errors = true

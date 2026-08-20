@@ -18,6 +18,7 @@ logger = logging.getLogger("msmcp.tools.io")
 try:
     from massflow.errors import UnsupportedVendorFormatError
 except ImportError:  # pragma: no cover – only hit in dev without massflow
+
     class UnsupportedVendorFormatError(Exception):
         """Stub for development without massflow installed."""
 
@@ -80,7 +81,9 @@ def _summarise_spectrum(
     ms_level = _maybe_int(getattr(spectrum, "ms_level", 1))
     rt = getattr(spectrum, "rt", None)
 
-    lines.append(f"Spectrum #{idx}  |  MS{ms_level}  |  RT: {_safe_fmt(rt, _fmt_rt)} min")
+    lines.append(
+        f"Spectrum #{idx}  |  MS{ms_level}  |  RT: {_safe_fmt(rt, _fmt_rt)} min"
+    )
 
     # -- peak arrays --------------------------------------------------------
     mz: np.ndarray | None = _to_float64(getattr(spectrum, "mz", None))
@@ -104,7 +107,7 @@ def _summarise_spectrum(
         return "\n".join(lines)
 
     # Top-N by intensity
-    order = np.argsort(intensity)[::-1]          # descending
+    order = np.argsort(intensity)[::-1]  # descending
     show = min(top_n, n_peaks)
     lines.append(f"  Top {show} peaks (m/z → intensity):")
     for i in range(show):
@@ -115,11 +118,9 @@ def _summarise_spectrum(
 
     # Base peak
     bp = np.argmax(intensity)
-    lines.append(
-        f"  Base peak: {_fmt_mz(mz[bp])}  ({_fmt_intensity(intensity[bp])})"
-    )
+    lines.append(f"  Base peak: {_fmt_mz(mz[bp])}  ({_fmt_intensity(intensity[bp])})")
 
-    lines.append("")   # blank separator between spectra
+    lines.append("")  # blank separator between spectra
     return "\n".join(lines)
 
 
@@ -169,10 +170,9 @@ def _mock_load_spectra(file_path: str) -> Iterator[object]:
             self.rt = round(idx * 0.5 + random.uniform(0, 0.1), 2)
             n = random.randint(20, 200)
             self.mz = np.sort(np.random.uniform(50.0, 2000.0, n)).astype(np.float64)
-            self.intensity = (
-                np.random.exponential(1_000.0, n).astype(np.float64)
-                * random.uniform(0.1, 10.0)
-            )
+            self.intensity = np.random.exponential(1_000.0, n).astype(
+                np.float64
+            ) * random.uniform(0.1, 10.0)
 
     logger.warning("Using mock spectrum loader – massflow not installed.")
     for idx in range(6):
@@ -259,7 +259,9 @@ def register_tools(mcp: Any) -> None:
 
         logger.info(
             "load_mzml_summary(file=%r, spectra=%d, noise=%.2f) → %d chars",
-            file_path, count, noise_threshold,
+            file_path,
+            count,
+            noise_threshold,
             sum(len(s) for s in header + body + footer),
         )
 

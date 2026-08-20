@@ -6,8 +6,14 @@ import sys
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
+from msmcp.tools.chem import register_tools as _register_chem_tools
+from msmcp.tools.io import register_tools as _register_io_tools
+from msmcp.tools.qc import register_tools as _register_qc_tools
+from msmcp.tools.search import register_tools as _register_search_tools
+from msmcp.tools.similarity import register_tools as _register_sim_tools
+
 # ---------------------------------------------------------------------------
-# Logging boundary – ALL diagnostic output MUST go to stderr.
+# Logging boundary - ALL diagnostic output MUST go to stderr.
 # Writing anything to stdout will corrupt the JSON-RPC framing on the
 # stdio transport and cause the host LLM to lose sync with the server.
 # ---------------------------------------------------------------------------
@@ -40,9 +46,10 @@ class PingResponse(BaseModel):
 # ---------------------------------------------------------------------------
 @mcp.tool()
 def ping() -> PingResponse:
-    """Diagnostic health check – verifies the server is alive and can import massflow."""
+    """Diagnostic health check - verifies the server is alive and can import massflow."""
     try:
         import massflow  # noqa: F401
+
         massflow_available = True
     except ImportError:
         massflow_available = False
@@ -56,13 +63,9 @@ def ping() -> PingResponse:
     )
 
 
-# --- Register tools from sub-modules ---------------------------------------
-from src.msmcp.tools.io import register_tools as _register_io_tools  # noqa: E402
-from src.msmcp.tools.chem import register_tools as _register_chem_tools  # noqa: E402
-from src.msmcp.tools.similarity import register_tools as _register_sim_tools  # noqa: E402
-from src.msmcp.tools.search import register_tools as _register_search_tools  # noqa: E402
-from src.msmcp.tools.qc import register_tools as _register_qc_tools  # noqa: E402
-
+# ---------------------------------------------------------------------------
+# Register tools from sub-modules
+# ---------------------------------------------------------------------------
 _register_io_tools(mcp)
 _register_chem_tools(mcp)
 _register_sim_tools(mcp)

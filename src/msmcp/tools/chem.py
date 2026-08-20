@@ -13,9 +13,9 @@ logger = logging.getLogger("msmcp.tools.chem")
 # ======================================================================
 # Physical constants (exact masses, Da)
 # ======================================================================
-PROTON_MASS = 1.00727646688      # H⁺
+PROTON_MASS = 1.00727646688  # H⁺
 ELECTRON_MASS = 0.00054857990907  # e⁻
-NEUTRON_MASS = 1.00866491588      # n
+NEUTRON_MASS = 1.00866491588  # n
 
 # ======================================================================
 # Known adducts — Δ = (adduct mass) − (neutral M mass) in Da.
@@ -77,21 +77,13 @@ _ADDUCT_DB: dict[str, dict[str, Any]] = {
         "polarity": "negative",
     },
     "[M+HCOO]-": {
-        "shift": (
-            1.007825032
-            + 12.000000000
-            + 2 * 15.994914619
-            + ELECTRON_MASS
-        ),
+        "shift": (1.007825032 + 12.000000000 + 2 * 15.994914619 + ELECTRON_MASS),
         "charge": -1,
         "polarity": "negative",
     },
     "[M+CH3COO]-": {
         "shift": (
-            2 * 12.000000000
-            + 3 * 1.007825032
-            + 2 * 15.994914619
-            + ELECTRON_MASS
+            2 * 12.000000000 + 3 * 1.007825032 + 2 * 15.994914619 + ELECTRON_MASS
         ),
         "charge": -1,
         "polarity": "negative",
@@ -102,11 +94,7 @@ _ADDUCT_DB: dict[str, dict[str, Any]] = {
         "polarity": "negative",
     },
     "[M+Na-2H]-": {
-        "shift": (
-            (22.98976928 - ELECTRON_MASS)
-            - 2 * PROTON_MASS
-            + 2 * ELECTRON_MASS
-        ),
+        "shift": ((22.98976928 - ELECTRON_MASS) - 2 * PROTON_MASS + 2 * ELECTRON_MASS),
         "charge": -1,
         "polarity": "negative",
     },
@@ -118,24 +106,33 @@ _ADDUCT_DB: dict[str, dict[str, Any]] = {
 # Isotope database  (mass / Da,  fractional abundance)
 # ======================================================================
 _ISOTOPES: dict[str, list[tuple[float, float]]] = {
-    "C":  [(12.000000000, 0.9893), (13.003354835, 0.0107)],
-    "H":  [(1.007825032,  0.999885), (2.014101778,  0.000115)],
-    "N":  [(14.003074004, 0.99632), (15.000108898, 0.00368)],
-    "O":  [(15.994914619, 0.99757), (16.999131756, 0.00038), (17.999159612, 0.00205)],
-    "S":  [(31.972071174, 0.9493), (32.971458909, 0.0076), (33.967867004, 0.0429)],
+    "C": [(12.000000000, 0.9893), (13.003354835, 0.0107)],
+    "H": [(1.007825032, 0.999885), (2.014101778, 0.000115)],
+    "N": [(14.003074004, 0.99632), (15.000108898, 0.00368)],
+    "O": [(15.994914619, 0.99757), (16.999131756, 0.00038), (17.999159612, 0.00205)],
+    "S": [(31.972071174, 0.9493), (32.971458909, 0.0076), (33.967867004, 0.0429)],
     "Cl": [(34.968852690, 0.7578), (36.965902580, 0.2422)],
     "Br": [(78.918337600, 0.5069), (80.916289700, 0.4931)],
-    "P":  [(30.973761998, 1.0)],
-    "F":  [(18.998403163, 1.0)],
-    "I":  [(126.904467700, 1.0)],
+    "P": [(30.973761998, 1.0)],
+    "F": [(18.998403163, 1.0)],
+    "I": [(126.904467700, 1.0)],
     "Na": [(22.989769280, 1.0)],
-    "K":  [(38.963706490, 0.93258), (39.963998170, 0.00012), (40.961825260, 0.06730)],
+    "K": [(38.963706490, 0.93258), (39.963998170, 0.00012), (40.961825260, 0.06730)],
     "Si": [(27.976926535, 0.9223), (28.976494665, 0.0467), (29.973770010, 0.0310)],
-    "Fe": [(53.939609000, 0.05845), (55.934936000, 0.91754),
-           (56.935393000, 0.02119), (57.933274000, 0.00282)],
-    "Se": [(73.922475934, 0.0089), (75.919213700, 0.0937),
-           (76.919914200, 0.0763), (77.917309100, 0.2377),
-           (79.916521800, 0.4961), (81.916709500, 0.0873)],
+    "Fe": [
+        (53.939609000, 0.05845),
+        (55.934936000, 0.91754),
+        (56.935393000, 0.02119),
+        (57.933274000, 0.00282),
+    ],
+    "Se": [
+        (73.922475934, 0.0089),
+        (75.919213700, 0.0937),
+        (76.919914200, 0.0763),
+        (77.917309100, 0.2377),
+        (79.916521800, 0.4961),
+        (81.916709500, 0.0873),
+    ],
 }
 """Isotopes ordered by ascending mass; first entry = monoisotopic."""
 
@@ -151,16 +148,6 @@ class AdductInput(BaseModel):
         min_length=3,
         description="Adduct notation, e.g. '[M+H]+' or '[M-H]-'.",
     )
-
-
-class AdductOutput(BaseModel):
-    """Result of an adduct mass-shift calculation."""
-
-    adduct: str
-    polarity: str
-    charge: int
-    exact_mass_shift: float
-    mz_offset_for_neutral: str
 
 
 class IsotopeInput(BaseModel):
@@ -232,7 +219,7 @@ def _isotope_pattern(
     #   a) Two independent +1 substitutions → ≈ p1² / 2
     #   b) One +2 substitution (S, Cl, Br, Se, …) → sum over elements of
     #      count × (abund_+2 / abund_light)
-    p2_a = (p1 ** 2) / 2.0
+    p2_a = (p1**2) / 2.0
 
     p2_b = 0.0
     m2_mass_shift = 2.0 * NEUTRON_MASS
@@ -304,7 +291,8 @@ def register_tools(mcp: Any) -> None:
                 canonical, entry = fallback
             else:
                 logger.warning(
-                    "Rejected non-standard adduct: %r", adduct_string,
+                    "Rejected non-standard adduct: %r",
+                    adduct_string,
                 )
                 known = "\n".join(f"  {a}" for a in _ADDUCT_DB)
                 return (
@@ -328,7 +316,9 @@ def register_tools(mcp: Any) -> None:
 
         logger.info(
             "predict_adduct_offset(%r) → %+.6f Da (charge %+d)",
-            adduct_string, shift, charge,
+            adduct_string,
+            shift,
+            charge,
         )
 
         return (
@@ -388,18 +378,20 @@ def register_tools(mcp: Any) -> None:
         ]
         labels = ["M", "M+1", "M+2"]
         for (mass, abund), label in zip(pattern, labels):
-            lines.append(
-                f"| {label:<11} | {mass:>20.4f} | {abund:>18.4f} |"
-            )
+            lines.append(f"| {label:<11} | {mass:>20.4f} | {abund:>18.4f} |")
 
-        lines.extend([
-            "",
-            "*Abundances are normalised to the monoisotopic peak (M = 1.0000).*",
-        ])
+        lines.extend(
+            [
+                "",
+                "*Abundances are normalised to the monoisotopic peak (M = 1.0000).*",
+            ]
+        )
 
         logger.info(
             "annotate_isotopes(%r, smiles=%s) → %d isotopologues",
-            identifier, is_smiles, len(pattern),
+            identifier,
+            is_smiles,
+            len(pattern),
         )
 
         return "\n".join(lines)
@@ -441,8 +433,7 @@ def _smiles_to_formula(smiles: str) -> str | None:
             ),
         )
         formula_str = "".join(
-            f"{el}{counts[el] if counts[el] > 1 else ''}"
-            for el in hill_order
+            f"{el}{counts[el] if counts[el] > 1 else ''}" for el in hill_order
         )
         return formula_str
 
