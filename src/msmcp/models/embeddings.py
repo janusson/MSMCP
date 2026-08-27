@@ -1,15 +1,17 @@
 """Spectral foundation-model embedding adapters.
 
-This module provides a pluggable adapter layer for spectral embedding models
-(DreaMS, LSM-MS2, ...).  The classes below are deterministic development
-stand-ins: instead of executing real PyTorch / HuggingFace inference, they
-project peak lists onto a fixed m/z grid and derive a reproducible embedding
-from the spectrum content.  A production adapter subclasses
-:class:`SpectralEmbedder` and replaces the internals with real inference
-while keeping the public interface identical.
+This module defines the :class:`SpectralEmbedder` contract and the
+deterministic, fixed-grid fallback implementations (DreaMS / LSM-MS2) that
+keep the server fully operational without ML dependencies.  Real PyTorch
+inference and the :func:`msmcp.models.backends.get_embedder` resolver live
+in :mod:`msmcp.models.backends`; the resolver picks between the
+deterministic implementations and real inference based on the
+``MSMCP_EMBEDDING_BACKEND`` environment variable (``mock`` | ``auto`` |
+``hf``), falling back to the deterministic implementations when a real
+backend is unavailable so agentic workflows always keep working.
 
-Embedding scheme (mock)
------------------------
+Embedding scheme (deterministic fallback)
+-----------------------------------------
 1. Peaks are projected onto a fixed m/z grid (``EMBEDDING_DIM`` bins spanning
    ``MZ_SPAN`` Da) with per-model intensity compression (sqrt for DreaMS,
    log1p for LSM-MS2).
@@ -111,8 +113,26 @@ class SpectralEmbedder(ABC):
     name: ClassVar[str] = "SpectralEmbedder"
     """Human-readable model name used in tool reports."""
 
-    embedding_dim: ClassVar[int] = EMBEDDING_DIM
-    """Dimensionality of the vectors returned by :meth:`embed_spectrum`."""
+    backend: ClassVar[str] = "mock"
+    """Execution backend: ``"mock"`` (deterministic fallback) or ``"hf"``."""
+
+    embedding_dim: int = EMBEDDING_DIM
+    """Dimensionality of the vectors returned by :meth:`embed_spectrum`.
+
+    Class-level default; adapters whose real model has a different
+    dimensionality overwrite it on the instance after loading.
+    """
+
+    @staticmethod
+    @abstractmethod
+    def check_available() -> None:
+        """Verify the backend can be loaded without raising.
+
+        Deterministic fallbacks are always available; real-inference
+        backends raise
+        :class:`~msmcp.models.backends.EmbeddingBackendUnavailable` when the
+        model package or checkpoint is missing.
+        """
 
     @abstractmethod
     def embed_spectrum(
@@ -136,16 +156,21 @@ class SpectralEmbedder(ABC):
 
 
 class DreaMSEmbedder(SpectralEmbedder):
-    """DreaMS-style embedder (deterministic development stand-in).
+    """DreaMS-style embedder (deterministic fallback).
 
-    The production DreaMS model consumes the full peak list through a deep
-    transformer.  This stand-in projects peaks onto the fixed m/z grid with
-    sqrt intensity compression and applies content-seeded noise, so it shares
-    the interface (and the determinism contract) of the real adapter.
+    Used when the real DreaMS transformer package is not installed (or the
+    ``MSMCP_EMBEDDING_BACKEND=mock`` mode is selected).  The fallback
+    projects peaks onto the fixed m/z grid with sqrt intensity compression
+    and applies content-seeded noise, sharing the interface (and the
+    determinism contract) of the real adapter.
     """
 
     name: ClassVar[str] = "DreaMS"
     _SALT: ClassVar[bytes] = b"msmcp/dreams/v1"
+
+    @staticmethod
+    def check_available() -> None:
+        """Deterministic fallbacks are always available."""
 
     def embed_spectrum(
         self, peaks: np.ndarray, precursor_mz: float | None = None
@@ -158,15 +183,20 @@ class DreaMSEmbedder(SpectralEmbedder):
 
 
 class LSMMS2Embedder(SpectralEmbedder):
-    """LSM-MS2-style embedder (deterministic development stand-in).
+    """LSM-MS2-style embedder (deterministic fallback).
 
-    The production LSM-MS2 model learns latent spectra embeddings from
-    millions of mass spectra.  This stand-in mirrors the adapter contract
-    with log1p intensity compression and an LSM-MS2-specific embedding salt.
+    Used when no real LSM-MS2 checkpoint is configured (no public inference
+    weights exist upstream; see :class:`~msmcp.models.backends.LSMMS2InferenceEmbedder`).
+    The fallback mirrors the adapter contract with log1p intensity
+    compression and an LSM-MS2-specific embedding salt.
     """
 
     name: ClassVar[str] = "LSM-MS2"
     _SALT: ClassVar[bytes] = b"msmcp/lsm-ms2/v1"
+
+    @staticmethod
+    def check_available() -> None:
+        """Deterministic fallbacks are always available."""
 
     def embed_spectrum(
         self, peaks: np.ndarray, precursor_mz: float | None = None
@@ -176,27 +206,3 @@ class LSMMS2Embedder(SpectralEmbedder):
             precursor_mz if precursor_mz is not None else _precursor_proxy(peaks_arr)
         )
         return _compute_embedding(peaks_arr, precursor, self._SALT, np.log1p)
-
-
-_EMBEDDER_REGISTRY: dict[str, type[SpectralEmbedder]] = {
-    "dreams": DreaMSEmbedder,
-    "lsm-ms2": LSMMS2Embedder,
-}
-
-
-def get_embedder(method: str) -> SpectralEmbedder:
-    """Instantiate the embedder registered under *method*.
-
-    Raises
-    ------
-    ValueError
-        If *method* is not a registered embedding method.
-    """
-    try:
-        embedder_cls = _EMBEDDER_REGISTRY[method]
-    except KeyError:
-        known = ", ".join(sorted(_EMBEDDER_REGISTRY))
-        raise ValueError(
-            f"Unknown embedding method {method!r}; expected one of: {known}"
-        ) from None
-    return embedder_cls()

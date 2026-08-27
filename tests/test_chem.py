@@ -29,15 +29,15 @@ class TestPredictAdductOffsetValid:
     @pytest.mark.parametrize(
         ("adduct", "shift", "charge", "polarity", "offset"),
         [
-            ("[M+H]+", "+1.006728", "+1", "positive", "M + 1.006728 Da"),
+            ("[M+H]+", "+1.007276", "+1", "positive", "M + 1.007276 Da"),
             ("[M+Na]+", "+22.989221", "+1", "positive", "M + 22.989221 Da"),
             ("[M+K]+", "+38.963158", "+1", "positive", "M + 38.963158 Da"),
             ("[M+NH4]+", "+18.033826", "+1", "positive", "M + 18.033826 Da"),
-            ("[M+H-H2O]+", "-17.003837", "+1", "positive", "M - 17.003837 Da"),
+            ("[M+H-H2O]+", "-17.003288", "+1", "positive", "M - 17.003288 Da"),
             ("[M+2H]2+", "+2.013456", "+2", "positive", "(M + 2.013456) / |2| Da"),
             ("[M+3H]3+", "+3.020184", "+3", "positive", "(M + 3.020184) / |3| Da"),
             ("[M+2Na-H]+", "+44.971714", "+1", "positive", "M + 44.971714 Da"),
-            ("[M-H]-", "-1.006728", "-1", "negative", "(M - 1.006728) / |-1| Da"),
+            ("[M-H]-", "-1.007276", "-1", "negative", "(M - 1.007276) / |-1| Da"),
             ("[M+Cl]-", "+34.969401", "-1", "negative", "(M + 34.969401) / |-1| Da"),
             ("[M+HCOO]-", "+44.998203", "-1", "negative", "(M + 44.998203) / |-1| Da"),
             (
@@ -47,7 +47,7 @@ class TestPredictAdductOffsetValid:
                 "negative",
                 "(M + 59.013853) / |-1| Da",
             ),
-            ("[M-H2O-H]-", "-19.017293", "-1", "negative", "(M - 19.017293) / |-1| Da"),
+            ("[M-H2O-H]-", "-19.017841", "-1", "negative", "(M - 19.017841) / |-1| Da"),
             ("[M+Na-2H]-", "+20.975765", "-1", "negative", "(M + 20.975765) / |-1| Da"),
         ],
     )
@@ -183,7 +183,10 @@ class TestIsotopePattern:
             ("H2O", 0.000611, 0.002055),
             ("C6H12O6", 0.068560, 0.014680),
             ("C8H10N4O2", 0.103212, 0.009436),
-            ("Cl", 0.319609, 0.051075),
+            # Halogens: the secondary isotope (³⁷Cl, ⁸¹Br) is an M+2
+            # contributor, so M+1 is zero and M+2 carries the signal.
+            ("Cl", 0.0, 0.319609),
+            ("Br", 0.0, 0.972776),
         ],
     )
     def test_abundances_match_expected_arithmetic(
@@ -193,10 +196,13 @@ class TestIsotopePattern:
         assert pattern[1][1] == pytest.approx(m1, abs=1e-5)
         assert pattern[2][1] == pytest.approx(m2, abs=1e-5)
 
-    def test_chlorine_m1_reflects_37cl(self) -> None:
-        """Single Cl: the M+1 peak is the 37Cl isotopologue (≈32%)."""
+    def test_chlorine_m2_reflects_37cl(self) -> None:
+        """Single Cl: ³⁷Cl is an M+2 contributor, so M+1 is ~0%."""
         pattern = _isotope_pattern(_parse_formula("Cl"))
-        assert pattern[1][0] == pytest.approx(34.96885269 + NEUTRON_MASS, abs=1e-6)
+        # No Δn = 1 isotope exists for Cl → no M+1 peak.
+        assert pattern[1][1] == pytest.approx(0.0, abs=1e-12)
+        # ³⁷Cl / ³⁵Cl abundance ratio ≈ 0.3196 → M+2 ≈ 31.96%.
+        assert pattern[2][1] == pytest.approx(0.2422 / 0.7578, rel=1e-6)
 
 
 # ---------------------------------------------------------------------------

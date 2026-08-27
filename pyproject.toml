@@ -14,11 +14,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
+test = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
+]
+dev = [
+    "msmcp[test]",
     "ruff>=0.11",
     "mypy>=1.15",
+    "basedpyright>=1.16",
+]
+# Optional ML extras: real spectral foundation-model inference.  The DreaMS
+# package itself is not on PyPI (the `dreams` name is an unrelated
+# nanophotonics library); install it from source with
+# `uv pip install "git+https://github.com/pluskal-lab/DreaMS.git"`.
+ml = [
+    "torch>=2.1",
 ]
 
 [project.scripts]
@@ -64,10 +75,8 @@ explicit_package_bases = true
 warn_redundant_casts = true
 
 [[tool.mypy.overrides]]
-# Optional / missing runtime modules without type stubs.  Note:
-# `mcp.server.fastmcp` does not exist in the locked mcp==2.0.0 SDK (the
-# legacy FastMCP API was removed); see the README roadmap for the migration.
-module = ["rdkit", "massflow.*", "mcp.server.fastmcp"]
+# Optional / missing runtime modules without type stubs.
+module = ["rdkit", "massflow.*", "torch"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -75,3 +84,11 @@ ignore_missing_imports = true
 # this step).  Remove once the mock I/O layer is refactored.
 module = "msmcp.tools.io"
 ignore_errors = true
+
+[tool.basedpyright]
+# Mirrors the defaults of the Zed language server so `make lint` catches the
+# same error classes (import cycles, missing imports, abstract instantiation)
+# that the editor reports.  Only errors fail the build; the remaining warnings
+# are tracked as debt alongside the ruff/mypy suppressions above.
+typeCheckingMode = "standard"
+pythonVersion = "3.13"

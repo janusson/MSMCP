@@ -273,7 +273,10 @@ class TestComputeCosineEmbeddings:
             query_peaks=peaks, reference_peaks=peaks, scoring_method="dreams"
         )
         assert "Cosine Similarity (DreaMS): **1.0000**" in out
-        assert "Scoring method: DreaMS deep embedding (1024-d, L2-normalised)" in out
+        assert (
+            "Scoring method: DreaMS deep embedding "
+            "(1024-d, L2-normalised, deterministic fallback)"
+        ) in out
         assert "Matched:" not in out  # no per-peak counts in embedding space
 
     def test_lsm_ms2_embedding_scoring(
@@ -284,7 +287,9 @@ class TestComputeCosineEmbeddings:
             query_peaks=peaks, reference_peaks=peaks, scoring_method="lsm-ms2"
         )
         assert "Cosine Similarity (LSM-MS2): **1.0000**" in out
-        assert "LSM-MS2 deep embedding (1024-d, L2-normalised)" in out
+        assert (
+            "LSM-MS2 deep embedding (1024-d, L2-normalised, deterministic fallback)"
+        ) in out
 
     def test_disjoint_spectra_score_zero_in_embedding_space(
         self, sim_tools: dict[str, Callable[..., str]]

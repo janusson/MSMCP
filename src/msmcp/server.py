@@ -3,7 +3,7 @@
 import logging
 import sys
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from pydantic import BaseModel
 
 from msmcp.tools.chem import register_tools as _register_chem_tools
@@ -27,7 +27,7 @@ logger = logging.getLogger("msmcp")
 # ---------------------------------------------------------------------------
 # Server instance
 # ---------------------------------------------------------------------------
-mcp = FastMCP("MSMCP-MassFlow-Adapter", version="0.1.0")
+mcp = MCPServer("MSMCP-MassFlow-Adapter", version="0.1.0")
 
 
 # ---------------------------------------------------------------------------

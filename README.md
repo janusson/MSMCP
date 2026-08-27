@@ -46,7 +46,7 @@ All of that is deterministic, well-understood computation. **LLMs should reason 
 
 MSMCP is a thin, **stateless adapter** between an LLM host and a stack of analytical engines:
 
-- **Transport layer** — a [FastMCP](https://github.com/modelcontextprotocol/python-sdk) server speaking JSON-RPC over stdio, launched as a child process by the LLM host. All diagnostics are logged to stderr; stdout carries only MCP framing.
+- **Transport layer** — an [MCPServer](https://github.com/modelcontextprotocol/python-sdk) speaking JSON-RPC over stdio, launched as a child process by the LLM host. All diagnostics are logged to stderr; stdout carries only MCP framing.
 - **Analytical engines** — pure, deterministic, unit-tested Python modules under `src/msmcp/tools/` that perform the actual science: exact-mass arithmetic, adduct shifts, isotope annotation, ppm validation, cosine scoring, QC metrics, and chunked library scanning.
 - **Model adapters** — a pluggable `SpectralEmbedder` interface (`src/msmcp/models/`) behind which spectral foundation models (DreaMS, LSM-MS2) plug in without touching the tool layer.
 - **Orchestrator** — long-running library searches are dispatched as **Prefect flow runs**, not in-memory jobs: state lives in the Prefect API (or an embedded ephemeral server during development), survives restarts, and is observable in the Prefect UI.
@@ -85,8 +85,8 @@ During local development Prefect runs an embedded ephemeral server, so the exact
 flowchart TD
     Client["LLM Client (any MCP host)"]
 
-    subgraph MSMCP["MSMCP - stateless FastMCP server (stdio)"]
-        Transport["FastMCP transport: JSON-RPC over stdio"]
+    subgraph MSMCP["MSMCP - stateless MCPServer (stdio)"]
+        Transport["MCPServer transport: JSON-RPC over stdio"]
         ToolRouting["Tool routing: io · chem · similarity · qc · search"]
     end
 
@@ -138,7 +138,7 @@ Makefile targets:
 | `install` | `uv sync --extra dev` | venv + all dependencies |
 | `format` | `ruff format` / `ruff check --fix` | formatting and safe fixes |
 | `lint` | `ruff check` + `mypy` | static analysis |
-| `test` | `pytest` | the 132-test suite |
+| `test` | `pytest` | the 155-test suite |
 | `run` | `uv run msmcp` | launch the server on stdio |
 
 ## Connecting an LLM client
@@ -247,14 +247,21 @@ LLM calls: compute_cosine(
 ```python
 class SpectralEmbedder(ABC):
     name: ClassVar[str]
-    embedding_dim: ClassVar[int] = 1024
+    backend: ClassVar[str] = "mock"  # "mock" (fallback) | "hf" (real inference)
+    embedding_dim: int = 1024
+
+    @staticmethod
+    @abstractmethod
+    def check_available() -> None: ...  # raises when the backend is unusable
 
     @abstractmethod
     def embed_spectrum(self, peaks, precursor_mz=None) -> np.ndarray: ...
 ```
 
-- **`DreaMSEmbedder`** and **`LSMMS2Embedder`** are deterministic development stand-ins: they project peaks onto a fixed 1024-bin m/z grid, apply per-model intensity compression (√ for DreaMS, log1p for LSM-MS2), seed deterministic noise from the precursor m/z + peak content (order-independent BLAKE2b hash), and L2-normalise to `float32`. Identical spectra score exactly 1.0; shared peaks score proportionally; disjoint spectra score 0.0.
-- Swapping in real PyTorch / HuggingFace inference means implementing the same 20-line interface — the tool layer, scoring, and reporting are untouched. Each model lives in its own embedding space via a per-model salt.
+- **Deterministic fallbacks** — `DreaMSEmbedder` and `LSMMS2Embedder` project peaks onto a fixed 1024-bin m/z grid, apply per-model intensity compression (√ for DreaMS, log1p for LSM-MS2), seed deterministic noise from the precursor m/z + peak content (order-independent BLAKE2b hash), and L2-normalise to `float32`. Identical spectra score exactly 1.0; shared peaks score proportionally; disjoint spectra score 0.0. The fallbacks keep the server fully operational with zero ML dependencies and are the default in the test suite.
+- **Real inference (DreaMS)** — `DreaMSInferenceEmbedder` (`src/msmcp/models/backends.py`) runs the official pre-trained 1024-d transformer (Bushuiev et al., *Nature Biotechnology* 2025). Install the package from source (`uv pip install "git+https://github.com/pluskal-lab/DreaMS.git"` — the `dreams` name on PyPI is an unrelated nanophotonics library) and the embedding checkpoint downloads automatically on first use. Spectra are embedded through the model's own preprocessing pipeline (DataFormat-A: peaks sorted by m/z, intensity max-normalised, fragments strictly below the precursor) via a temporary MGF file; the checkpoint load is cached per process and the output is L2-normalised float32.
+- **Real inference (LSM-MS2)** — no public inference weights exist upstream (only peer-review code, `matterworksbio/LSM1-MS2`), so `LSMMS2InferenceEmbedder` is a bring-your-own-checkpoint adapter activated by the `MSMCP_LSM_MS2_CKPT` environment variable (the checkpoint must expose `encode(mz, intensity, precursor_mz)`); the embedding dimensionality is derived from the model output.
+- **Backend selection** — `MSMCP_EMBEDDING_BACKEND=mock|auto|hf` (default `auto`): `auto` uses real inference when the package is installed and logs a fallback warning otherwise; `mock` pins the deterministic stand-ins; `hf` fails loudly with install instructions when the backend is unavailable. Tool reports disclose which backend produced each score (`real inference` vs `deterministic fallback`).
 
 ## Durable orchestration with Prefect
 
@@ -278,7 +285,7 @@ def _load_experimental_spectrum_task(...): ...
 
 ## Developer ergonomics
 
-- **Testing**: 132 pytest cases across `tests/` — chemistry (exact masses against literature values, adduct validation), similarity (5.0-ppm boundary arithmetic, greedy matching, embedding semantics), and search (a full dispatcher → Prefect → poller round trip, scorer routing, and the failure path). Tests run hermetically: Prefect's home directory and result storage are redirected to a temp directory and telemetry is disabled.
+- **Testing**: 155 pytest cases across `tests/` — chemistry (exact masses against literature values, adduct validation), similarity (5.0-ppm boundary arithmetic, greedy matching, embedding semantics), embedding backends (backend resolution, hermetic real-inference pipelines with stubbed models, stdio transport protection), and search (a full dispatcher → Prefect → poller round trip, scorer routing, and the failure path). Tests run hermetically: Prefect's home directory and result storage are redirected to a temp directory, telemetry is disabled, and embedding backends are pinned to the deterministic mocks.
 - **Linting/typing**: `ruff` (E/F/I/UP/B/SIM/RUF) and `mypy` on `src/` + `tests/` via `make lint`. Pre-existing findings in the older tool modules are tracked as explicit `per-file-ignores` debt in `pyproject.toml`, to be removed file-by-file; newer modules (server, models, search, tests) are clean.
 - **Formatting**: `ruff format`, line length 88, PEP 695 syntax, `from __future__ import annotations` throughout.
 
@@ -290,7 +297,7 @@ msmcp/
 ├── pyproject.toml               # deps, dev extras, ruff/mypy/pytest config
 ├── uv.lock                      # reproducible lockfile
 ├── src/msmcp/
-│   ├── server.py                # FastMCP transport layer + entry point
+│   ├── server.py                # MCPServer transport layer + entry point
 │   ├── models/
 │   │   └── embeddings.py        # SpectralEmbedder ABC + DreaMS/LSM-MS2 adapters
 │   └── tools/
@@ -308,8 +315,8 @@ msmcp/
 
 ## Known limitations & roadmap
 
-- **MCP SDK migration (in progress)**: the locked `mcp==2.0.0` SDK removed the legacy `FastMCP` API; `src/msmcp/server.py` targets the classic `FastMCP` interface and is being migrated to the current `MCPServer` API. The analytical engines and tests are transport-agnostic and unaffected.
-- **Model adapters are deterministic stand-ins**: real DreaMS / LSM-MS2 inference (PyTorch / HuggingFace) plugs into the existing `SpectralEmbedder` interface as a drop-in.
+- **MCP SDK migration (complete)**: the locked `mcp==2.0.0` SDK removed the legacy `FastMCP` API; `src/msmcp/server.py` now targets the current `MCPServer` API (`mcp.server.mcpserver`). The analytical engines and tests are transport-agnostic.
+- **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 awaits a public weights release; its adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`mock` / `auto` / `hf`).
 - **Worker-based execution**: with a Prefect API configured, flow runs can move from the in-process executor to remote workers via a deployment/work-pool configuration.
 - **Real vendor I/O**: `massflow` integration replaces the development spectrum mocks for `.mzML`/`.mgf` parsing.
 

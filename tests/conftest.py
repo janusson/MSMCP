@@ -26,6 +26,11 @@ os.environ.setdefault(
 os.environ.setdefault("DO_NOT_TRACK", "1")
 os.environ.setdefault("PREFECT_SERVER_ANALYTICS_ENABLED", "false")
 
+# Pin embedding backends to the deterministic mocks for hermetic tests: no
+# torch / DreaMS imports, no weight downloads, no network.  Adapter tests
+# that exercise the real-inference pipeline inject stub models explicitly.
+os.environ["MSMCP_EMBEDDING_BACKEND"] = "mock"
+
 from msmcp.tools import chem, search, similarity  # noqa: E402
 
 

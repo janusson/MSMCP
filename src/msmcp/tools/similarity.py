@@ -17,7 +17,7 @@ from typing import Any, Literal
 import numpy as np
 from pydantic import BaseModel, Field
 
-from msmcp.models.embeddings import get_embedder
+from msmcp.models import get_embedder
 
 logger = logging.getLogger("msmcp.tools.similarity")
 
@@ -192,7 +192,21 @@ def _embedding_score(
         logger.warning("%s embedding failed: %s", embedder.name, exc)
         return f"ERROR: {embedder.name} embedding failed: {exc}"
 
-    score = _cosine(q_emb, r_emb)
+    # Unit-normalise both embeddings and score with the dot product u·v.
+    # The adapters already return L2-normalised vectors, but normalising
+    # again keeps the dot product well-defined for any embedder.
+    u = q_emb.astype(np.float64)
+    v = r_emb.astype(np.float64)
+    u_norm = np.linalg.norm(u)
+    v_norm = np.linalg.norm(v)
+    if u_norm == 0.0 or v_norm == 0.0:
+        score = 0.0
+    else:
+        score = float(np.dot(u / u_norm, v / v_norm))
+
+    backend_label = (
+        "real inference" if embedder.backend == "hf" else "deterministic fallback"
+    )
 
     logger.info(
         "compute_cosine(method=%s, query=%d, ref=%d) → %.4f",
@@ -206,7 +220,7 @@ def _embedding_score(
         f"Cosine Similarity ({embedder.name}): **{score:.4f}**\n"
         "\n"
         f"Scoring method: {embedder.name} deep embedding "
-        f"({embedder.embedding_dim}-d, L2-normalised)\n"
+        f"({embedder.embedding_dim}-d, L2-normalised, {backend_label})\n"
         f"Query peaks: {n_query} | Reference peaks: {n_ref}\n"
         "\n"
         "Similarity is computed in embedding space: whole-spectrum\n"
@@ -219,7 +233,7 @@ def _embedding_score(
 # Public registration
 # ======================================================================
 def register_tools(mcp: Any) -> None:
-    """Register similarity &amp; validation tools on the FastMCP *mcp* instance."""
+    """Register similarity & validation tools on the MCPServer *mcp* instance."""
 
     # ------------------------------------------------------------------
     # Tool: validate_precursor

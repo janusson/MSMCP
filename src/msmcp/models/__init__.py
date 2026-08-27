@@ -1,16 +1,29 @@
 """Spectral foundation-model adapters for MSMCP.
 
-This package hosts pluggable adapters for spectral embedding models.  The
-current implementations are deterministic development stand-ins; production
-adapters subclass :class:`~msmcp.models.embeddings.SpectralEmbedder` and swap
-in real PyTorch / HuggingFace inference behind the same interface.
+This package hosts pluggable adapters for spectral embedding models: the
+:class:`~msmcp.models.embeddings.SpectralEmbedder` contract, deterministic
+fallback implementations, and real PyTorch inference backends
+(:mod:`msmcp.models.backends`).
 """
 
+from msmcp.models.backends import (
+    DreaMSInferenceEmbedder,
+    EmbeddingBackendUnavailable,
+    LSMMS2InferenceEmbedder,
+    get_embedder,
+)
 from msmcp.models.embeddings import (
     DreaMSEmbedder,
     LSMMS2Embedder,
     SpectralEmbedder,
-    get_embedder,
 )
 
-__all__ = ["DreaMSEmbedder", "LSMMS2Embedder", "SpectralEmbedder", "get_embedder"]
+__all__ = [
+    "DreaMSEmbedder",
+    "DreaMSInferenceEmbedder",
+    "EmbeddingBackendUnavailable",
+    "LSMMS2Embedder",
+    "LSMMS2InferenceEmbedder",
+    "SpectralEmbedder",
+    "get_embedder",
+]

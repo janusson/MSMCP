@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MSMCP: Bridging MS & Agentic AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+        
+        :root {
+            --primary: #AA00FF; /* Vibrant Purple */
+            --secondary: #00E5FF; /* Cyan */
+            --accent: #FF4081; /* Pink */
+            --bg-dark: #121212;
+            --card-bg: #1E1E1E;
+            --text-main: #F5F5F5;
+            --text-muted: #B0B0B0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            scroll-behavior: smooth;
+        }
+
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 350px;
+            max-height: 450px;
+        }
+
+        .glass-card {
+            background: var(--card-bg);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 1rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            transition: transform 0.3s ease;
+        }
+
+        .glass-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .vibrant-gradient {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .step-node {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 3rem;
+            height: 3rem;
+            border-radius: 9999px;
+            background-color: var(--primary);
+            color: white;
+            font-weight: bold;
+            z-index: 10;
+        }
+
+        .connector-line {
+            position: absolute;
+            width: 2px;
+            background-color: var(--secondary);
+            z-index: 0;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <!-- 
+    NARRATIVE PLAN SUMMARY:
+    1. Introduction: Hook the user with the "Dark Metabolome" problem (87% unidentified data).
+    2. The Protocol Shift: Visualize the evolution from stateful to stateless MCP (2026-07-28).
+    3. Technical Foundation: The Memory Pointer Pattern (Process Flow via HTML/CSS).
+    4. Intelligence & Tools: Showcasing Adduct Prediction and QC Metrics (Bar & Radar Charts).
+    5. Future Outlook: The move towards Foundation Models and Serverless MS.
+
+    VISUALIZATION CHOICES:
+    - Dark Metabolome: Pie Chart (Goal: Inform/Composition) -> Chart.js. 
+    - Adduct Offsets: Bar Chart (Goal: Compare) -> Chart.js.
+    - QC Distribution: Radar Chart (Goal: Relationships) -> Chart.js.
+    - Protocol Timeline: Vertical Flow (Goal: Organize/Process) -> HTML/Tailwind.
+    - Cluster Projections: Scatter Plot (Goal: Relationships) -> Plotly (WebGL).
+
+    CONFIRMATION: NEITHER Mermaid JS NOR SVG were used in this output. 
+    COLORS: Palette "Vibrant & Playful" (Primary: Purples/Cyans/Pinks).
+    -->
+
+    <header class="max-w-6xl mx-auto mb-16 text-center">
+        <h1 class="text-5xl md:text-7xl font-extrabold mb-4 vibrant-gradient">MSMCP</h1>
+        <p class="text-xl md:text-2xl text-muted font-light max-w-3xl mx-auto">
+            Architecting the bridge between Computational Mass Spectrometry and Agentic AI through the Stateless Model Context Protocol.
+        </p>
+    </header>
+
+    <main class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
+        
+        <!-- SECTION 1: THE PROBLEM -->
+        <section class="md:col-span-2 glass-card p-8 mb-4">
+            <h2 class="text-3xl font-bold mb-6 flex items-center">
+                <span class="text-accent mr-3">01.</span> The Dark Metabolome Challenge
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 items-center">
+                <div class="md:col-span-1">
+                    <p class="text-text-muted mb-4 leading-relaxed">
+                        In modern analytical chemistry, the "Dark Metabolome" refers to the vast majority of spectra that remain uncharacterized by traditional library-matching techniques. 
+                    </p>
+                    <div class="bg-black/30 p-4 rounded-lg border-l-4 border-accent">
+                        <p class="text-3xl font-bold text-accent">87%</p>
+                        <p class="text-sm uppercase tracking-wider text-muted">Data remains uncharacterized</p>
+                    </div>
+                </div>
+                <div class="md:col-span-2">
+                    <div class="chart-container">
+                        <canvas id="darkMetabolomeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <p class="mt-6 text-sm text-muted italic text-center">
+                Standard heuristics leave nearly nine-tenths of experimental data in the dark. MSMCP provides the AI-agentic interface needed to illuminate these hidden molecular structures.
+            </p>
+        </section>
+
+        <!-- SECTION 2: THE PROTOCOL -->
+        <section class="glass-card p-8">
+            <h2 class="text-3xl font-bold mb-6 flex items-center">
+                <span class="text-accent mr-3">02.</span> Stateless Protocol Evolution
+            </h2>
+            <p class="text-muted mb-8">
+                The 2026-07-28 MCP specification shifted from stateful session management to a fully stateless, high-performance architecture optimized for serverless scaling.
+            </p>
+            <div class="relative pl-10 space-y-12">
+                <div class="connector-line h-full left-[23px] top-4"></div>
+                
+                <div class="relative">
+                    <div class="step-node absolute -left-[35px] top-0">01</div>
+                    <h3 class="text-lg font-bold text-secondary">Pre-2026 Stateful Handshake</h3>
+                    <p class="text-sm text-muted">Required persistent sessions and sticky routing, creating bottlenecks in enterprise cloud deployments.</p>
+                </div>
+
+                <div class="relative">
+                    <div class="step-node absolute -left-[35px] top-0" style="background-color: var(--accent);">02</div>
+                    <h3 class="text-lg font-bold text-accent">2026-07-28: The Stateless Leap</h3>
+                    <p class="text-sm text-muted">Removed sessions. Every request carries its own context metadata (_meta), enabling massive horizontal scaling.</p>
+                </div>
+
+                <div class="relative">
+                    <div class="step-node absolute -left-[35px] top-0">03</div>
+                    <h3 class="text-lg font-bold text-secondary">Serverless Future</h3>
+                    <p class="text-sm text-muted">Stateless adapters can now live directly on edge buckets, querying terabytes of MS data on-demand.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- SECTION 3: THE MEMORY POINTER PATTERN -->
+        <section class="glass-card p-8">
+            <h2 class="text-3xl font-bold mb-6 flex items-center">
+                <span class="text-accent mr-3">03.</span> The Memory Pointer Pattern
+            </h2>
+            <p class="text-muted mb-6">
+                High-dimensional data is too heavy for LLM context windows. MSMCP decouples reasoning from data processing using pointers.
+            </p>
+            <div class="flex flex-col gap-4">
+                <div class="bg-primary/10 border border-primary/20 p-4 rounded flex items-center justify-between">
+                    <span class="font-bold text-primary">LLM Agent</span>
+                    <span class="text-xs px-2 py-1 bg-primary text-white rounded">Orchestrator</span>
+                </div>
+                <div class="text-center py-2 text-secondary font-bold">Sends Analysis Instructions</div>
+                <div class="bg-secondary/10 border border-secondary/20 p-4 rounded flex items-center justify-between">
+                    <span class="font-bold text-secondary">MSMCP Server</span>
+                    <span class="text-xs px-2 py-1 bg-secondary text-black rounded">Specialist</span>
+                </div>
+                <div class="text-center py-2 text-accent font-bold">Returns Deterministic Pointers</div>
+                <div class="bg-accent/10 border border-accent/20 p-4 rounded flex items-center justify-between">
+                    <span class="font-bold text-accent">Local Data Cache</span>
+                    <span class="text-xs px-2 py-1 bg-accent text-white rounded">High-D Store</span>
+                </div>
+            </div>
+            <p class="mt-6 text-sm text-muted">
+                By keeping raw matrices out-of-context, we prevent LLM hallucinations and context window overflow while maintaining 100% mathematical rigor.
+            </p>
+        </section>
+
+        <!-- SECTION 4: TOOLKIT & CHEMICAL GROUNDING -->
+        <section class="md:col-span-2 glass-card p-8">
+            <h2 class="text-3xl font-bold mb-6 flex items-center">
+                <span class="text-accent mr-3">04.</span> Precision Chemical Toolkit
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-12">
+                <div>
+                    <h3 class="text-xl font-semibold mb-4 text-secondary">Canonical Adduct Offsets</h3>
+                    <p class="text-sm text-muted mb-6">
+                        Predicting molecular mass requires ppm-level precision for ionization shifts. MSMCP tools provide deterministic grounding for the agent's calculations.
+                    </p>
+                    <div class="chart-container" style="height: 300px;">
+                        <canvas id="adductChart"></canvas>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-xl font-semibold mb-4 text-accent">QC-Driven Routing Logic</h3>
+                    <p class="text-sm text-muted mb-6">
+                        Autonomous routing: When chimericity or noise exceeds 20%, the server instructs the LLM to switch from Classical to ML-based consensus models.
+                    </p>
+                    <div class="chart-container" style="height: 300px;">
+                        <canvas id="qcRadarChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- SECTION 5: ADVANCED ANALYTICS -->
+        <section class="md:col-span-2 glass-card p-8">
+            <h2 class="text-3xl font-bold mb-6 flex items-center">
+                <span class="text-accent mr-3">05.</span> Latent Feature Discovery
+            </h2>
+            <p class="text-muted mb-6">
+                Using Plotly GL, we visualize the projection of unannotated spectra within the embedding space of foundation models like Spec2Vec.
+            </p>
+            <div id="clusterPlot" class="w-full h-96 rounded-lg bg-black/20"></div>
+            <p class="mt-4 text-sm text-muted text-center italic">
+                Simulated 3D projection of spectral similarities. Clusters indicate chemical families identified by AI agents before manual annotation.
+            </p>
+        </section>
+
+    </main>
+
+    <footer class="max-w-6xl mx-auto py-12 text-center text-muted border-t border-white/10 mt-12">
+        <p>© 2026 MSMCP Research Initiative | Built with Modern MCP (2026-07-28 Spec)</p>
+    </footer>
+
+    <script>
+        // --- HELPER: LABEL WRAPPING LOGIC ---
+        function wrapLabels(labels) {
+            return labels.map(label => {
+                if (label.length <= 16) return label;
+                const words = label.split(' ');
+                const result = [];
+                let currentLine = '';
+                words.forEach(word => {
+                    if ((currentLine + word).length > 16) {
+                        result.push(currentLine.trim());
+                        currentLine = word + ' ';
+                    } else {
+                        currentLine += word + ' ';
+                    }
+                });
+                result.push(currentLine.trim());
+                return result;
+            });
+        }
+
+        // --- CHART: DARK METABOLOME (PIE) ---
+        const ctxDark = document.getElementById('darkMetabolomeChart').getContext('2d');
+        new Chart(ctxDark, {
+            type: 'doughnut',
+            data: {
+                labels: wrapLabels(['Identified Spectra', 'Uncharacterized Dark Metabolome']),
+                datasets: [{
+                    data: [13, 87],
+                    backgroundColor: ['#00E5FF', '#AA00FF'],
+                    borderColor: '#1E1E1E',
+                    borderWidth: 5
+                }]
+            },
+            options: {
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right', labels: { color: '#F5F5F5', font: { size: 14 } } },
+                    tooltip: {
+                        callbacks: {
+                            title: function(tooltipItems) {
+                                const item = tooltipItems[0];
+                                let label = item.chart.data.labels[item.dataIndex];
+                                return Array.isArray(label) ? label.join(' ') : label;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // --- CHART: ADDUCT OFFSETS (BAR) ---
+        const ctxAdduct = document.getElementById('adductChart').getContext('2d');
+        new Chart(ctxAdduct, {
+            type: 'bar',
+            data: {
+                labels: ['[M+H]+', '[M+Na]+', '[M-H]-', '[M+Cl]-', '[M+Acetate]-'],
+                datasets: [{
+                    label: 'Mass Shift (Da)',
+                    data: [1.0072, 22.9892, -1.0072, 34.9688, 59.0138],
+                    backgroundColor: '#FF4081'
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                maintainAspectRatio: false,
+                scales: {
+                    x: { grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#B0B0B0' } },
+                    y: { grid: { display: false }, ticks: { color: '#F5F5F5' } }
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            title: function(tooltipItems) {
+                                const item = tooltipItems[0];
+                                let label = item.chart.data.labels[item.dataIndex];
+                                return Array.isArray(label) ? label.join(' ') : label;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // --- CHART: QC METRICS (RADAR) ---
+        const ctxQC = document.getElementById('qcRadarChart').getContext('2d');
+        new Chart(ctxQC, {
+            type: 'radar',
+            data: {
+                labels: wrapLabels(['Signal Noise Ratio', 'Peak Density Count', 'Chimericity Probability', 'Isolation Window Pure', 'Isotopic Fidelity']),
+                datasets: [
+                    {
+                        label: 'Optimal Sample',
+                        data: [90, 80, 10, 95, 85],
+                        borderColor: '#00E5FF',
+                        backgroundColor: 'rgba(0, 229, 255, 0.2)'
+                    },
+                    {
+                        label: 'Chimeric Sample',
+                        data: [40, 95, 85, 30, 45],
+                        borderColor: '#FF4081',
+                        backgroundColor: 'rgba(255, 64, 129, 0.2)'
+                    }
+                ]
+            },
+            options: {
+                maintainAspectRatio: false,
+                scales: {
+                    r: {
+                        angleLines: { color: 'rgba(255,255,255,0.1)' },
+                        grid: { color: 'rgba(255,255,255,0.1)' },
+                        pointLabels: { color: '#B0B0B0' },
+                        ticks: { display: false }
+                    }
+                },
+                plugins: {
+                    legend: { position: 'bottom', labels: { color: '#F5F5F5' } },
+                    tooltip: {
+                        callbacks: {
+                            title: function(tooltipItems) {
+                                const item = tooltipItems[0];
+                                let label = item.chart.data.labels[item.dataIndex];
+                                return Array.isArray(label) ? label.join(' ') : label;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // --- PLOTLY: CLUSTER PROJECTION (WEBGL) ---
+        function initClusterPlot() {
+            const dataSize = 150;
+            const x = Array.from({length: dataSize}, () => Math.random() * 10);
+            const y = Array.from({length: dataSize}, () => Math.random() * 10);
+            const z = Array.from({length: dataSize}, () => Math.random() * 10);
+            
+            const trace1 = {
+                x: x, y: y, z: z,
+                mode: 'markers',
+                marker: {
+                    size: 4,
+                    color: x,
+                    colorscale: 'Viridis',
+                    opacity: 0.8
+                },
+                type: 'scatter3d'
+            };
+
+            const layout = {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                margin: {l: 0, r: 0, b: 0, t: 0},
+                scene: {
+                    xaxis: { gridcolor: 'rgba(255,255,255,0.1)', zerolinecolor: 'white', tickcolor: 'white' },
+                    yaxis: { gridcolor: 'rgba(255,255,255,0.1)', zerolinecolor: 'white', tickcolor: 'white' },
+                    zaxis: { gridcolor: 'rgba(255,255,255,0.1)', zerolinecolor: 'white', tickcolor: 'white' }
+                }
+            };
+
+            Plotly.newPlot('clusterPlot', [trace1], layout, {responsive: true, displayModeBar: false});
+        }
+
+        initClusterPlot();
+    </script>
+</body>
+</html>

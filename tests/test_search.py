@@ -1,4 +1,10 @@
-"""Tests for the Prefect-orchestrated spectral library search tools."""
+"""Tests for the async job-store spectral library search tools.
+
+Covers the dispatcher/poller contract (``search_library`` records a job in
+``_JOB_STORE`` and spawns ``_run_search_task``; ``check_search_status`` polls
+the store), the scorer routing (classical vs. foundation-model embeddings),
+and the report builder behind the CPU-bound scan.
+"""
 
 from __future__ import annotations
 
@@ -16,10 +22,9 @@ from msmcp.models.embeddings import DreaMSEmbedder, LSMMS2Embedder
 from msmcp.tools import search
 from msmcp.tools.search import (
     _build_mock_database,
+    _build_report,
     _build_scorer,
     _cosine,
-    _generate_library_task,
-    _load_experimental_spectrum_task,
     _mock_load_experimental,
     _scoring_label,
 )
@@ -30,7 +35,7 @@ DB_FILE = "library/test_library.db"
 
 
 # ---------------------------------------------------------------------------
-# Flow internals — plain functions behind the Prefect tasks
+# Search components — mock database, experimental loader, report builder
 # ---------------------------------------------------------------------------
 class TestSearchComponents:
     def test_mock_database_schema_and_rows(self) -> None:
@@ -50,15 +55,17 @@ class TestSearchComponents:
             assert mz > 0.0
             assert intensity > 0.0
 
-    def test_task_fn_matches_plain_helpers(self) -> None:
-        """Task ``.fn`` copies wrap the plain helpers (observable lineage)."""
-        conn = _generate_library_task.fn(n_spectra=10, seed=7)  # type: ignore[attr-defined]
-        try:
-            assert conn.execute("SELECT COUNT(*) FROM spectra").fetchone()[0] == 10
-        finally:
-            conn.close()
-        peaks = _load_experimental_spectrum_task.fn(EXP_FILE, 42)  # type: ignore[attr-defined]
-        assert len(peaks) >= 15
+    def test_build_report_well_formed(self) -> None:
+        """The report builder renders a complete Markdown report."""
+        report = _build_report(EXP_FILE, DB_FILE, "classical")
+        assert "## Spectral Library Search Results" in report
+        assert "Scoring method: classical (greedy peak matching, ±0.02 Da)" in report
+        # The synthetic library is hash-seeded per process, so the number of
+        # threshold-passing hits is not deterministic — assert the report is
+        # well-formed in either outcome instead.
+        assert ("| Rank | Compound" in report) or (
+            "No hits passed the significance threshold" in report
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -110,12 +117,16 @@ class TestScorerRouting:
         assert _scoring_label("classical") == (
             "classical (greedy peak matching, ±0.02 Da)"
         )
-        assert _scoring_label("dreams") == "DreaMS deep embedding (1024-d)"
-        assert _scoring_label("lsm-ms2") == "LSM-MS2 deep embedding (1024-d)"
+        assert _scoring_label("dreams") == (
+            "DreaMS deep embedding (1024-d, deterministic fallback)"
+        )
+        assert _scoring_label("lsm-ms2") == (
+            "LSM-MS2 deep embedding (1024-d, deterministic fallback)"
+        )
 
 
 # ---------------------------------------------------------------------------
-# Dispatcher → poller round trip against the Prefect API
+# Dispatcher → poller round trip against the in-process job store
 # ---------------------------------------------------------------------------
 class TestSearchDispatcherAndPoller:
     async def _poll_until_final(
@@ -144,19 +155,15 @@ class TestSearchDispatcherAndPoller:
             database_file=DB_FILE,
         )
         assert dispatched.startswith("## Search Dispatched")
-        # The dispatcher must advertise durable Prefect orchestration.
-        assert "Prefect" in dispatched
         job_id = dispatched.split("`")[1]  # first code span is the job ID
-        uuid.UUID(job_id)  # must be a valid flow run ID
+        assert len(job_id) == 32  # uuid4 hex, no dashes
+        uuid.UUID(job_id)  # must be a valid UUID
 
         report = await self._poll_until_final(
             search_tools["check_search_status"], job_id
         )
         assert "## Spectral Library Search Results" in report
         assert "Scoring method: classical (greedy peak matching, ±0.02 Da)" in report
-        # The synthetic library is hash-seeded per process, so the number of
-        # threshold-passing hits is not deterministic — assert the report is
-        # well-formed in either outcome instead.
         assert ("| Rank | Compound" in report) or (
             "No hits passed the significance threshold" in report
         )
@@ -175,7 +182,10 @@ class TestSearchDispatcherAndPoller:
             search_tools["check_search_status"], job_id
         )
         assert "## Spectral Library Search Results" in report
-        assert "Scoring method: DreaMS deep embedding (1024-d)" in report
+        assert (
+            "Scoring method: DreaMS deep embedding (1024-d, deterministic fallback)"
+            in report
+        )
         assert ("| Rank | Compound" in report) or (
             "No hits passed the significance threshold" in report
         )
@@ -183,16 +193,16 @@ class TestSearchDispatcherAndPoller:
     async def test_unknown_job_id(
         self, search_tools: dict[str, Callable[..., Awaitable[str]]]
     ) -> None:
-        out = await search_tools["check_search_status"](job_id=str(uuid.uuid4()))
+        out = await search_tools["check_search_status"](job_id=uuid.uuid4().hex)
         assert out.startswith("❓ **Unknown Job**")
-        assert "No Prefect flow run found" in out
+        assert "No search job found" in out
 
     async def test_malformed_job_id(
         self, search_tools: dict[str, Callable[..., Awaitable[str]]]
     ) -> None:
         out = await search_tools["check_search_status"](job_id="not-a-uuid")
         assert out.startswith("❓ **Unknown Job**")
-        assert "not a valid Prefect flow run ID" in out
+        assert "not a valid job ID" in out
 
     @pytest.mark.parametrize("bad", ["specter2", "cosine", "DreaMS", ""])
     async def test_invalid_scoring_method_raises_validation_error(
@@ -207,15 +217,20 @@ class TestSearchDispatcherAndPoller:
                 scoring_method=bad,
             )
 
-    async def test_failed_flow_returns_traceback(
+    async def test_failed_job_returns_traceback(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        def explode(n_spectra: int, seed: int) -> None:
+        def explode(
+            experimental_file: str,
+            database_file: str,
+            scoring_method: str,
+            chunk_size: int = 2000,
+        ) -> str:
             raise RuntimeError("synthetic library generation failure")
 
-        monkeypatch.setattr(search, "_generate_library_task", explode)
+        monkeypatch.setattr(search, "_build_report", explode)
 
         dispatched = await search_tools["search_library"](
             experimental_file=EXP_FILE,
@@ -227,3 +242,53 @@ class TestSearchDispatcherAndPoller:
         assert out.startswith("❌ **Failed**")
         assert "RuntimeError" in out
         assert "synthetic library generation failure" in out
+
+    @pytest.mark.parametrize("bad", [50, -1, 20000])
+    async def test_invalid_chunk_size_raises_validation_error(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        bad: int,
+    ) -> None:
+        with pytest.raises(ValidationError):
+            await search_tools["search_library"](
+                experimental_file=EXP_FILE,
+                database_file=DB_FILE,
+                chunk_size=bad,
+            )
+
+    async def test_schedule_cleanup_expires_job(self) -> None:
+        """A finished job is removed from the store once the TTL elapses."""
+        job_id = uuid.uuid4().hex
+        search._JOB_STORE[job_id] = search.SearchJob(
+            job_id=job_id,
+            experimental_file=EXP_FILE,
+            database_file=DB_FILE,
+            scoring_method="classical",
+        )
+
+        await search._schedule_cleanup(job_id, delay_sec=0)
+        assert job_id not in search._JOB_STORE
+
+    async def test_run_search_task_schedules_cleanup(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The task's ``finally`` spawns a TTL cleanup for the finished job."""
+        cleaned: list[str] = []
+
+        async def fake_cleanup(job_id: str, delay_sec: int = 3600) -> None:
+            cleaned.append(job_id)
+
+        monkeypatch.setattr(search, "_schedule_cleanup", fake_cleanup)
+        job_id = uuid.uuid4().hex
+        search._JOB_STORE[job_id] = search.SearchJob(
+            job_id=job_id,
+            experimental_file=EXP_FILE,
+            database_file=DB_FILE,
+            scoring_method="classical",
+        )
+
+        await search._run_search_task(job_id, EXP_FILE, DB_FILE, "classical")
+        await asyncio.sleep(0)  # let the spawned cleanup task run
+        assert cleaned == [job_id]
+        assert search._JOB_STORE[job_id].status == "completed"

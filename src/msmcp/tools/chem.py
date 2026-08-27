@@ -13,20 +13,22 @@ logger = logging.getLogger("msmcp.tools.chem")
 # ======================================================================
 # Physical constants (exact masses, Da)
 # ======================================================================
-PROTON_MASS = 1.00727646688  # H⁺
+PROTIUM_MASS = 1.00782503223  # neutral ¹H atom
+PROTON_MASS = 1.00727646688  # ¹H⁺ ion (proton)
 ELECTRON_MASS = 0.00054857990907  # e⁻
 NEUTRON_MASS = 1.00866491588  # n
 
 # ======================================================================
 # Known adducts — Δ = (adduct mass) − (neutral M mass) in Da.
-# Calculations: M is neutral.  For positive ions M loses n electrons
-# and gains the cation; for negative ions M gains electrons and/or
-# loses a proton.
+# Convention: Δ is the exact mass of the ionised adduct relative to
+# neutral M.  [M+H]+ adds the bare proton (already an ion — no electron
+# term); metal/ammonium cations are the neutral atom/molecule minus one
+# electron; neutral losses (H2O) use the neutral molecular mass.
 # ======================================================================
 _ADDUCT_DB: dict[str, dict[str, Any]] = {
     # --- positive mode -------------------------------------------------
     "[M+H]+": {
-        "shift": PROTON_MASS - ELECTRON_MASS,
+        "shift": PROTON_MASS,
         "charge": 1,
         "polarity": "positive",
     },
@@ -41,12 +43,12 @@ _ADDUCT_DB: dict[str, dict[str, Any]] = {
         "polarity": "positive",
     },
     "[M+NH4]+": {
-        "shift": 14.003074004 + 4 * 1.007825032 - ELECTRON_MASS,
+        "shift": 14.003074004 + 4 * PROTIUM_MASS - ELECTRON_MASS,
         "charge": 1,
         "polarity": "positive",
     },
     "[M+H-H2O]+": {
-        "shift": PROTON_MASS - ELECTRON_MASS - (2 * 1.007825032 + 15.994914619),
+        "shift": PROTON_MASS - (2 * PROTIUM_MASS + 15.994914619),
         "charge": 1,
         "polarity": "positive",
     },
@@ -67,7 +69,7 @@ _ADDUCT_DB: dict[str, dict[str, Any]] = {
     },
     # --- negative mode -------------------------------------------------
     "[M-H]-": {
-        "shift": -(PROTON_MASS) + ELECTRON_MASS,
+        "shift": -PROTON_MASS,
         "charge": -1,
         "polarity": "negative",
     },
@@ -77,19 +79,19 @@ _ADDUCT_DB: dict[str, dict[str, Any]] = {
         "polarity": "negative",
     },
     "[M+HCOO]-": {
-        "shift": (1.007825032 + 12.000000000 + 2 * 15.994914619 + ELECTRON_MASS),
+        "shift": (PROTIUM_MASS + 12.000000000 + 2 * 15.994914619 + ELECTRON_MASS),
         "charge": -1,
         "polarity": "negative",
     },
     "[M+CH3COO]-": {
         "shift": (
-            2 * 12.000000000 + 3 * 1.007825032 + 2 * 15.994914619 + ELECTRON_MASS
+            2 * 12.000000000 + 3 * PROTIUM_MASS + 2 * 15.994914619 + ELECTRON_MASS
         ),
         "charge": -1,
         "polarity": "negative",
     },
     "[M-H2O-H]-": {
-        "shift": -(2 * 1.007825032 + 15.994914619) - PROTON_MASS + ELECTRON_MASS,
+        "shift": -(2 * PROTIUM_MASS + 15.994914619) - PROTON_MASS,
         "charge": -1,
         "polarity": "negative",
     },
@@ -103,35 +105,54 @@ _ADDUCT_DB: dict[str, dict[str, Any]] = {
 
 
 # ======================================================================
-# Isotope database  (mass / Da,  fractional abundance)
+# Isotope database — (mass / Da, fractional abundance, Δn)
+# Δn = nominal neutron-count offset from the monoisotopic isotope
+# (e.g. ¹³C → +1, ³⁷Cl → +2).  M+1 / M+2 probabilities are built from
+# Δn = 1 / Δn = 2 entries only.
 # ======================================================================
-_ISOTOPES: dict[str, list[tuple[float, float]]] = {
-    "C": [(12.000000000, 0.9893), (13.003354835, 0.0107)],
-    "H": [(1.007825032, 0.999885), (2.014101778, 0.000115)],
-    "N": [(14.003074004, 0.99632), (15.000108898, 0.00368)],
-    "O": [(15.994914619, 0.99757), (16.999131756, 0.00038), (17.999159612, 0.00205)],
-    "S": [(31.972071174, 0.9493), (32.971458909, 0.0076), (33.967867004, 0.0429)],
-    "Cl": [(34.968852690, 0.7578), (36.965902580, 0.2422)],
-    "Br": [(78.918337600, 0.5069), (80.916289700, 0.4931)],
-    "P": [(30.973761998, 1.0)],
-    "F": [(18.998403163, 1.0)],
-    "I": [(126.904467700, 1.0)],
-    "Na": [(22.989769280, 1.0)],
-    "K": [(38.963706490, 0.93258), (39.963998170, 0.00012), (40.961825260, 0.06730)],
-    "Si": [(27.976926535, 0.9223), (28.976494665, 0.0467), (29.973770010, 0.0310)],
+_ISOTOPES: dict[str, list[tuple[float, float, int]]] = {
+    "C": [(12.000000000, 0.9893, 0), (13.003354835, 0.0107, 1)],
+    "H": [(1.007825032, 0.999885, 0), (2.014101778, 0.000115, 1)],
+    "N": [(14.003074004, 0.99632, 0), (15.000108898, 0.00368, 1)],
+    "O": [
+        (15.994914619, 0.99757, 0),
+        (16.999131756, 0.00038, 1),
+        (17.999159612, 0.00205, 2),
+    ],
+    "S": [
+        (31.972071174, 0.9493, 0),
+        (32.971458909, 0.0076, 1),
+        (33.967867004, 0.0429, 2),
+    ],
+    "Cl": [(34.968852690, 0.7578, 0), (36.965902580, 0.2422, 2)],
+    "Br": [(78.918337600, 0.5069, 0), (80.916289700, 0.4931, 2)],
+    "P": [(30.973761998, 1.0, 0)],
+    "F": [(18.998403163, 1.0, 0)],
+    "I": [(126.904467700, 1.0, 0)],
+    "Na": [(22.989769280, 1.0, 0)],
+    "K": [
+        (38.963706490, 0.93258, 0),
+        (39.963998170, 0.00012, 1),
+        (40.961825260, 0.06730, 2),
+    ],
+    "Si": [
+        (27.976926535, 0.9223, 0),
+        (28.976494665, 0.0467, 1),
+        (29.973770010, 0.0310, 2),
+    ],
     "Fe": [
-        (53.939609000, 0.05845),
-        (55.934936000, 0.91754),
-        (56.935393000, 0.02119),
-        (57.933274000, 0.00282),
+        (53.939609000, 0.05845, 0),
+        (55.934936000, 0.91754, 2),
+        (56.935393000, 0.02119, 3),
+        (57.933274000, 0.00282, 4),
     ],
     "Se": [
-        (73.922475934, 0.0089),
-        (75.919213700, 0.0937),
-        (76.919914200, 0.0763),
-        (77.917309100, 0.2377),
-        (79.916521800, 0.4961),
-        (81.916709500, 0.0873),
+        (73.922475934, 0.0089, 0),
+        (75.919213700, 0.0937, 2),
+        (76.919914200, 0.0763, 3),
+        (77.917309100, 0.2377, 4),
+        (79.916521800, 0.4961, 6),
+        (81.916709500, 0.0873, 8),
     ],
 }
 """Isotopes ordered by ascending mass; first entry = monoisotopic."""
@@ -202,14 +223,20 @@ def _isotope_pattern(
     for el, count in composition.items():
         mono_mass += _ISOTOPES[el][0][0] * count
 
-    # --- M+1 probability: sum over all elements of                          #
-    #     count × (abundance of first heavy isotope / abundance of light)    #
-    #     For elements with only one isotope the term is zero.               #
+    # --- M+1 / M+2 probabilities -------------------------------------------
+    # Δn = 1 isotopes (¹³C, ¹⁵N, ¹⁷O, ³³S, …) contribute to M+1;
+    # Δn = 2 isotopes (¹⁸O, ³⁴S, ³⁷Cl, ⁸¹Br, …) contribute to M+2.
+    # Elements without a given Δn isotope contribute nothing — e.g. Cl
+    # and Br have no Δn = 1 isotope, so their M+1 abundance is zero.
     p1 = 0.0
+    p2_b = 0.0
     for el, count in composition.items():
-        isotopes = _ISOTOPES[el]
-        if len(isotopes) > 1:
-            p1 += count * (isotopes[1][1] / isotopes[0][1])
+        mono_abund = _ISOTOPES[el][0][1]
+        for _mass, abund, delta in _ISOTOPES[el][1:]:
+            if delta == 1:
+                p1 += count * (abund / mono_abund)
+            elif delta == 2:
+                p2_b += count * (abund / mono_abund)
 
     m1_mass = mono_mass + NEUTRON_MASS
     m1_abund = p1
@@ -217,20 +244,11 @@ def _isotope_pattern(
     # --- M+2 probability (approximate) ------------------------------------
     # Two contributions:
     #   a) Two independent +1 substitutions → ≈ p1² / 2
-    #   b) One +2 substitution (S, Cl, Br, Se, …) → sum over elements of
-    #      count × (abund_+2 / abund_light)
+    #   b) One Δn = 2 substitution (summed above)
     p2_a = (p1**2) / 2.0
 
-    p2_b = 0.0
-    m2_mass_shift = 2.0 * NEUTRON_MASS
-    for el, count in composition.items():
-        isotopes = _ISOTOPES[el]
-        if len(isotopes) > 2:
-            # +2 neutron isotope exists
-            p2_b += count * (isotopes[2][1] / isotopes[0][1])
-
     m2_abund = p2_a + p2_b
-    m2_mass = mono_mass + m2_mass_shift
+    m2_mass = mono_mass + 2.0 * NEUTRON_MASS
 
     # Build result, normalised to M = 1.0
     result = [
@@ -266,7 +284,7 @@ def _mock_smiles_to_formula(smiles: str) -> str:
 # Public registration
 # ======================================================================
 def register_tools(mcp: Any) -> None:
-    """Register cheminformatics tools on the supplied FastMCP *mcp* instance."""
+    """Register cheminformatics tools on the supplied MCPServer *mcp* instance."""
 
     # ------------------------------------------------------------------
     # Tool: predict_adduct_offset

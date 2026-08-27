@@ -1,17 +1,13 @@
-"""Spectral library search orchestrated durably with Prefect.
+"""Spectral library search orchestrated with an in-process async job store.
 
-Jobs are dispatched as Prefect flow runs instead of ad-hoc asyncio tasks:
+``search_library`` records each job in ``_JOB_STORE`` and executes the
+CPU-bound scan off the event loop with ``asyncio.to_thread``; the job runs
+as an ``asyncio`` task spawned via ``asyncio.create_task``, and
+``check_search_status`` polls the job store until the job completes.
 
-* With a Prefect API configured (``PREFECT_API_URL`` or a local
-  ``prefect server start``), flow runs are recorded in the server database,
-  survive restarts, are observable in the Prefect UI, and can be executed by
-  remote workers (multi-process scaling).
-* Without an API, Prefect launches an embedded ephemeral server in a
-  subprocess, so the dispatcher/poller contract is identical during local
-  development.  State is process-local in that mode.
-
-The flow exposes observable lineage: database generation and experimental
-peak loading run as Prefect tasks inside the flow run.
+The dispatcher/poller contract is thus fully in-process: no external
+orchestrator is required, and the MCP event loop stays responsive while
+searches execute on a worker thread.
 """
 
 from __future__ import annotations
@@ -22,17 +18,15 @@ import random
 import sqlite3
 import traceback
 import uuid
+import zlib
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import numpy as np
-from prefect import flow, get_client, task
-from prefect.exceptions import ObjectNotFound
-from prefect.flow_engine import run_flow
-from prefect.states import Pending, aget_state_exception
 from pydantic import BaseModel, Field
 
-from msmcp.models.embeddings import get_embedder
+from msmcp.models import get_embedder
 from msmcp.tools.similarity import _cosine as _vector_cosine
 
 logger = logging.getLogger("msmcp.tools.search")
@@ -61,6 +55,12 @@ class SearchInput(BaseModel):
             "foundation-model embeddings ('dreams' / 'lsm-ms2')."
         ),
     )
+    chunk_size: int = Field(
+        default=2000,
+        ge=100,
+        le=10000,
+        description="Number of spectra to read per database I/O batch.",
+    )
 
 
 class StatusInput(BaseModel):
@@ -69,29 +69,42 @@ class StatusInput(BaseModel):
     job_id: str = Field(
         ...,
         min_length=1,
-        description="The job_id (Prefect flow run ID) returned by a previous "
+        description="The job_id (uuid4 hex) returned by a previous "
         "search_library call.",
     )
 
 
 # ======================================================================
-# Background flow-run bookkeeping
+# Job store — in-process state for dispatched searches
 # ======================================================================
-# In embedded-server mode this process acts as the "worker": each dispatched
-# flow run is executed by a background thread.  Keep strong references to the
-# executor futures so the event loop never garbage-collects a running search.
-_ACTIVE_SEARCH_RUNS: set[asyncio.Future[Any]] = set()
+@dataclass
+class SearchJob:
+    """Mutable state for a single dispatched search job.
+
+    Status lifecycle: ``pending`` → ``running`` → ``completed`` | ``failed``.
+    """
+
+    job_id: str
+    experimental_file: str
+    database_file: str
+    scoring_method: str
+    status: str = "pending"
+    result: str | None = None  # final Markdown report once completed
+    error: str | None = None  # formatted traceback once failed
+    task: asyncio.Task[Any] | None = None  # strong ref — prevents GC mid-run
 
 
-def _reap_search_future(future: asyncio.Future[Any]) -> None:
-    """Drop the finished future, surfacing unexpected executor failures."""
-    _ACTIVE_SEARCH_RUNS.discard(future)
-    if not future.cancelled():
-        exc = future.exception()
-        if exc is not None:
-            # The flow failure itself is recorded in the Prefect state;
-            # this only fires for failures outside the flow engine.
-            logger.warning("Background flow execution crashed: %s", exc)
+_JOB_STORE: dict[str, SearchJob] = {}
+"""In-process job registry keyed by ``uuid.uuid4().hex`` job ID."""
+
+
+def _stable_seed(text: str) -> int:
+    """Deterministic 31-bit seed derived from *text*.
+
+    ``hash()`` is salted per process (``PYTHONHASHSEED``), so it must not
+    be used for reproducible seeding; CRC32 is stable across runs.
+    """
+    return zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF
 
 
 # ======================================================================
@@ -220,7 +233,7 @@ def _build_mock_database(
 # ======================================================================
 def _iter_spectra_chunked(
     conn: sqlite3.Connection,
-    chunk_size: int = 500,
+    chunk_size: int = 2000,
 ) -> Any:
     """Yield (chunk_id, list_of_spectrum_dicts) from the database."""
     total = conn.execute("SELECT COUNT(*) FROM spectra").fetchone()[0]
@@ -346,7 +359,12 @@ def _scoring_label(scoring_method: str) -> str:
     if scoring_method == "classical":
         return "classical (greedy peak matching, ±0.02 Da)"
     embedder = get_embedder(scoring_method)
-    return f"{embedder.name} deep embedding ({embedder.embedding_dim}-d)"
+    backend_label = (
+        "real inference" if embedder.backend == "hf" else "deterministic fallback"
+    )
+    return (
+        f"{embedder.name} deep embedding ({embedder.embedding_dim}-d, {backend_label})"
+    )
 
 
 # ======================================================================
@@ -395,63 +413,43 @@ def _mock_load_experimental(
 ) -> list[tuple[float, float]]:
     """Return a synthetic experimental peak list from a file path."""
     if rng is None:
-        rng = random.Random(hash(file_path) & 0x7FFFFFFF)
+        rng = random.Random(_stable_seed(file_path))
     precursor = rng.uniform(180.0, 900.0)
     return _generate_peak_list(precursor, rng.randint(15, 50), rng)
 
 
 # ======================================================================
-# Prefect tasks — observable lineage inside the flow run
+# The search itself — CPU-bound, offloaded to a worker thread
 # ======================================================================
-@task(name="generate-spectral-library", persist_result=False)
-def _generate_library_task(n_spectra: int, seed: int) -> sqlite3.Connection:
-    """Task: build the (mock) SQLite spectral library."""
-    return _build_mock_database(n_spectra=n_spectra, seed=seed)
-
-
-@task(name="load-experimental-spectrum", persist_result=False)
-def _load_experimental_spectrum_task(
-    file_path: str,
-    seed: int,
-) -> list[tuple[float, float]]:
-    """Task: load the experimental spectrum peak list."""
-    return _mock_load_experimental(file_path, random.Random(seed))
-
-
-# ======================================================================
-# Prefect flow — the durable search job
-# ======================================================================
-@flow(
-    name="Spectral Library Search",
-    persist_result=True,
-)
-def spectral_library_search(
+def _build_report(
     experimental_file: str,
     database_file: str,
     scoring_method: Literal["classical", "dreams", "lsm-ms2"] = "classical",
+    chunk_size: int = 2000,
 ) -> str:
-    """Perform the full library search and return a formatted Markdown report.
+    """Run the full library search and return a formatted Markdown report.
 
     Similarity is computed with the scorer selected by *scoring_method*:
     classical greedy peak matching, or whole-spectrum embeddings from the
-    DreaMS / LSM-MS2 foundation-model adapters.
+    DreaMS / LSM-MS2 foundation-model adapters.  The database is scanned in
+    batches of *chunk_size* spectra to bound per-transaction I/O and memory.
 
-    The report is persisted as the flow run result, so it can be retrieved
-    from the Prefect state by ``check_search_status`` (and survives server
-    restarts when a durable Prefect API is configured).
+    This function is CPU-bound (chunked scan of the SQLite library plus
+    null-distribution scoring); the dispatcher runs it via
+    ``asyncio.to_thread`` so the MCP event loop stays responsive.
     """
     scorer = _build_scorer(scoring_method)
-    rng = random.Random(hash(database_file) & 0x7FFFFFFF)
+    rng = random.Random(_stable_seed(database_file))
     n_spectra = rng.randint(500, 5000)
-    conn = _generate_library_task(
+    conn = _build_mock_database(
         n_spectra=n_spectra,
         seed=rng.randint(0, 2**31),
     )
     try:
         # --- load experimental spectrum -------------------------------------
-        exp_peaks = _load_experimental_spectrum_task(
+        exp_peaks = _mock_load_experimental(
             experimental_file,
-            rng.randint(0, 2**31),
+            random.Random(rng.randint(0, 2**31)),
         )
         logger.info(
             "Loaded experimental spectrum: %d peaks from %r",
@@ -479,7 +477,6 @@ def spectral_library_search(
         target_scores: list[float] = []
         target_meta: list[dict[str, Any]] = []
 
-        chunk_size = 500
         logger.info(
             "Scanning %d spectra in chunks of %d (%s mode)",
             n_spectra,
@@ -602,7 +599,7 @@ def spectral_library_search(
                 lines.append(f"{total_passing} hit(s) passed the threshold.")
 
         logger.info(
-            "spectral_library_search(db=%r, n=%d, mode=%s) → %d hits (top %.4f)",
+            "_build_report(db=%r, n=%d, mode=%s) → %d hits (top %.4f)",
             database_file,
             n_spectra,
             "FDR" if use_fdr else "p-value",
@@ -617,66 +614,83 @@ def spectral_library_search(
 
 
 # ======================================================================
-# Dispatch helpers
+# Background job execution
 # ======================================================================
-async def _dispatch_flow_run(
+# Strong references to fire-and-forget background tasks so the garbage
+# collector never reaps a running coroutine (RUF006).
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
+
+def _track_background_task(task: asyncio.Task[None]) -> None:
+    """Retain a strong reference to *task* until it completes."""
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
+async def _schedule_cleanup(job_id: str, delay_sec: int = 3600) -> None:
+    """Expire *job_id* from the job store after *delay_sec* seconds.
+
+    Finished jobs are retained briefly so ``check_search_status`` can still
+    return the outcome, then removed so a long-running server does not
+    accumulate unbounded in-process state.
+    """
+    await asyncio.sleep(delay_sec)
+    job = _JOB_STORE.pop(job_id, None)
+    if job is not None:
+        logger.info("Expired finished search job %s from the job store", job_id)
+    else:
+        logger.debug("Cleanup for search job %s: already absent from store", job_id)
+
+
+async def _run_search_task(
+    job_id: str,
     experimental_file: str,
     database_file: str,
-    scoring_method: str,
-) -> uuid.UUID:
-    """Create a Prefect flow run and start executing it in the background.
+    scoring_method: Literal["classical", "dreams", "lsm-ms2"],
+    chunk_size: int = 2000,
+) -> None:
+    """Execute the search for *job_id* and record the outcome in the store.
 
-    The flow run is created through the Prefect client, which records it in
-    the server database (or the embedded ephemeral server in development).
-    Execution is offloaded to a thread-pool executor so the MCP event loop is
-    never blocked by the CPU-bound scan.
-
-    Returns
-    -------
-    uuid.UUID
-        The Prefect flow run ID, returned to the caller as the ``job_id``.
+    The CPU-bound report generation runs via ``asyncio.to_thread`` so the
+    event loop is never blocked; the job status transitions
+    ``running`` → ``completed`` (with the report) or ``failed`` (with a
+    formatted traceback).
     """
-    parameters: dict[str, Any] = {
-        "experimental_file": experimental_file,
-        "database_file": database_file,
-        "scoring_method": scoring_method,
-    }
-
-    async with get_client() as client:
-        flow_run = await client.create_flow_run(
-            flow=spectral_library_search,
-            parameters=spectral_library_search.serialize_parameters(parameters),
-            state=Pending(),
+    job = _JOB_STORE[job_id]
+    try:
+        job.status = "running"
+        job.result = await asyncio.to_thread(
+            _build_report,
+            experimental_file,
+            database_file,
+            scoring_method,
+            chunk_size,
         )
-
-    loop = asyncio.get_running_loop()
-    future = loop.run_in_executor(
-        None,
-        lambda: run_flow(
-            flow=spectral_library_search,
-            flow_run=flow_run,
-            parameters=parameters,
-            return_type="state",
-        ),
-    )
-    _ACTIVE_SEARCH_RUNS.add(future)
-    future.add_done_callback(_reap_search_future)
-
-    logger.info(
-        "Dispatched Prefect flow run %s (exp=%r, db=%r, method=%s)",
-        flow_run.id,
-        experimental_file,
-        database_file,
-        scoring_method,
-    )
-    return flow_run.id
+        job.status = "completed"
+        logger.info(
+            "Search job %s completed (db=%r, method=%s)",
+            job_id,
+            database_file,
+            scoring_method,
+        )
+    except Exception as exc:
+        logger.exception("Search job %s failed", job_id)
+        job.error = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+        job.status = "failed"
+    finally:
+        job.task = None  # finished — drop the strong reference
+        # Expire the finished job from the store after the TTL so a
+        # long-running server never leaks completed/failed job records.
+        _track_background_task(asyncio.create_task(_schedule_cleanup(job_id)))
 
 
 # ======================================================================
 # Public registration
 # ======================================================================
 def register_tools(mcp: Any) -> None:
-    """Register the async library-search tools on the FastMCP instance."""
+    """Register the async library-search tools on the MCPServer instance."""
 
     # ------------------------------------------------------------------
     # Tool 1 — Dispatcher
@@ -686,6 +700,7 @@ def register_tools(mcp: Any) -> None:
         experimental_file: str,
         database_file: str,
         scoring_method: Literal["classical", "dreams", "lsm-ms2"] = "classical",
+        chunk_size: int = 2000,
     ) -> str:
         """Dispatch a spectral library search and return a job_id for polling.
 
@@ -693,40 +708,51 @@ def register_tools(mcp: Any) -> None:
         'classical' greedy peak matching, or whole-spectrum embeddings from
         the 'dreams' / 'lsm-ms2' foundation-model adapters.
 
-        The search is executed as a Prefect flow run, orchestrated durably by
-        Prefect: the run is recorded in the Prefect API (or the embedded
-        ephemeral server during development), its state and result survive
-        the request, and it can be monitored in the Prefect UI.  Use
-        ``check_search_status`` with the returned *job_id* to retrieve the
-        report once the run completes.
+        The job is recorded in the in-process ``_JOB_STORE`` and executed in
+        the background: ``asyncio.create_task`` spawns ``_run_search_task``,
+        which offloads the CPU-bound scan with ``asyncio.to_thread`` so the
+        MCP event loop stays responsive.  Use ``check_search_status`` with
+        the returned *job_id* to retrieve the report once it completes.
         """
         _ = SearchInput(
             experimental_file=experimental_file,
             database_file=database_file,
             scoring_method=scoring_method,
+            chunk_size=chunk_size,
         )
 
-        try:
-            flow_run_id = await _dispatch_flow_run(
+        job_id = uuid.uuid4().hex
+        job = SearchJob(
+            job_id=job_id,
+            experimental_file=experimental_file,
+            database_file=database_file,
+            scoring_method=scoring_method,
+        )
+        _JOB_STORE[job_id] = job
+        job.task = asyncio.create_task(
+            _run_search_task(
+                job_id,
                 experimental_file,
                 database_file,
                 scoring_method,
+                chunk_size,
             )
-        except Exception as exc:
-            logger.exception("Failed to dispatch search flow run")
-            return (
-                f"ERROR: could not dispatch the search job: {exc}\n\n"
-                f"Check that the Prefect orchestration layer is reachable."
-            )
+        )
 
-        job_id = str(flow_run_id)
+        logger.info(
+            "Dispatched search job %s (exp=%r, db=%r, method=%s)",
+            job_id,
+            experimental_file,
+            database_file,
+            scoring_method,
+        )
+
         return (
             f"## Search Dispatched\n\n"
             f"**Job ID:** `{job_id}`\n\n"
-            f"The spectral library search is running as a Prefect flow run, "
-            f"orchestrated durably by Prefect.  Its state is tracked by the "
-            f"Prefect API, survives server restarts, and is visible in the "
-            f"Prefect UI (search by flow run ID).\n\n"
+            f"The spectral library search is running in the background as an "
+            f"in-process async job; the CPU-bound scan is offloaded to a "
+            f"worker thread so the MCP server stays responsive.\n\n"
             f"Use `check_search_status` with this job ID to poll for results:\n\n"
             f'    check_search_status(job_id="{job_id}")\n'
         )
@@ -738,92 +764,60 @@ def register_tools(mcp: Any) -> None:
     async def check_search_status(job_id: str) -> str:
         """Poll the status of a previously dispatched search job.
 
-        The *job_id* is a Prefect flow run ID.  This tool queries the Prefect
-        client and returns:
-        - A "wait" message if the flow run is still pending or running.
-        - The full Markdown hit table when the run completes.
-        - The exception traceback if the run failed.
+        The *job_id* is the uuid4-hex ID returned by ``search_library``.
+        This tool reads the in-process job store and returns:
+        - A "wait" message while the job is pending or running.
+        - The full Markdown hit table once the job completes.
+        - The exception traceback if the job failed.
         """
         _ = StatusInput(job_id=job_id)
 
         try:
-            flow_run_id = uuid.UUID(job_id)
+            uuid.UUID(job_id)
         except ValueError:
             return (
                 f"❓ **Unknown Job**\n\n"
-                f"`{job_id}` is not a valid Prefect flow run ID.  "
-                f"Double-check the job ID returned by `search_library`."
-            )
-
-        try:
-            async with get_client() as client:
-                flow_run = await client.read_flow_run(flow_run_id)
-        except ObjectNotFound:
-            return (
-                f"❓ **Unknown Job**\n\n"
-                f"No Prefect flow run found with ID `{job_id}`.  "
-                f"Double-check the job ID or dispatch a new search via "
+                f"`{job_id}` is not a valid job ID (expected a 32-character "
+                f"hex UUID).  Double-check the job ID returned by "
                 f"`search_library`."
             )
-        except Exception as exc:
-            logger.warning("Prefect client query failed: %s", exc)
+
+        job = _JOB_STORE.get(job_id)
+        if job is None:
             return (
-                f"❌ **Orchestrator unavailable** — could not reach the "
-                f"Prefect API: {exc}\n\n"
-                f"Verify that the Prefect server is running."
+                f"❓ **Unknown Job**\n\n"
+                f"No search job found with ID `{job_id}`.  Double-check the "
+                f"job ID or dispatch a new search via `search_library`."
             )
 
-        state = flow_run.state
-
-        # --- running / pending -----------------------------------------
-        if (
-            state is None
-            or state.is_pending()
-            or state.is_scheduled()
-            or state.is_running()
-        ):
-            if state is not None and state.is_running():
-                return (
-                    f"🔄 **Running** — Prefect flow run `{job_id}` is "
-                    f"scanning the spectral library and computing statistics.  "
-                    f"Poll again shortly."
-                )
+        # --- pending / running ------------------------------------------
+        if job.status == "pending":
             return (
-                f"⏳ **Pending** — Prefect flow run `{job_id}` has been "
-                f"queued and will start shortly.  Poll again in a moment."
+                f"⏳ **Pending** — search job `{job_id}` has been queued and "
+                f"will start shortly.  Poll again in a moment."
+            )
+        if job.status == "running":
+            return (
+                f"🔄 **Running** — search job `{job_id}` is scanning the "
+                f"spectral library and computing statistics.  Poll again "
+                f"shortly."
             )
 
         # --- completed --------------------------------------------------
-        if state.is_completed():
-            try:
-                result = await state.result(raise_on_failure=True)
-            except Exception as exc:
-                logger.warning("Result retrieval failed for %s: %s", job_id, exc)
-                return (
-                    f"❌ **Result unavailable** — Prefect flow run `{job_id}` "
-                    f"completed, but its result could not be retrieved: {exc}"
-                )
+        if job.status == "completed":
             logger.info("check_search_status(%s): returning completed report", job_id)
-            return str(result)
+            return job.result or "ERROR: job completed without a report."
 
-        # --- failed / crashed / cancelled --------------------------------
-        if state.is_failed() or state.is_crashed() or state.is_cancelled():
-            failure = await aget_state_exception(state)
-            tb_text = "".join(
-                traceback.format_exception(
-                    type(failure), failure, failure.__traceback__
-                )
-            )
+        # --- failed -----------------------------------------------------
+        if job.status == "failed":
             logger.info("check_search_status(%s): reporting failure", job_id)
             return (
-                f"❌ **Failed** — Prefect flow run `{job_id}` ended in state "
-                f"`{state.type.value}`:\n\n"
-                f"```\n{tb_text}\n```"
+                f"❌ **Failed** — search job `{job_id}` failed:\n\n"
+                f"```\n{job.error}\n```"
             )
 
         # --- anything else -----------------------------------------------
         return (
-            f"⚠️  **Unexpected state** — Prefect flow run `{job_id}` is in "
-            f"state `{state.type.value}`.  This may indicate an internal "
-            f"orchestration issue."
+            f"⚠️  **Unexpected state** — search job `{job_id}` is in status "
+            f"`{job.status}`.  This may indicate an internal error."
         )

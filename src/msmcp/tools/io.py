@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -16,7 +16,9 @@ logger = logging.getLogger("msmcp.tools.io")
 # installed we define a stub so that `except` clauses still compile.
 # ---------------------------------------------------------------------------
 try:
-    from massflow.errors import UnsupportedVendorFormatError
+    from massflow.errors import (  # pyright: ignore[reportMissingImports]  # best-effort; stub fallback below
+        UnsupportedVendorFormatError,
+    )
 except ImportError:  # pragma: no cover – only hit in dev without massflow
 
     class UnsupportedVendorFormatError(Exception):
@@ -111,7 +113,7 @@ def _summarise_spectrum(
     show = min(top_n, n_peaks)
     lines.append(f"  Top {show} peaks (m/z → intensity):")
     for i in range(show):
-        idx_peak = order[i]
+        idx_peak = int(order[i])
         lines.append(
             f"    {_fmt_mz(mz[idx_peak])} → {_fmt_intensity(intensity[idx_peak])}"
         )
@@ -146,7 +148,7 @@ def _maybe_int(val: Any) -> int | str:
         return "?"
 
 
-def _safe_fmt(val: Any, fmt_fn: callable) -> str:
+def _safe_fmt(val: Any, fmt_fn: Callable[[float], str]) -> str:
     """Apply *fmt_fn* to *val*, returning 'N/A' for None."""
     return "N/A" if val is None else fmt_fn(float(val))
 
@@ -183,7 +185,7 @@ def _mock_load_spectra(file_path: str) -> Iterator[object]:
 # Public tool
 # ===================================================================
 def register_tools(mcp: Any) -> None:
-    """Register I/O tools on the supplied FastMCP *mcp* instance."""
+    """Register I/O tools on the supplied MCPServer *mcp* instance."""
 
     @mcp.tool()
     def load_mzml_summary(

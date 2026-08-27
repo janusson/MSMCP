@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import zlib
 from typing import Any
 
 import numpy as np
@@ -48,6 +49,15 @@ _DIAGNOSTIC_IONS: list[tuple[str, float, int]] = [
 ]
 
 _NEGATIVE_MZ_SENTINEL = -1.0  # flags that require non-m/z matching logic
+
+
+def _stable_seed(text: str) -> int:
+    """Deterministic 31-bit seed derived from *text*.
+
+    ``hash()`` is salted per process (``PYTHONHASHSEED``), so it must not
+    be used for reproducible seeding; CRC32 is stable across runs.
+    """
+    return zlib.crc32(text.encode("utf-8")) & 0x7FFFFFFF
 
 
 # ======================================================================
@@ -110,7 +120,7 @@ def _generate_mock_dataset(
     The RNG is seeded from *file_path* so repeated calls on the same
     file produce identical results.
     """
-    rng = random.Random(hash(file_path) & 0x7FFFFFFF)
+    rng = random.Random(_stable_seed(file_path))
     if n_spectra is None:
         n_spectra = rng.randint(200, 5000)
     return [_mock_spectrum_metrics(rng) for _ in range(n_spectra)]
@@ -377,7 +387,7 @@ def _pipeline_recommendation(
 # Public registration
 # ======================================================================
 def register_tools(mcp: Any) -> None:
-    """Register the QC summary tool on the FastMCP *mcp* instance."""
+    """Register the QC summary tool on the MCPServer *mcp* instance."""
 
     @mcp.tool()
     def generate_qc_summary(file_path: str) -> str:
