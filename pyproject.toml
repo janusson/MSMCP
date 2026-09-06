@@ -7,10 +7,8 @@ requires-python = ">=3.13"
 dependencies = [
     "mcp[cli]>=2.0.0",
     "massflow>=0.1.0",
-    "massflow[chem]>=0.1.0",
     "pydantic>=2.12.5",
     "numpy>=1.26.4",
-    "prefect>=3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +21,12 @@ dev = [
     "ruff>=0.11",
     "mypy>=1.15",
     "basedpyright>=1.16",
+]
+# Optional real cheminformatics: enables RDKit-backed SMILES → formula
+# conversion in `annotate_isotopes` (install with `uv sync --extra chem`;
+# without it, the tool falls back to a small static lookup table).
+chem = [
+    "rdkit>=2024.3",
 ]
 # Optional ML extras: real spectral foundation-model inference.  The DreaMS
 # package itself is not on PyPI (the `dreams` name is an unrelated
@@ -61,7 +65,7 @@ select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
 "src/msmcp/__init__.py" = ["RUF002"]
 "src/msmcp/tools/__init__.py" = ["RUF002"]
 "src/msmcp/tools/chem.py" = ["B905", "F841", "RUF002", "RUF003"]
-"src/msmcp/tools/io.py" = ["F541", "RUF001", "RUF003", "RUF023", "UP035"]
+"src/msmcp/tools/io.py" = ["F541", "RUF001", "RUF003", "RUF023"]
 "src/msmcp/tools/qc.py" = ["B007", "F841", "RUF001", "RUF003", "RUF005", "SIM114"]
 "src/msmcp/tools/similarity.py" = ["RUF002"]
 

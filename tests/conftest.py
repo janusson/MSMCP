@@ -2,40 +2,27 @@
 
 The MCP tools are defined as closures inside each tool module's
 ``register_tools(mcp)`` function.  The test suite registers them against a
-minimal stand-in for ``FastMCP`` (the real SDK only receives a ``tool()``
-decorator call) and exposes the captured callables as fixtures.
+minimal stand-in for the current ``MCPServer`` (the real SDK only receives a
+``tool()`` decorator call) and exposes the captured callables as fixtures.
 """
 
 from __future__ import annotations
 
 import os
-import tempfile
 from collections.abc import Awaitable, Callable
 
 import pytest
-
-# Configure Prefect for hermetic tests BEFORE any prefect import: use a
-# throwaway home directory and result-storage path so tests never touch the
-# developer's ~/.prefect, and silence anonymous telemetry.
-_PREFECT_TEST_HOME = tempfile.mkdtemp(prefix="msmcp-prefect-test-")
-os.environ.setdefault("PREFECT_HOME", _PREFECT_TEST_HOME)
-os.environ.setdefault(
-    "PREFECT_LOCAL_STORAGE_PATH",
-    os.path.join(_PREFECT_TEST_HOME, "storage"),
-)
-os.environ.setdefault("DO_NOT_TRACK", "1")
-os.environ.setdefault("PREFECT_SERVER_ANALYTICS_ENABLED", "false")
 
 # Pin embedding backends to the deterministic mocks for hermetic tests: no
 # torch / DreaMS imports, no weight downloads, no network.  Adapter tests
 # that exercise the real-inference pipeline inject stub models explicitly.
 os.environ["MSMCP_EMBEDDING_BACKEND"] = "mock"
 
-from msmcp.tools import chem, search, similarity  # noqa: E402
+from msmcp.tools import chem, search, similarity
 
 
 class FakeMCP[T]:
-    """Minimal stand-in for ``FastMCP`` that captures registered tools."""
+    """Minimal stand-in for ``MCPServer`` that captures registered tools."""
 
     def __init__(self) -> None:
         self.tools: dict[str, Callable[..., T]] = {}

@@ -219,3 +219,6 @@ __marimo__/
 repomix-output.xml
 Makefile
 .repomixignore
+
+# macOS
+.DS_Store

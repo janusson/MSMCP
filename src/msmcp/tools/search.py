@@ -97,6 +97,17 @@ class SearchJob:
 _JOB_STORE: dict[str, SearchJob] = {}
 """In-process job registry keyed by ``uuid.uuid4().hex`` job ID."""
 
+_MAX_CONCURRENT_SEARCHES = 4
+"""Upper bound on simultaneously running library scans.
+
+`search_library` is driven by an LLM client, so an eager or misbehaving
+agent could otherwise spawn unbounded worker threads and saturate the CPU.
+Jobs beyond the cap wait in ``pending`` state until a slot frees up.
+"""
+
+_SEARCH_SEMAPHORE = asyncio.Semaphore(_MAX_CONCURRENT_SEARCHES)
+"""Gates how many scans run on worker threads at once."""
+
 
 def _stable_seed(text: str) -> int:
     """Deterministic 31-bit seed derived from *text*.
@@ -658,15 +669,16 @@ async def _run_search_task(
     """
     job = _JOB_STORE[job_id]
     try:
-        job.status = "running"
-        job.result = await asyncio.to_thread(
-            _build_report,
-            experimental_file,
-            database_file,
-            scoring_method,
-            chunk_size,
-        )
-        job.status = "completed"
+        async with _SEARCH_SEMAPHORE:
+            job.status = "running"
+            job.result = await asyncio.to_thread(
+                _build_report,
+                experimental_file,
+                database_file,
+                scoring_method,
+                chunk_size,
+            )
+            job.status = "completed"
         logger.info(
             "Search job %s completed (db=%r, method=%s)",
             job_id,

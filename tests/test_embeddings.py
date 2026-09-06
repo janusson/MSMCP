@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -10,6 +12,8 @@ import pytest
 
 from msmcp.models import backends
 from msmcp.models.backends import (
+    LSM_MS2_CKPT_ENV,
+    LSM_UNSAFE_ENV,
     DreaMSInferenceEmbedder,
     EmbeddingBackendUnavailable,
     LSMMS2InferenceEmbedder,
@@ -311,6 +315,25 @@ class TestDreaMSInferenceAdapter:
             DreaMSInferenceEmbedder().embed_spectrum(_peaks(PEPTIDE_LIKE))
 
 
+def _fake_torch_module(load: Any) -> SimpleNamespace:
+    """Stand-in torch module: TorchScript load fails, *load* is delegated to."""
+
+    def _jit_load(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("not a TorchScript checkpoint")
+
+    return SimpleNamespace(jit=SimpleNamespace(load=_jit_load), load=load)
+
+
+def _write_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Create a dummy checkpoint file and point MSMCP_LSM_MS2_CKPT at it."""
+    ckpt = tmp_path / "lsm.pt"
+    ckpt.write_bytes(b"not a real checkpoint")
+    monkeypatch.setenv(LSM_MS2_CKPT_ENV, str(ckpt))
+    # The model cache must not leak between tests.
+    LSMMS2InferenceEmbedder._model = None
+    return ckpt
+
+
 class TestLSMMS2InferenceAdapter:
     """Bring-your-own-checkpoint LSM-MS2 adapter, exercised with a stub model."""
 
@@ -327,6 +350,44 @@ class TestLSMMS2InferenceAdapter:
         monkeypatch.setenv("MSMCP_LSM_MS2_CKPT", "/nonexistent/lsm.pt")
         with pytest.raises(EmbeddingBackendUnavailable, match="not found"):
             LSMMS2InferenceEmbedder()._load_model()
+
+    def test_full_pickle_fallback_requires_explicit_opt_in(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A checkpoint needing full-pickle loading is rejected unless opted in."""
+        _write_checkpoint(tmp_path, monkeypatch)
+        monkeypatch.delenv(LSM_UNSAFE_ENV, raising=False)
+        calls: list[dict[str, Any]] = []
+
+        def unsafe_load(*args: Any, **kwargs: Any) -> Any:
+            calls.append(kwargs)
+            raise RuntimeError("not weights-only loadable")
+
+        monkeypatch.setitem(sys.modules, "torch", _fake_torch_module(unsafe_load))
+        with pytest.raises(EmbeddingBackendUnavailable, match=LSM_UNSAFE_ENV):
+            LSMMS2InferenceEmbedder()._load_model()
+        # Only the safe weights_only attempt was made; no full-pickle load.
+        assert calls == [{"map_location": "cpu", "weights_only": True}]
+
+    def test_opt_in_allows_full_pickle_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """With MSMCP_LSM_MS2_ALLOW_UNSAFE=1 the full-pickle load is permitted."""
+        _write_checkpoint(tmp_path, monkeypatch)
+        monkeypatch.setenv(LSM_UNSAFE_ENV, "1")
+        calls: list[dict[str, Any]] = []
+
+        def unsafe_load(*args: Any, **kwargs: Any) -> Any:
+            calls.append(kwargs)
+            if kwargs.get("weights_only"):
+                raise RuntimeError("not weights-only loadable")
+            return SimpleNamespace(encode=lambda *a, **k: np.ones(4))
+
+        monkeypatch.setitem(sys.modules, "torch", _fake_torch_module(unsafe_load))
+        model = LSMMS2InferenceEmbedder()._load_model()
+        assert model is not None
+        # Final attempt is the full-pickle load (no weights_only restriction).
+        assert calls[-1] == {"map_location": "cpu"}
 
     def test_encode_pipeline_is_canonical_and_normalised(
         self, monkeypatch: pytest.MonkeyPatch

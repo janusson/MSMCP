@@ -365,11 +365,13 @@ def register_tools(mcp: Any) -> None:
             formula = _smiles_to_formula(identifier)
             if formula is None:
                 return (
-                    "ERROR: RDKit (`massflow[chem]`) is not installed and the "
-                    "SMILES string could not be resolved.\n\n"
-                    "Please compute the chemical formula for this structure "
-                    "manually and resubmit using **is_smiles=False** with the "
-                    "formula string as *identifier*."
+                    "ERROR: RDKit is not installed and the SMILES string "
+                    "could not be resolved.\n\n"
+                    "Install the optional `chem` extra (`uv sync --extra chem`) "
+                    "to enable SMILES parsing, or compute the chemical "
+                    "formula for this structure manually and resubmit using "
+                    "**is_smiles=False** with the formula string as "
+                    "*identifier*."
                 )
             logger.info("SMILES %r → formula %r", identifier, formula)
         else:

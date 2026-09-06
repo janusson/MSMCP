@@ -66,6 +66,16 @@ logger = logging.getLogger("msmcp.models.backends")
 LSM_MS2_CKPT_ENV = "MSMCP_LSM_MS2_CKPT"
 """Environment variable pointing at a user-supplied LSM-MS2 checkpoint."""
 
+LSM_UNSAFE_ENV = "MSMCP_LSM_MS2_ALLOW_UNSAFE"
+"""Opt-in flag (``=1``) for full-pickle ``torch.load`` fallback loading.
+
+Loading a checkpoint is deserialisation of attacker-influenced data; the
+full-pickle path can execute arbitrary code (CVE-class risk).  It is
+**disabled by default** — checkpoints that cannot be loaded with
+``weights_only=True`` raise :class:`EmbeddingBackendUnavailable` unless
+this variable is set explicitly.
+"""
+
 
 class EmbeddingBackendUnavailable(RuntimeError):
     """Raised when a real inference backend cannot be loaded.
@@ -279,11 +289,14 @@ class LSMMS2InferenceEmbedder(SpectralEmbedder):
     code drop, ``matterworksbio/LSM1-MS2``), so this adapter activates only
     when the ``MSMCP_LSM_MS2_CKPT`` environment variable points at a
     checkpoint.  The checkpoint must deserialise (``torch.jit.load`` or
-    ``torch.load``) to a model object exposing
-    ``encode(mz, intensity, precursor_mz) -> np.ndarray``.  Peaks are sorted
-    by m/z and intensity max-normalised before encoding; the embedding
-    dimensionality is derived from the first ``encode`` output and the
-    vector is L2-normalised float32.
+    ``torch.load`` with ``weights_only=True``) to a model object exposing
+    ``encode(mz, intensity, precursor_mz) -> np.ndarray``.  A checkpoint that
+    cannot be loaded safely is rejected unless the
+    ``MSMCP_LSM_MS2_ALLOW_UNSAFE`` environment variable is set, opting into
+    the full-pickle ``torch.load`` fallback (which can execute arbitrary code
+    from the file).  Peaks are sorted by m/z and intensity max-normalised
+    before encoding; the embedding dimensionality is derived from the first
+    ``encode`` output and the vector is L2-normalised float32.
     """
 
     name: ClassVar[str] = "LSM-MS2"
@@ -326,7 +339,30 @@ class LSMMS2InferenceEmbedder(SpectralEmbedder):
         try:
             model = torch.jit.load(ckpt, map_location="cpu")
         except Exception:
-            model = torch.load(ckpt, map_location="cpu")
+            try:
+                # weights_only=True blocks the pickle-based arbitrary-code
+                # path (CVE-class risk) and loads state dicts / weights-only
+                # checkpoints safely.
+                model = torch.load(ckpt, map_location="cpu", weights_only=True)
+            except Exception as exc:
+                if os.environ.get(LSM_UNSAFE_ENV) != "1":
+                    raise EmbeddingBackendUnavailable(
+                        "The LSM-MS2 checkpoint could not be loaded safely "
+                        f"({exc}).  Full-pickle loading is disabled by "
+                        "default because it can execute arbitrary code from "
+                        "the file; set "
+                        f"{LSM_UNSAFE_ENV}=1 only for checkpoints you trust."
+                    ) from exc
+                logger.warning(
+                    "LSM-MS2 checkpoint %s could not be loaded with "
+                    "weights_only=True (%s); %s=1 is set, so falling back to "
+                    "a full pickle load.  This can execute arbitrary code "
+                    "from the file — only use trusted checkpoints.",
+                    ckpt,
+                    exc,
+                    LSM_UNSAFE_ENV,
+                )
+                model = torch.load(ckpt, map_location="cpu")
         if not callable(getattr(model, "encode", None)):
             raise EmbeddingBackendUnavailable(
                 "The LSM-MS2 checkpoint does not expose "
