@@ -31,9 +31,8 @@ import random
 import sqlite3
 import uuid
 import zlib
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Final, Literal
 
 import numpy as np
 from mcp.types import ToolAnnotations
@@ -48,9 +47,9 @@ from msmcp.execution import (
 )
 from msmcp.models import get_embedder
 from msmcp.models.backends import LSM_MS2_CKPT_ENV
+from msmcp.models.scoring import ClassicalScorer, SpectrumScorer, get_scorer
 from msmcp.provenance import ModelInfo, Provenance, SourceRef, provenance_for
 from msmcp.state import store as reference_store
-from msmcp.tools.similarity import _cosine as _vector_cosine
 
 logger = logging.getLogger("msmcp.tools.search")
 
@@ -116,7 +115,10 @@ class StatusInput(BaseModel):
 # than sitting exactly on it.  Each decoy is one extra scorer call against peaks
 # already in memory, so the cost is linear in the library and paid once per
 # search; raise this if you need to report q-values well below 0.05.
-NULL_DECOY_MULTIPLIER = 40
+NULL_DECOY_MULTIPLIER: Final[int] = 40
+
+_NULL_BATCH: Final[int] = 5_000
+"""Decoy scores computed per :meth:`SpectrumScorer.score_many` call."""
 
 _COMPOUNDS: list[tuple[str, str, float]] = [
     ("Caffeine", "C8H10N4O2", 194.0804),
@@ -294,89 +296,31 @@ def _cosine(
     peaks_b: list[tuple[float, float]],
     tolerance: float = 0.02,
 ) -> float:
-    """Cosine similarity between two peak lists with m/z tolerance.
+    """Reference spelling of the classical score, delegated to the scorer.
 
-    Matching is greedy and one-to-one, so the numerator is the dot product of
-    the matched intensities.  The normalisation uses **every** peak in both
-    spectra: unmatched intensity is evidence the match failed to explain and
-    must lower the score.  Normalising over the matched peaks alone would return
-    exactly 1.0 for a spectrum that shares one peak by coincidence.
+    Kept as the stable entry point the audit probes and the scorer-agreement
+    tests call.  There is one implementation of the matching and normalisation —
+    :class:`~msmcp.models.scoring.ClassicalScorer` — and this is a thin alias for
+    it, not a second copy.
     """
-    if not peaks_a or not peaks_b:
-        return 0.0
-
-    b_sorted = sorted(peaks_b, key=lambda p: p[0])
-    b_mz = np.array([p[0] for p in b_sorted], dtype=np.float64)
-    b_int = np.array([p[1] for p in b_sorted], dtype=np.float64)
-
-    a_int_full = np.array([p[1] for p in peaks_a], dtype=np.float64)
-    norm_a = float(np.linalg.norm(a_int_full))
-    norm_b = float(np.linalg.norm(b_int))
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-
-    matched_a: list[float] = []
-    matched_b: list[float] = []
-    used = np.zeros(len(b_sorted), dtype=bool)
-
-    for amz, aint in peaks_a:
-        lo = np.searchsorted(b_mz, amz - tolerance, side="left")
-        hi = np.searchsorted(b_mz, amz + tolerance, side="right")
-        if lo >= hi:
-            continue
-        best_dist = float("inf")
-        best_j = -1
-        for j in range(lo, hi):
-            if used[j]:
-                continue
-            d = abs(b_mz[j] - amz)
-            if d < best_dist:
-                best_dist = d
-                best_j = j
-        if best_j >= 0:
-            used[best_j] = True
-            matched_a.append(aint)
-            matched_b.append(b_int[best_j])
-
-    if not matched_a:
-        return 0.0
-
-    a = np.array(matched_a, dtype=np.float64)
-    b = np.array(matched_b, dtype=np.float64)
-    return float(np.dot(a, b) / (norm_a * norm_b))
+    return ClassicalScorer(tolerance).score(peaks_a, peaks_b)
 
 
 # ======================================================================
 # Scorer routing — classical peak matching vs. foundation-model embeddings
 # ======================================================================
-PeakPairs = list[tuple[float, float]]
-
-
 def _build_scorer(
     scoring_method: str,
-) -> Callable[[PeakPairs, PeakPairs], float]:
-    """Return the pairwise spectrum scorer for *scoring_method*.
+) -> SpectrumScorer:
+    """Return the scorer for *scoring_method*.
 
-    ``classical`` scores matched peak intensities with greedy m/z alignment;
-    the foundation-model methods score whole-spectrum embeddings produced by
-    the corresponding real ``SpectralEmbedder`` adapter.
+    ``classical`` scores matched peak intensities with greedy m/z alignment; the
+    foundation-model methods score whole-spectrum embeddings produced by the
+    corresponding real ``SpectralEmbedder`` adapter.  Both are
+    :class:`~msmcp.models.scoring.SpectrumScorer` implementations, so the scan and
+    its null model are written once against the interface.
     """
-    if scoring_method == "classical":
-        return lambda peaks_a, peaks_b: _cosine(peaks_a, peaks_b, tolerance=0.02)
-
-    embedder = get_embedder(scoring_method)
-
-    def embedding_score(
-        peaks_a: PeakPairs,
-        peaks_b: PeakPairs,
-    ) -> float:
-        if not peaks_a or not peaks_b:
-            return 0.0
-        emb_a = embedder.embed_spectrum(np.asarray(peaks_a, dtype=np.float64))
-        emb_b = embedder.embed_spectrum(np.asarray(peaks_b, dtype=np.float64))
-        return _vector_cosine(emb_a, emb_b)
-
-    return embedding_score
+    return get_scorer(scoring_method)
 
 
 def _scoring_label(scoring_method: str) -> str:
@@ -437,9 +381,7 @@ def _decoy_spectrum(
             break
     else:  # all intensities equal: rotate, which is still a no-op numerically
         return [(peaks[i][0], intensities[i]) for i in order]
-    return [
-        (peaks[i][0], permuted[j]) for j, i in enumerate(order)
-    ]
+    return [(peaks[i][0], permuted[j]) for j, i in enumerate(order)]
 
 
 def _permutable(peaks: list[tuple[float, float]]) -> bool:
@@ -629,7 +571,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
 
         for chunk_id, chunk in _iter_spectra_chunked(conn, chunk_size):
             for spec in chunk:
-                score = scorer(exp_peaks, spec["peaks"])
+                score = scorer.score(exp_peaks, spec["peaks"])
                 target_scores.append(score)
                 if _permutable(spec["peaks"]):
                     peaks_cache[spec["id"]] = list(spec["peaks"])
@@ -658,9 +600,17 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 NULL_DECOY_MULTIPLIER,
                 len(pool),
             )
-            for _ in range(n_null):
-                decoy_peaks = peaks_cache[pool[rng.randrange(len(pool))]]
-                null_scores.append(scorer(exp_peaks, _decoy_spectrum(decoy_peaks, rng)))
+            # Scored in batches: score_many is the interface's amortised path and
+            # keeps the query side prepared across a whole batch of decoys.
+            remaining = n_null
+            while remaining > 0:
+                batch = min(remaining, _NULL_BATCH)
+                decoys = [
+                    _decoy_spectrum(peaks_cache[pool[rng.randrange(len(pool))]], rng)
+                    for _ in range(batch)
+                ]
+                null_scores.extend(scorer.score_many(exp_peaks, decoys))
+                remaining -= batch
         unpermutable = n_spectra - len(pool)
         if unpermutable:
             logger.debug(
@@ -682,9 +632,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             q_values = _benjamini_hochberg(p_values)
             # The smallest q this design can express: p is floored at
             # 1/(n_null + 1) and the strongest hit is charged a factor of m.
-            q_floor = (
-                n_spectra / (n_null_actual + 1) if n_null_actual else 1.0
-            )
+            q_floor = n_spectra / (n_null_actual + 1) if n_null_actual else 1.0
             null_line = (
                 f"Null model: {n_null_actual:,} decoy scores from permuted-intensity "
                 f"library spectra; smallest attainable q-value **{q_floor:.2e}**."

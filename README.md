@@ -466,14 +466,16 @@ msmcp/
 
 ## Known limitations & roadmap
 
-- **Search is half real, and says which half**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. The **library** is still synthetic — MSMCP has no spectral-library reader, because MassFlow exposes none and inventing a library format would be worse than admitting the gap. `database_file` is not opened; a deterministic in-memory library is generated from that string, and the report carries a banner saying so ahead of any hit table. Closing this is the first v1.1 item.
+**Forward focus: local MS database connectivity.** The next milestone is reading spectral libraries the user already has — MGF and MSP files, then a local SQLite peak store — behind a `LibraryProvider` interface, so `search_library` searches real data. MSMCP remains local, offline and self-contained: it ships no library data, downloads none, and never talks to a hosted service. See [ARCHITECTURE.md](ARCHITECTURE.md) → *Direction*.
+
+- **Search is half real, and says which half**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. The **library** is still synthetic — MSMCP has no spectral-library reader yet, and the report carries a banner saying so ahead of any hit table. Closing this is the first v1.1 item and the focus above.
 - **In-process job state**: jobs live in server memory and do not survive a restart; the poller reports a lost job as failed rather than pending. A durable executor is a drop-in `JobExecutor` implementation.
 - **MCP Tasks are not dispatchable by the installed SDK**: `mcp` 2.1.1 ships the Tasks types but omits `tasks/get`, `tasks/result` and `tasks/cancel` from its request unions, so no server can answer them. MSMCP keeps its snapshots in the MCP `Task` shape and exposes the semantics through `check_search_status` instead of inventing a protocol.
 - **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself, because MassFlow 0.1.x is imaging-only. `.imzML` goes through MassFlow. Vendor formats are refused with conversion guidance.
 - **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 awaits a public weights release; its adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
 - **Whole-slide images**: MassFlow materialises one placeholder per pixel when loading an imzML acquisition, so very large images are bounded by MassFlow's own behaviour.
 - **MS-Numpress-compressed mzML arrays** need the optional `pynumpress` package and report a missing-dependency error without it.
-- **Hardware control is out of scope for v1.0.** There is no instrument-control code in this repository; if it is added later it must sit behind an independent, deterministic safety/interlock layer, so the MCP application layer is never the only barrier between a model and physical hardware.
+- **Hardware control is out of scope for this repository, not just for v1.0.** Direct instrument control, actuation and the safety interlock layer that must precede them belong to a **different project**. MSMCP is a data and computation interface; the MCP application layer must never be the only barrier between a model and physical hardware. There is no instrument-control code here and none will be added.
 
 See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full limitations list and the v1.0 acceptance criteria.
 
@@ -487,7 +489,7 @@ MSMCP is a **local, single-user server**: the MCP host spawns it as a child proc
 - **Execution** — concurrent jobs are capped by the executor (default 4). A cancelled job's partial output is discarded rather than returned.
 - **Checkpoint loading** — the LSM-MS2 adapter deserialises a checkpoint file (`torch.jit.load`, falling back to `torch.load` with `weights_only=True`); checkpoint files can execute arbitrary code, so only point `MSMCP_LSM_MS2_CKPT` at files you trust. A checkpoint that needs full-pickle loading is **rejected unless `MSMCP_LSM_MS2_ALLOW_UNSAFE=1` explicitly opts in** — that fallback (`torch.load` without `weights_only`) can execute arbitrary code from the file. The DreaMS adapter downloads pre-trained weights from the upstream repository on first use — pin the `dreams` install to a commit you trust.
 - **Dependency side effects** — importing MassFlow's data manager reconfigures the Python root logger to write to stdout and creates a `logs/` directory in the working directory. MSMCP neutralises the first (it would corrupt the stdio framing) and documents the second. See [Supported input formats](#supported-input-formats).
-- **No secrets** — the server stores no credentials, requires no API keys, and makes no network calls of its own.
+- **No secrets** — the server stores no credentials, requires no API keys, and makes no network calls of its own. This is a design constraint, not a current limitation: MSMCP is intended for onsite, offline use, so remote database adapters are explicitly out of scope (see [ARCHITECTURE.md](ARCHITECTURE.md) → *Out of scope*).
 
 ## Configuration reference
 

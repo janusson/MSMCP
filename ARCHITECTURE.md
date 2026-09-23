@@ -6,10 +6,11 @@ v1.0, in an optional capability, or outside the project for now.
 
 ## The product in one sentence
 
-MSMCP is a **reliable MCP interface to mass-spectrometry data and scientific
-computation**: an agent can ingest real MS data, inspect it, compute over it,
-pass large datasets between operations without pushing them through the
-conversation, and get results it can trace back to their inputs.
+MSMCP is a **reliable MCP interface to mass-spectrometry data, spectral
+libraries and scientific computation**: an agent can ingest real MS data,
+search it against a local spectral library, compute over it, pass large
+datasets between operations without pushing them through the conversation, and
+get results it can trace back to their inputs.
 
 ## Layer diagram
 
@@ -50,6 +51,50 @@ lines. Only `ingest.py` knows which library parses which format.
 
 ## Scope
 
+### Deployment posture
+
+MSMCP runs **onsite, offline and self-contained**. It is a single local process
+speaking stdio, launched by the MCP host with the user's own credentials. It
+makes no network calls, needs no credentials or API keys, and depends on no
+hosted service, daemon or database; its test suite is hermetic for the same
+reason. This is a design constraint rather than a description of the current
+milestone — see *Security and limits*.
+
+### Direction: local MS database connectivity
+
+The forward focus of this repository is **connectivity to mass-spectrometry
+databases held on disk**: read a spectral library the user already has, in a
+format they already have it in, and let an agent search it. That is what
+`search_library` exists to do, and closing that gap is the primary v1.1
+deliverable (see *Known limitations*).
+
+The shape is a provider interface, mirroring `SpectralEmbedder` and
+`JobExecutor` — the third use of the same pattern:
+
+```python
+class LibraryProvider(ABC):
+    def describe(self) -> LibraryInfo    # name, format, version, n_spectra, digest
+    def iter_spectra(self, chunk_size) -> Iterator[LibrarySpectrum]
+
+
+def get_library_provider(path) -> LibraryProvider  # registry, like get_embedder
+```
+
+Planned implementations, in order: **MGF** (reusing `mgf.py`), **MSP** (the
+NIST text interchange format most libraries ship as), then a local **SQLite**
+peak store. Each is selected from `search_library`'s `database_file` argument,
+and `provenance.SourceRef` records which library, format and version answered a
+query — the reproducibility requirement that a hit table be traceable.
+
+Constraints that follow from the offline posture:
+
+* Library files go through the **same** security boundary as acquisitions —
+  allowed root, size limit, and no write access.
+* MSMCP ships **no library data** and downloads none. Commercial libraries
+  (NIST, METLIN, mzCloud) are licensed per seat; the user supplies the file.
+* No credentials, no rate limits and no cache layer, because there is no remote
+  service to talk to.
+
 ### Core v1.0
 
 | Capability | Where | Notes |
@@ -74,19 +119,23 @@ lines. Only `ingest.py` knows which library parses which format.
 
 Neither is required for the core server to start, serve, or be tested.
 
+### Out of scope for this repository
+
+* **Direct instrument control, hardware actuation, and the safety interlock
+  layer that must precede them.** These belong to a **different project**, not
+  to this one. MSMCP is a data and computation interface; the MCP application
+  layer must never be the only barrier between a model and physical hardware.
+  There is no safety package here and none will be added.
+* **Remote or hosted database adapters.** APIs such as MassBank, GNPS, METLIN
+  or mzCloud would require network access, credentials and rate limiting, and
+  would break the offline posture above. Database connectivity in this
+  repository means **local files**.
+
 ### Future extension (not v1.0)
 
-* **Direct instrument control and hardware actuation.** There is no safety
-  package in this repository today, and v1.0 adds none. If instrument control
-  is added later it must sit behind an **independent, deterministic
-  safety/interlock layer**; the MCP application layer must never be the only
-  barrier between a model and physical hardware. No LLM-driven acquisition
-  logic belongs in this project until that layer exists.
 * **Durable / distributed execution.** `JobExecutor` is the seam. Prefect,
   a process pool or a job queue can be added as another implementation.
   Nothing in v1.0 may depend on one.
-* **Spectral library readers.** The single largest remaining gap; see
-  "Known limitations".
 
 ## Data references
 
@@ -255,7 +304,8 @@ during the v1.0 work:
 1. **No spectral-library reader.** `search_library` scans a synthetic
    in-memory library seeded from the database path string. The query spectrum
    is real data; the library is not, and the report says so. This is the
-   largest gap and the first thing v1.1 should close.
+   largest gap, it is the repository's stated forward focus, and it is the
+   first v1.1 deliverable — see *Direction: local MS database connectivity*.
 2. **Job state is in-process.** It does not survive a restart; the poller
    reports a lost job as failed rather than pending, so a client can never spin
    forever.
@@ -284,4 +334,5 @@ The release is complete when the repository demonstrates all of the following:
 - [x] End-to-end integration coverage, including failure and cancellation paths
 - [x] Documented supported formats and capabilities
 
-DreaMS, LSM-MS2 and instrument control are **not** release blockers.
+DreaMS and LSM-MS2 are **not** release blockers. Instrument control is out of
+scope for this repository entirely — see *Out of scope for this repository*.

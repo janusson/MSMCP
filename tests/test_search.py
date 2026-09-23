@@ -169,9 +169,24 @@ class TestScorerRouting:
 
     def test_classical_scorer_matches_peak_cosine(self) -> None:
         scorer = _build_scorer("classical")
-        assert scorer(self.PEPTIDE, self.RELATED) == pytest.approx(
+        assert scorer.score(self.PEPTIDE, self.RELATED) == pytest.approx(
             _cosine(self.PEPTIDE, self.RELATED)
         )
+
+    def test_classical_score_many_agrees_with_score(self) -> None:
+        """The batch path the null model uses must match the single-pair path."""
+        scorer = _build_scorer("classical")
+        references = [self.RELATED, self.PEPTIDE, [], [(500.0, 1.0)]]
+        batched = scorer.score_many(self.PEPTIDE, references)
+        assert batched == pytest.approx(
+            [scorer.score(self.PEPTIDE, reference) for reference in references]
+        )
+
+    def test_classical_scorer_rejects_a_non_positive_tolerance(self) -> None:
+        from msmcp.models.scoring import ClassicalScorer
+
+        with pytest.raises(ValueError, match="tolerance must be positive"):
+            ClassicalScorer(0.0)
 
     @pytest.mark.parametrize(
         ("method", "embedder_cls"),
@@ -186,12 +201,22 @@ class TestScorerRouting:
             embedder.embed_spectrum(np.asarray(self.PEPTIDE, dtype=np.float64)),
             embedder.embed_spectrum(np.asarray(self.RELATED, dtype=np.float64)),
         )
-        assert scorer(self.PEPTIDE, self.RELATED) == pytest.approx(expected)
+        assert scorer.score(self.PEPTIDE, self.RELATED) == pytest.approx(expected)
+
+    def test_embedding_score_many_agrees_with_score(self) -> None:
+        """The batch path embeds the query once; the scores must not change."""
+        scorer = _build_scorer("dreams")
+        references = [self.RELATED, self.PEPTIDE, [], [(500.0, 1.0)]]
+        batched = scorer.score_many(self.PEPTIDE, references)
+        assert batched == pytest.approx(
+            [scorer.score(self.PEPTIDE, reference) for reference in references]
+        )
 
     def test_embedding_scorer_handles_empty_peaks(self) -> None:
         scorer = _build_scorer("dreams")
-        assert scorer([], self.PEPTIDE) == 0.0
-        assert scorer(self.PEPTIDE, []) == 0.0
+        assert scorer.score([], self.PEPTIDE) == 0.0
+        assert scorer.score(self.PEPTIDE, []) == 0.0
+        assert scorer.score_many([], [self.PEPTIDE]) == [0.0]
 
     def test_unknown_method_raises(self) -> None:
         with pytest.raises(ValueError, match="dreams, lsm-ms2"):

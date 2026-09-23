@@ -322,7 +322,9 @@ class TestCosinePenalisesUnmatchedIntensity:
         reference = [[100.0, 50.0], [200.0, 100.0], [300.0, 25.0]]
 
         def score(query: list[list[float]]) -> float:
-            out = sim_tools["compute_cosine"](query_peaks=query, reference_peaks=reference)
+            out = sim_tools["compute_cosine"](
+                query_peaks=query, reference_peaks=reference
+            )
             return float(out.split("Cosine Similarity: **")[1].split("**")[0])
 
         identical = score(reference)
