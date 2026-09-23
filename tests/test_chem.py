@@ -166,12 +166,26 @@ class TestIsotopePattern:
         assert pattern[0][0] == pytest.approx(expected_mono, abs=1e-6)
         assert pattern[0][1] == 1.0  # normalised to M
 
-    def test_isotopologue_spacing_is_one_neutron(self) -> None:
+    def test_isotopologue_shifts_are_substitution_differences(self) -> None:
+        """M+1 is shifted by ¹³C - ¹²C, not by the neutron mass.
+
+        A +1 isotopologue substitutes one isotope into the molecule, so the mass
+        shift is the isotope's mass minus the *monoisotopic* mass of that
+        element (¹³C - ¹²C = +1.003355 Da).  The neutron mass (1.008665 Da) is
+        the difference between the isotope and its constituent particles, not
+        between two neutral atoms; using it put M+1 about 5.3 mDa (~18 ppm at
+        m/z 300) too high, i.e. outside the ppm tolerance this project works to.
+        """
         pattern = _isotope_pattern(_parse_formula("C6H12O6"))
-        assert pattern[1][0] == pytest.approx(pattern[0][0] + NEUTRON_MASS, abs=1e-9)
-        assert pattern[2][0] == pytest.approx(
-            pattern[0][0] + 2 * NEUTRON_MASS, abs=1e-9
-        )
+        mono = pattern[0][0]
+        # The unresolved M+1 peak is the intensity-weighted mean of its fine
+        # structure: ¹³C (94%), ¹⁷O (3%), ²H (2%) → +1.0034424 Da.
+        shift = pattern[1][0] - mono
+        assert shift == pytest.approx(1.0034424, abs=1e-6)
+        # It must sit between the pure ¹³C (1.0033548) and ²H (1.0062767) shifts.
+        assert 1.0033548 < shift < 1.0062767
+        # The old neutron-based value must stay excluded.
+        assert abs(pattern[1][0] - (mono + NEUTRON_MASS)) > 5.0e-3
 
     def test_carbon_m1_abundance(self) -> None:
         pattern = _isotope_pattern(_parse_formula("C"))
@@ -216,8 +230,8 @@ class TestAnnotateIsotopes:
         assert "## Isotope Pattern: C6H12O6" in out
         assert "Monoisotopic mass: **180.0634 Da**" in out
         assert "| M           |             180.0634 |             1.0000 |" in out
-        assert "| M+1         |             181.0721 |             0.0686 |" in out
-        assert "| M+2         |             182.0807 |             0.0147 |" in out
+        assert "| M+1         |             181.0668 |             0.0686 |" in out
+        assert "| M+2         |             182.0681 |             0.0147 |" in out
 
     def test_smiles_identifier_resolves_to_formula(
         self, chem_tools: dict[str, Callable[..., str]]

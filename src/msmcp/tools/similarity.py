@@ -150,6 +150,37 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(dot / (norm_a * norm_b))
 
 
+def _cosine_over_all_peaks(
+    matched_q: np.ndarray,
+    matched_r: np.ndarray,
+    full_q: np.ndarray,
+    full_r: np.ndarray,
+) -> float:
+    """Cosine of the matched pairs, normalised over *all* peaks in both spectra.
+
+    Greedy one-to-one matching decides which peaks correspond, so the numerator
+    stays the dot product of the matched intensities.  The denominator, however,
+    is built from the full intensity vector of each spectrum.
+
+    Normalising over the matched peaks alone (the previous behaviour) makes the
+    score scale-free in the wrong way: a spectrum whose single peak happens to
+    land within the m/z tolerance returns exactly 1.0 and is indistinguishable
+    from an identical spectrum.  Unmatched intensity is information — it is the
+    part of the spectrum the match failed to explain — and it has to lower the
+    score.
+
+    Consequence for interpretation: **1.0 means the matched peaks carry all of
+    the intensity in both spectra**, not that the two spectra are identical.
+    """
+    if matched_q.size == 0 or full_q.size == 0 or full_r.size == 0:
+        return 0.0
+    norm_q = float(np.linalg.norm(full_q[:, 1]))
+    norm_r = float(np.linalg.norm(full_r[:, 1]))
+    if norm_q == 0.0 or norm_r == 0.0:
+        return 0.0
+    return float(np.dot(matched_q, matched_r) / (norm_q * norm_r))
+
+
 # ======================================================================
 # Core: deep-embedding scoring (foundation-model adapters)
 # ======================================================================
@@ -351,10 +382,14 @@ def register_tools(mcp: Any) -> None:
         list needs at least one peak, intensities must be non-negative, and
         intensities should be on a consistent scale within each spectrum.
 
-        Returns a cosine score between 0 and 1 (1.0 means identical), the
-        number of matched peaks and the percentage of query peaks matched, and
-        a list of the most intense unmatched query peaks, which point at
-        structural differences to investigate.
+        Returns a cosine score between 0 and 1, the number of matched peaks and
+        the percentage of query peaks matched, and a list of the most intense
+        unmatched query peaks, which point at structural differences to
+        investigate.  The score is the dot product of the matched peak
+        intensities normalised over **all** peaks in each spectrum, so 1.0 means
+        the matched peaks account for all of the intensity in both spectra —
+        not that the two spectra are identical; a spectrum that shares a single
+        peak with the query scores near zero, not 1.0.
 
         With scoring_method='classical' (the default) query peaks are matched
         to the closest unused reference peak within ms2_tolerance Da (greedy,
@@ -394,7 +429,7 @@ def register_tools(mcp: Any) -> None:
         )
 
         # --- cosine ---------------------------------------------------------
-        score = _cosine(q_matched, r_matched)
+        score = _cosine_over_all_peaks(q_matched, r_matched, q_arr, r_arr)
 
         n_matched = len(q_matched)
         pct_matched = (n_matched / n_query * 100) if n_query > 0 else 0.0

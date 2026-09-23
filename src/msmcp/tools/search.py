@@ -105,6 +105,19 @@ class StatusInput(BaseModel):
 # ======================================================================
 # Deterministic synthetic spectral library (documented as synthetic)
 # ======================================================================
+# Number of decoy scores drawn per library spectrum for the null model.
+#
+# The empirical p-value cannot resolve anything below 1/(n_null + 1), and
+# Benjamini-Hochberg charges the top-ranked hit a factor of m (the number of
+# library spectra tested), so with one decoy per spectrum the smallest
+# attainable q-value is m/(m + 1) — a library search could then never report a
+# hit, however good the match.  40 decoys per spectrum put the smallest
+# attainable q at ≈ 0.025, i.e. clear headroom under the 0.05 threshold rather
+# than sitting exactly on it.  Each decoy is one extra scorer call against peaks
+# already in memory, so the cost is linear in the library and paid once per
+# search; raise this if you need to report q-values well below 0.05.
+NULL_DECOY_MULTIPLIER = 40
+
 _COMPOUNDS: list[tuple[str, str, float]] = [
     ("Caffeine", "C8H10N4O2", 194.0804),
     ("Theobromine", "C7H8N4O2", 180.0647),
@@ -281,13 +294,26 @@ def _cosine(
     peaks_b: list[tuple[float, float]],
     tolerance: float = 0.02,
 ) -> float:
-    """Cosine similarity between two peak lists with m/z tolerance."""
+    """Cosine similarity between two peak lists with m/z tolerance.
+
+    Matching is greedy and one-to-one, so the numerator is the dot product of
+    the matched intensities.  The normalisation uses **every** peak in both
+    spectra: unmatched intensity is evidence the match failed to explain and
+    must lower the score.  Normalising over the matched peaks alone would return
+    exactly 1.0 for a spectrum that shares one peak by coincidence.
+    """
     if not peaks_a or not peaks_b:
         return 0.0
 
     b_sorted = sorted(peaks_b, key=lambda p: p[0])
     b_mz = np.array([p[0] for p in b_sorted], dtype=np.float64)
     b_int = np.array([p[1] for p in b_sorted], dtype=np.float64)
+
+    a_int_full = np.array([p[1] for p in peaks_a], dtype=np.float64)
+    norm_a = float(np.linalg.norm(a_int_full))
+    norm_b = float(np.linalg.norm(b_int))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
 
     matched_a: list[float] = []
     matched_b: list[float] = []
@@ -317,12 +343,7 @@ def _cosine(
 
     a = np.array(matched_a, dtype=np.float64)
     b = np.array(matched_b, dtype=np.float64)
-    dot = np.dot(a, b)
-    na = np.linalg.norm(a)
-    nb = np.linalg.norm(b)
-    if na == 0.0 or nb == 0.0:
-        return 0.0
-    return float(dot / (na * nb))
+    return float(np.dot(a, b) / (norm_a * norm_b))
 
 
 # ======================================================================
@@ -382,6 +403,50 @@ def _model_info(scoring_method: str) -> ModelInfo | None:
     )
 
 
+def _decoy_spectrum(
+    peaks: list[tuple[float, float]],
+    rng: random.Random,
+) -> list[tuple[float, float]]:
+    """Return a decoy of *peaks* for the null score distribution.
+
+    The decoy keeps the acquired m/z values and the intensity *distribution* but
+    permutes the intensities across the m/z positions, so the fragment masses no
+    longer explain the intensities.  That is the property the score is supposed
+    to measure, and it is what makes the null a representable "this spectrum is
+    not the right one" case.
+
+    The previous implementation shuffled the ``(mz, intensity)`` pair list, which
+    is a no-op for every scorer in this module: the classical scorer sorts the
+    reference by m/z before matching, the mock embedders hash peaks
+    order-independently by design, and the real DreaMS preprocessor sorts by m/z.
+    The "decoy" scores were therefore bit-identical to the target scores and the
+    FDR/p-value column was calibrated against a copy of the target distribution.
+
+    A spectrum with fewer than two peaks, or with all-equal intensities, carries
+    no intensity pattern to permute; callers should skip such spectra rather than
+    count a decoy that equals its target.
+    """
+    if len(peaks) < 2:
+        raise ValueError("a decoy needs at least two peaks")
+    intensities = [p[1] for p in peaks]
+    order = sorted(range(len(peaks)), key=lambda i: peaks[i][0])
+    permuted = list(intensities)
+    for _ in range(4):
+        rng.shuffle(permuted)
+        if permuted != intensities:
+            break
+    else:  # all intensities equal: rotate, which is still a no-op numerically
+        return [(peaks[i][0], intensities[i]) for i in order]
+    return [
+        (peaks[i][0], permuted[j]) for j, i in enumerate(order)
+    ]
+
+
+def _permutable(peaks: list[tuple[float, float]]) -> bool:
+    """True when *peaks* has an intensity pattern a decoy can actually break."""
+    return len(peaks) >= 2 and len({p[1] for p in peaks}) >= 2
+
+
 # ======================================================================
 # FDR / p-value calculations
 # ======================================================================
@@ -407,14 +472,20 @@ def _estimate_empirical_p(
     """Estimate empirical p-values from a null score distribution.
 
     p = (1 + #null_scores >= target_score) / (1 + #null_scores)
+
+    The comparison is inclusive.  Counting only *strictly greater* null scores
+    (``side="right"``) makes every tied score look significant, and ties are not
+    an edge case: a real library's null distribution is dominated by scores of
+    exactly zero, so the strict comparison handed a passing p-value to spectra
+    with no shared fragments at all.
     """
     null_arr = np.sort(np.asarray(null_scores, dtype=np.float64))
     n_null = len(null_arr)
     p_vals: list[float] = []
     for s in target_scores:
-        exceed = np.searchsorted(null_arr, s, side="right")
-        count_above = n_null - exceed
-        p = (1.0 + count_above) / (1.0 + n_null)
+        below = np.searchsorted(null_arr, s, side="left")
+        count_ge = n_null - below
+        p = (1.0 + count_ge) / (1.0 + n_null)
         p_vals.append(p)
     return p_vals
 
@@ -482,6 +553,17 @@ class SearchOutcome:
     provenance: Any
 
 
+def _library_spec(database_file: str) -> tuple[int, int]:
+    """Deterministic ``(n_spectra, seed)`` for the synthetic library of a path.
+
+    Kept as its own function so tests can rebuild the exact library a scan uses
+    (e.g. to take a real library spectrum as a known true-positive query)
+    without duplicating the seeding order.
+    """
+    rng = random.Random(_stable_seed(database_file))
+    return rng.randint(500, 5000), rng.randint(0, 2**31)
+
+
 def _run_scan(request: SearchRequest) -> SearchOutcome:
     """Run the full library search and return the report with its provenance.
 
@@ -500,11 +582,13 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     chunk_size = request.chunk_size
 
     scorer = _build_scorer(scoring_method)
-    rng = random.Random(_stable_seed(database_file))
-    n_spectra = rng.randint(500, 5000)
+    n_spectra, library_seed = _library_spec(database_file)
+    # The null draw is deterministic too, so a report is reproducible: same
+    # library path in, same p-values out.
+    rng = random.Random(_stable_seed(database_file) + 1)
     conn = _build_mock_database(
         n_spectra=n_spectra,
-        seed=rng.randint(0, 2**31),
+        seed=library_seed,
     )
     try:
         exp_peaks = list(request.experimental_peaks)
@@ -532,6 +616,9 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
 
         target_scores: list[float] = []
         target_meta: list[dict[str, Any]] = []
+        # Peaks of permutable library spectra, kept for the null model below so
+        # the decoy draws cost no further SQL.
+        peaks_cache: dict[Any, list[tuple[float, float]]] = {}
 
         logger.info(
             "Scanning %d spectra in chunks of %d (%s mode)",
@@ -544,6 +631,8 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             for spec in chunk:
                 score = scorer(exp_peaks, spec["peaks"])
                 target_scores.append(score)
+                if _permutable(spec["peaks"]):
+                    peaks_cache[spec["id"]] = list(spec["peaks"])
                 target_meta.append(
                     {
                         "id": spec["id"],
@@ -555,23 +644,51 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 )
             logger.debug("Chunk %d: processed %d spectra", chunk_id, len(chunk))
 
-        n_null = n_spectra
+        n_null = n_spectra * NULL_DECOY_MULTIPLIER
         null_scores: list[float] = []
-        for _ in range(n_null):
-            spec_idx = rng.randrange(len(target_meta))
-            orig_peaks = conn.execute(
-                "SELECT mz, intensity FROM peaks WHERE spectrum_id=?",
-                (target_meta[spec_idx]["id"],),
-            ).fetchall()
-            shuffled = [(p[0], p[1]) for p in orig_peaks]
-            rng.shuffle(shuffled)
-            null_scores.append(scorer(exp_peaks, shuffled))
+        unpermutable = 0
+        # Draw from the spectra already scored above — no extra SQL, and the
+        # same library the target scores came from.
+        pool = [meta["id"] for meta in target_meta if peaks_cache.get(meta["id"])]
+        if pool:
+            logger.info(
+                "Null model: %d decoy scores (%dx the library) from %d permutable "
+                "spectra",
+                n_null,
+                NULL_DECOY_MULTIPLIER,
+                len(pool),
+            )
+            for _ in range(n_null):
+                decoy_peaks = peaks_cache[pool[rng.randrange(len(pool))]]
+                null_scores.append(scorer(exp_peaks, _decoy_spectrum(decoy_peaks, rng)))
+        unpermutable = n_spectra - len(pool)
+        if unpermutable:
+            logger.debug(
+                "Null model: %d spectra have no permutable intensity pattern",
+                unpermutable,
+            )
+        if not null_scores:
+            logger.warning(
+                "Null model: no permutable spectra in a library of %d — "
+                "p-values cannot be calibrated and no hit can pass",
+                n_spectra,
+            )
 
+        n_null_actual = len(null_scores)
         report_threshold = 0.05
 
         if use_fdr:
             p_values = _estimate_empirical_p(target_scores, null_scores)
             q_values = _benjamini_hochberg(p_values)
+            # The smallest q this design can express: p is floored at
+            # 1/(n_null + 1) and the strongest hit is charged a factor of m.
+            q_floor = (
+                n_spectra / (n_null_actual + 1) if n_null_actual else 1.0
+            )
+            null_line = (
+                f"Null model: {n_null_actual:,} decoy scores from permuted-intensity "
+                f"library spectra; smallest attainable q-value **{q_floor:.2e}**."
+            )
             hits = [
                 {**meta, "q_value": qv}
                 for meta, qv in zip(target_meta, q_values, strict=True)
@@ -588,6 +705,12 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             ]
             hits.sort(key=lambda h: h["score"], reverse=True)
             method_line = f"Empirical p-value threshold: {report_threshold}"
+            p_floor = 1.0 / (n_null_actual + 1) if n_null_actual else 1.0
+            null_line = (
+                f"Null model: {n_null_actual:,} decoy scores from permuted-intensity "
+                f"library spectra; smallest attainable p-value **{p_floor:.2e}** "
+                f"(no multiplicity correction is applied in this mode)."
+            )
 
         top_n = min(len(hits), 20)
         lines = _report_banner(request, database_file, n_spectra)
@@ -609,6 +732,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             lines.append(small_lib_warning)
 
         lines.append(method_line)
+        lines.append(null_line)
         lines.append("")
 
         if not hits:
@@ -618,7 +742,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 "re-acquiring the spectrum with higher signal-to-noise."
             )
         else:
-            lines.append(f"Top {top_n} hit(s):")
+            lines.append(f"Showing the top {top_n} of {len(hits)} hit(s):")
             lines.append("")
             if use_fdr:
                 lines.append(

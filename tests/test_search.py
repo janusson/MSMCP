@@ -13,6 +13,7 @@ tools a genuine mzML fixture rather than a path string.
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -31,6 +32,9 @@ from msmcp.tools.search import (
     _build_mock_database,
     _build_scorer,
     _cosine,
+    _decoy_spectrum,
+    _estimate_empirical_p,
+    _permutable,
     _run_scan,
     _scoring_label,
 )
@@ -94,6 +98,58 @@ class TestSearchComponents:
         """An empty query is a programming error, not a zero-score search."""
         with pytest.raises(search.MsmcpError, match="no peaks"):
             _scan(peaks=[])
+
+
+# ---------------------------------------------------------------------------
+# Null model — what the p-values are actually calibrated against
+# ---------------------------------------------------------------------------
+class TestNullModelIntegrity:
+    """The null distribution has to be *different* from the target one.
+
+    If a decoy scores exactly what its target scores, the p-value column is
+    computed against a copy of the target distribution and means nothing.  That
+    is what happened when decoys were built by shuffling the (m/z, intensity)
+    pair list: a no-op for a scorer that sorts or hashes peaks.
+    """
+
+    PEAKS: ClassVar[list[tuple[float, float]]] = [
+        (100.0, 10.0),
+        (150.0, 40.0),
+        (200.0, 5.0),
+        (250.0, 90.0),
+        (300.0, 25.0),
+    ]
+
+    def test_decoy_keeps_fragments_but_not_the_pairing(self) -> None:
+        rng = random.Random(11)
+        decoy = _decoy_spectrum(self.PEAKS, rng)
+        assert [mz for mz, _ in decoy] == [mz for mz, _ in self.PEAKS]
+        assert sorted(i for _, i in decoy) == sorted(i for _, i in self.PEAKS)
+        assert decoy != self.PEAKS
+
+    def test_decoy_is_never_the_target(self) -> None:
+        rng = random.Random(3)
+        for _ in range(100):
+            assert _decoy_spectrum(self.PEAKS, rng) != self.PEAKS
+
+    def test_decoy_of_a_single_peak_spectrum_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="at least two peaks"):
+            _decoy_spectrum([(100.0, 5.0)], random.Random(0))
+
+    def test_permutability_gate(self) -> None:
+        assert _permutable(self.PEAKS)
+        # uniform intensities carry no pattern for a decoy to break
+        assert not _permutable([(100.0, 5.0), (200.0, 5.0)])
+        assert not _permutable([(100.0, 5.0)])
+
+    def test_empirical_p_value_counts_ties_as_null_matches(self) -> None:
+        """Ties must be counted: real null distributions are mostly exact zeros."""
+        # 5 nulls, all >= 0.0 → p = (1 + 5) / (1 + 5) = 1.0
+        assert _estimate_empirical_p([0.0], [0.0, 0.0, 0.0, 0.0, 0.9]) == [1.0]
+        # nothing at or above 1.0 → p = (1 + 0) / (1 + 5)
+        assert _estimate_empirical_p([1.0], [0.0, 0.0, 0.0, 0.0, 0.9]) == pytest.approx(
+            [1.0 / 6.0]
+        )
 
 
 # ---------------------------------------------------------------------------

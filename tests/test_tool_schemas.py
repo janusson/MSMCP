@@ -217,19 +217,46 @@ async def test_search_library_declares_its_library_is_synthetic() -> None:
 
 def test_search_report_carries_the_provenance_banner() -> None:
     """A synthetic-library hit table must say so, in the report itself."""
-    from msmcp.tools.search import SearchRequest, _run_scan
+    from msmcp.tools.search import (
+        SearchRequest,
+        _build_mock_database,
+        _library_spec,
+        _run_scan,
+    )
+
+    # A real library spectrum as the query: a known true positive, so the
+    # report contains an actual hit table to order the banner against.
+    library = "libraries/metabolomics.db"
+    n_spectra, seed = _library_spec(library)
+    conn = _build_mock_database(n_spectra=n_spectra, seed=seed)
+    try:
+        spectrum_id = conn.execute(
+            "SELECT spectrum_id FROM peaks GROUP BY spectrum_id "
+            "HAVING COUNT(*) >= 8 ORDER BY spectrum_id LIMIT 1"
+        ).fetchone()[0]
+        query = tuple(
+            conn.execute(
+                "SELECT mz, intensity FROM peaks WHERE spectrum_id=? ORDER BY mz",
+                (spectrum_id,),
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+    assert len(query) >= 8
 
     report = _run_scan(
         SearchRequest(
-            database_file="libraries/metabolomics.db",
-            experimental_peaks=((120.08, 100.0), (136.08, 60.0)),
+            database_file=library,
+            experimental_peaks=query,
             experimental_file="experimental/run42.mzML",
         )
     ).report
     assert "SYNTHETIC LIBRARY" in report
     assert "NOT A COMPOUND IDENTIFICATION" in report
-    # The banner must precede the hit table, so it survives truncation by a
-    # host that only forwards the head of a tool result.
+    # A spectrum that is *in* the library must be found, and the banner must
+    # precede the hit table, so it survives truncation by a host that only
+    # forwards the head of a tool result.
+    assert "No hits passed the significance threshold" not in report
     assert report.index("SYNTHETIC LIBRARY") < report.index("| Rank | Compound")
     # The library path is echoed for traceability but must not be presented as
     # having been read, while the query genuinely was.

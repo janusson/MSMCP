@@ -213,22 +213,38 @@ def _isotope_pattern(
     for el, count in composition.items():
         mono_mass += _ISOTOPES[el][0][0] * count
 
-    # --- M+1 / M+2 probabilities -------------------------------------------
+    # --- M+1 / M+2 probabilities and masses -------------------------------
     # Δn = 1 isotopes (¹³C, ¹⁵N, ¹⁷O, ³³S, …) contribute to M+1;
     # Δn = 2 isotopes (¹⁸O, ³⁴S, ³⁷Cl, ⁸¹Br, …) contribute to M+2.
     # Elements without a given Δn isotope contribute nothing — e.g. Cl
     # and Br have no Δn = 1 isotope, so their M+1 abundance is zero.
+    #
+    # Mass shift: a substitution shifts the mass by the difference between the
+    # isotope and the monoisotopic mass of that *element* (¹³C - ¹²C =
+    # +1.003355 Da), not by the neutron mass (1.008665 Da).  Using the neutron
+    # mass put M+1 about 5.3 mDa (~18 ppm at m/z 300) too high, i.e. outside the
+    # tolerance the rest of this project works to.  The unresolved peak is the
+    # intensity-weighted mean of its fine-structure components, which is what a
+    # unit-resolution instrument actually reports.
     p1 = 0.0
     p2_b = 0.0
+    shift1_weighted = 0.0  # Σ p_i · Δm_i over Δn = 1 substitutions
+    shift2_weighted = 0.0  # Σ p_i · Δm_i over Δn = 2 substitutions
     for el, count in composition.items():
+        mono_el_mass = _ISOTOPES[el][0][0]
         mono_abund = _ISOTOPES[el][0][1]
-        for _mass, abund, delta in _ISOTOPES[el][1:]:
+        for iso_mass, abund, delta in _ISOTOPES[el][1:]:
+            p = count * (abund / mono_abund)
+            dm = iso_mass - mono_el_mass
             if delta == 1:
-                p1 += count * (abund / mono_abund)
+                p1 += p
+                shift1_weighted += p * dm
             elif delta == 2:
-                p2_b += count * (abund / mono_abund)
+                p2_b += p
+                shift2_weighted += p * dm
 
-    m1_mass = mono_mass + NEUTRON_MASS
+    mean_shift1 = (shift1_weighted / p1) if p1 else 0.0
+    m1_mass = mono_mass + mean_shift1
     m1_abund = p1
 
     # --- M+2 probability (approximate) ------------------------------------
@@ -238,7 +254,12 @@ def _isotope_pattern(
     p2_a = (p1**2) / 2.0
 
     m2_abund = p2_a + p2_b
-    m2_mass = mono_mass + 2.0 * NEUTRON_MASS
+    m2_shift = (
+        (shift2_weighted + p2_a * 2.0 * mean_shift1) / (p2_b + p2_a)
+        if (p2_b + p2_a)
+        else 0.0
+    )
+    m2_mass = mono_mass + m2_shift
 
     # Build result, normalised to M = 1.0
     result = [

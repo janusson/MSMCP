@@ -8,13 +8,19 @@ provided by the foundation-model adapters.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from msmcp.tools.similarity import _cosine, _match_peaks
+from msmcp.tools.similarity import _cosine, _cosine_over_all_peaks, _match_peaks
+
+
+def _displayed_score(report: str) -> float:
+    """The score as the tool displays it: four decimals, ±5e-5 of the real value."""
+    return float(report.split("Cosine Similarity: **")[1].split("**")[0])
 
 
 def _arr(*peaks: tuple[float, float]) -> np.ndarray:
@@ -259,6 +265,70 @@ class TestComputeCosine:
                 reference_peaks=[[100.0, 1.0]],
                 ms2_tolerance=0.0,
             )
+
+
+class TestCosinePenalisesUnmatchedIntensity:
+    """Invariants the score has to satisfy to mean anything.
+
+    Each of these failed before the score was normalised over all peaks: a
+    spectrum sharing one coincidental peak with the query scored exactly 1.0,
+    which is indistinguishable from an identical spectrum.
+    """
+
+    def test_single_coincidental_match_does_not_score_like_an_identity(
+        self, sim_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        """Two spectra of similar structure that share one peak score 0.033, not 1.0."""
+        query = [[100.0, 1.0], [200.0, 2.0], [300.0, 5.0]]
+        reference = [[100.0, 1.0], [400.0, 2.0], [500.0, 5.0]]
+        out = sim_tools["compute_cosine"](query_peaks=query, reference_peaks=reference)
+        # One shared peak out of three, equal intensity vectors → 1/30.
+        assert _displayed_score(out) == pytest.approx(1.0 / 30.0, abs=6e-5)
+        assert "Cosine Similarity: **1.0000**" not in out
+        q_arr = _arr((100.0, 1.0), (200.0, 2.0), (300.0, 5.0))
+        r_arr = _arr((100.0, 1.0), (400.0, 2.0), (500.0, 5.0))
+        q_matched, r_matched, _ = _match_peaks(q_arr, r_arr, 0.02)
+        assert _cosine_over_all_peaks(q_matched, r_matched, q_arr, r_arr) == (
+            pytest.approx(1.0 / 30.0, rel=1e-12)
+        )
+
+    def test_score_is_the_explained_fraction_of_the_query(
+        self, sim_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        """With one reference peak, the score is the query intensity it explains."""
+        query = [[100.0, 1.0], [200.0, 2.0], [300.0, 5.0]]
+        out = sim_tools["compute_cosine"](
+            query_peaks=query, reference_peaks=[[100.005, 9000.0]]
+        )
+        score = _displayed_score(out)
+        assert score == pytest.approx(1.0 / math.sqrt(30.0), abs=6e-5)
+        # Scale-free in the reference: the absolute intensity must not matter.
+        out_scaled = sim_tools["compute_cosine"](
+            query_peaks=query, reference_peaks=[[100.005, 9.0e6]]
+        )
+        assert _displayed_score(out_scaled) == pytest.approx(score, rel=1e-9)
+
+    def test_identical_spectra_still_score_one(
+        self, sim_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        peaks = [[100.0, 50.0], [200.0, 100.0], [300.0, 25.0]]
+        out = sim_tools["compute_cosine"](query_peaks=peaks, reference_peaks=peaks)
+        assert "Cosine Similarity: **1.0000**" in out
+
+    def test_score_rises_monotonically_with_the_explained_fraction(
+        self, sim_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        """Adding query peaks the reference does not explain must lower the score."""
+        reference = [[100.0, 50.0], [200.0, 100.0], [300.0, 25.0]]
+
+        def score(query: list[list[float]]) -> float:
+            out = sim_tools["compute_cosine"](query_peaks=query, reference_peaks=reference)
+            return float(out.split("Cosine Similarity: **")[1].split("**")[0])
+
+        identical = score(reference)
+        two_of_three = score([[100.0, 50.0], [200.0, 100.0]])
+        one_of_three = score([[100.0, 50.0]])
+        assert identical > two_of_three > one_of_three
 
 
 # ---------------------------------------------------------------------------
