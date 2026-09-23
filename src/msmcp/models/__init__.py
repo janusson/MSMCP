@@ -1,8 +1,8 @@
 """Spectral foundation-model adapters for MSMCP.
 
 This package hosts pluggable adapters for spectral embedding models: the
-:class:`~msmcp.models.embeddings.SpectralEmbedder` contract, deterministic
-fallback implementations, and real PyTorch inference backends
+:class:`~msmcp.models.embeddings.SpectralEmbedder` contract, test/dev-only
+deterministic mocks, and real PyTorch inference backends
 (:mod:`msmcp.models.backends`).
 """
 

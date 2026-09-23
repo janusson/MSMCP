@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Annotated, Any
 
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("msmcp.tools.chem")
@@ -19,7 +20,7 @@ ELECTRON_MASS = 0.00054857990907  # e⁻
 NEUTRON_MASS = 1.00866491588  # n
 
 # ======================================================================
-# Known adducts — Δ = (adduct mass) − (neutral M mass) in Da.
+# Known adducts — delta = (adduct mass) - (neutral M mass) in Da.
 # Convention: Δ is the exact mass of the ionised adduct relative to
 # neutral M.  [M+H]+ adds the bare proton (already an ion — no electron
 # term); metal/ammonium cations are the neutral atom/molecule minus one
@@ -164,25 +165,14 @@ _ISOTOPES: dict[str, list[tuple[float, float, int]]] = {
 class AdductInput(BaseModel):
     """Validated input for predict_adduct_offset."""
 
-    adduct_string: str = Field(
-        ...,
-        min_length=3,
-        description="Adduct notation, e.g. '[M+H]+' or '[M-H]-'.",
-    )
+    adduct_string: str = Field(..., min_length=3)
 
 
 class IsotopeInput(BaseModel):
     """Validated input for annotate_isotopes."""
 
-    identifier: str = Field(
-        ...,
-        min_length=1,
-        description="Chemical formula (e.g. 'C6H12O6') or SMILES string.",
-    )
-    is_smiles: bool = Field(
-        default=False,
-        description="Set to True when *identifier* is a SMILES string.",
-    )
+    identifier: str = Field(..., min_length=1)
+    is_smiles: bool = False
 
 
 # ======================================================================
@@ -289,13 +279,40 @@ def register_tools(mcp: Any) -> None:
     # ------------------------------------------------------------------
     # Tool: predict_adduct_offset
     # ------------------------------------------------------------------
-    @mcp.tool()
-    def predict_adduct_offset(adduct_string: str) -> str:
-        """Return the exact mass shift for a standard ionisation adduct.
+    @mcp.tool(
+        title="Predict Adduct Mass Offset",
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    def predict_adduct_offset(
+        adduct_string: Annotated[
+            str,
+            Field(
+                min_length=3,
+                description=(
+                    "Adduct notation, e.g. '[M+H]+', '[M-H]-' or '[M+Na]+'. "
+                    "Must be one of the instrument-standard adducts."
+                ),
+            ),
+        ],
+    ) -> str:
+        """Return the exact mass shift that a standard ionisation adduct adds to a neutral molecule.
 
-        Accepts canonical adduct notations such as ``[M+H]+``, ``[M-H]-``,
-        ``[M+Na]+``, etc.  Non-standard or hallucinated adduct strings
-        are explicitly rejected.
+        Use this to convert a neutral monoisotopic mass into the expected
+        precursor m/z for a given ionisation pathway, or to check whether an
+        adduct assignment is physically plausible.
+
+        Returns the adduct polarity, charge state, exact mass shift in daltons
+        (Da), and the formula for the resulting m/z offset.  Note that for a
+        charge state of 1 the reported shift is the direct m/z offset, whereas
+        for higher charge states the shift must be divided by the absolute
+        charge (the returned offset formula already shows this).
+
+        Only canonical adduct notations from a fixed table are accepted (e.g.
+        '[M+H]+', '[M+Na]+', '[M+NH4]+', '[M+H-H2O]+', '[M+2H]2+', '[M-H]-',
+        '[M+Cl]-', '[M+HCOO]-'); matching is case-insensitive.  Any other
+        string is rejected and the supported adducts are listed, so do not
+        invent an adduct that is not offered there.  The adduct string must be
+        at least 3 characters long.
         """
         _ = AdductInput(adduct_string=adduct_string)
         canonical = adduct_string.strip()
@@ -351,12 +368,51 @@ def register_tools(mcp: Any) -> None:
     # ------------------------------------------------------------------
     # Tool: annotate_isotopes
     # ------------------------------------------------------------------
-    @mcp.tool()
-    def annotate_isotopes(identifier: str, is_smiles: bool = False) -> str:
-        """Compute the theoretical isotope pattern for a molecular formula or SMILES.
+    @mcp.tool(
+        title="Annotate Isotope Pattern",
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    def annotate_isotopes(
+        identifier: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description=(
+                    "Chemical formula (e.g. 'C6H12O6') or SMILES string, "
+                    "depending on is_smiles."
+                ),
+            ),
+        ],
+        is_smiles: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Set to True when identifier is a SMILES string; leave "
+                    "False when it is a chemical formula."
+                ),
+            ),
+        ] = False,
+    ) -> str:
+        """Predict the theoretical isotope pattern (M, M+1, M+2) of a compound.
 
-        Returns a Markdown table of M, M+1, and M+2 isotopologue masses
-        and relative abundances, normalised to the monoisotopic peak.
+        Use this to obtain isotopologue masses and relative abundances, for
+        example to check a measured isotope envelope against a proposed
+        molecular formula or to confirm a monoisotopic mass.
+
+        Returns the monoisotopic mass in daltons (Da) and a Markdown table
+        giving the theoretical mass and relative abundance of the M, M+1 and
+        M+2 isotopologues, normalised so that the monoisotopic peak is 1.0000.
+        Note that M+1 and M+2 only account for single- and double-neutron
+        substitutions, so halogens such as Cl and Br contribute to M+2 rather
+        than M+1.
+
+        Pass a chemical formula as the identifier by default (for example
+        'C6H12O6'); set is_smiles=True only when the identifier is a SMILES
+        string.  SMILES resolution requires the optional RDKit dependency: if
+        it is missing, an error is returned and the formula should be supplied
+        instead.  The identifier must be at least one character long, and only
+        elements with tabulated isotope data are supported (C, H, N, O, S, P,
+        F, Cl, Br, I, Na, K, Si, Fe, Se) - any other element returns an error.
         """
         _ = IsotopeInput(identifier=identifier, is_smiles=is_smiles)
 
@@ -397,7 +453,7 @@ def register_tools(mcp: Any) -> None:
             "|-------------|----------------------|--------------------|",
         ]
         labels = ["M", "M+1", "M+2"]
-        for (mass, abund), label in zip(pattern, labels):
+        for (mass, abund), label in zip(pattern, labels, strict=True):
             lines.append(f"| {label:<11} | {mass:>20.4f} | {abund:>18.4f} |")
 
         lines.extend(
@@ -438,7 +494,6 @@ def _smiles_to_formula(smiles: str) -> str | None:
         # Build formula string from atomic numbers
         from collections import Counter
 
-        atoms = [atom.GetSymbol() for atom in mol.GetAtoms()]
         # RDKit Hydrogens are implicit — add them
         mol_with_h = Chem.AddHs(mol)
         all_atoms = [atom.GetSymbol() for atom in mol_with_h.GetAtoms()]

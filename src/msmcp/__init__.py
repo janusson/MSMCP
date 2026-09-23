@@ -1,1 +1,1 @@
-"""MSMCP – Model Context Protocol server for computational mass spectrometry."""
+"""MSMCP - Model Context Protocol server for computational mass spectrometry."""

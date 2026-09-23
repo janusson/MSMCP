@@ -1,0 +1,7 @@
+# The Makefile is checked in, so recipe indentation must survive every editor:
+# a space-indented recipe makes `make` fail with "missing separator".
+root = true
+
+[Makefile]
+indent_style = tab
+indent_size = 4

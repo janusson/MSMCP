@@ -4,6 +4,8 @@
 
 MSMCP exposes exact-mass validation, adduct and isotope chemistry, spectral similarity scoring (classical *and* foundation-model embeddings), quality control, and asynchronous spectral library search to any LLM client that speaks the [Model Context Protocol](https://modelcontextprotocol.io).
 
+Large acquisitions never enter the conversation: spectra are parsed into **server-side data references**, so an agent can hand a 100,000-peak spectrum to the next tool as a short `ptr:spectrum:…` string, with structured **provenance** attached to every derived result.
+
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Package manager: uv](https://img.shields.io/badge/uv-managed-9B5DE5?logo=astral&logoColor=white)](https://docs.astral.sh/uv/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -13,19 +15,26 @@ MSMCP exposes exact-mass validation, adduct and isotope chemistry, spectral simi
 ## Table of contents
 
 1. [The problem: the Dark Metabolome meets the context window](#the-problem-the-dark-metabolome-meets-the-context-window)
-2. [The solution: a stateless MCP adapter](#the-solution-a-stateless-mcp-adapter)
-3. [The Memory Pointer Pattern](#the-memory-pointer-pattern)
+2. [The solution: an MCP adapter with a data-reference store](#the-solution-an-mcp-adapter-with-a-data-reference-store)
+3. [Server-side data references](#server-side-data-references)
 4. [How async dispatch solves execution timeouts](#how-async-dispatch-solves-execution-timeouts)
 5. [Architecture](#architecture)
 6. [Quick start](#quick-start)
 7. [Connecting an LLM client](#connecting-an-llm-client)
 8. [An agent working through MSMCP](#an-agent-working-through-msmcp)
 9. [Tool reference](#tool-reference)
-10. [Spectral foundation models](#spectral-foundation-models)
-11. [Asynchronous job orchestration](#asynchronous-job-orchestration)
-12. [Developer ergonomics](#developer-ergonomics)
-13. [Repository layout](#repository-layout)
-14. [Known limitations & roadmap](#known-limitations--roadmap)
+10. [Supported input formats](#supported-input-formats)
+11. [Provenance](#provenance)
+12. [Spectral foundation models](#spectral-foundation-models)
+13. [Asynchronous job orchestration](#asynchronous-job-orchestration)
+14. [Developer ergonomics](#developer-ergonomics)
+15. [Repository layout](#repository-layout)
+16. [Known limitations & roadmap](#known-limitations--roadmap)
+17. [Security notes](#security-notes)
+18. [Configuration reference](#configuration-reference)
+
+For the full design — scope boundaries, layer rules, and the v1.0 acceptance
+criteria — see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 ---
 
@@ -41,26 +50,56 @@ Worse, the chemistry itself is largely unknown. In untargeted studies, the overw
 
 All of that is deterministic, well-understood computation. **LLMs should reason about it; they should not perform it.**
 
-## The solution: a stateless MCP adapter
+## The solution: an MCP adapter with a data-reference store
 
-MSMCP is a thin, **stateless adapter** between an LLM host and a stack of analytical engines:
+MSMCP is a thin adapter between an LLM host and a stack of analytical engines:
 
 - **Transport layer** — an [MCPServer](https://github.com/modelcontextprotocol/python-sdk) speaking JSON-RPC over stdio, launched as a child process by the LLM host. All diagnostics are logged to stderr; stdout carries only MCP framing.
+- **Ingestion layer** (`src/msmcp/ingest.py`) — one dispatcher that picks the right reader for a file, and one canonical output type. [MassFlow](https://github.com/) is the canonical layer for everything it supports (imzML imaging data); MSMCP owns small readers for the formats MassFlow does not cover (mzML, MGF).
 - **Analytical engines** — pure, deterministic, unit-tested Python modules under `src/msmcp/tools/` that perform the actual science: exact-mass arithmetic, adduct shifts, isotope annotation, ppm validation, cosine scoring, QC metrics, and chunked library scanning.
-- **Model adapters** — a pluggable `SpectralEmbedder` interface (`src/msmcp/models/`) behind which spectral foundation models (DreaMS, LSM-MS2) plug in without touching the tool layer.
-- **Orchestrator** — long-running library searches are dispatched as **in-process async jobs**: `asyncio.create_task` spawns a background task per search, the CPU-bound scan is offloaded to a worker thread with `asyncio.to_thread`, and a module-level job store tracks `pending → running → completed | failed` for polling. No external services, daemons, or databases required.
+- **Data-reference store** (`src/msmcp/state/`) — a bounded, thread-safe registry of scientific payloads that stay on the server. This is what lets an agent hand a 100,000-peak spectrum to the next tool as a 30-character string.
+- **Provenance** (`src/msmcp/provenance.py`) — immutable, structured records attached to every derived object: which operation, which parameters, which file (with reader backend and digest), which parent references, which software and model versions.
+- **Model adapters** — a pluggable `SpectralEmbedder` interface (`src/msmcp/models/`) behind which spectral foundation models (DreaMS, LSM-MS2) plug in without touching the tool layer. Optional: core MSMCP never requires model weights.
+- **Execution** (`src/msmcp/execution/`) — long-running work goes through a `JobExecutor` interface. v1.0 ships a local asyncio implementation; the server does not know or care whether the backend is a thread pool, a process pool or an orchestrator.
 
-The server keeps job state only in a small, TTL-bounded in-process store — everything else is stateless. The division of labour is explicit: **the LLM plans, the tools compute, the job store remembers.**
+The server holds only bounded, TTL-limited state: registered data references and job records. The division of labour is explicit: **the LLM plans, the tools compute, the store remembers.**
 
-## The Memory Pointer Pattern
+## Server-side data references
 
-MSMCP's asynchronous tools follow a **Memory Pointer Pattern**: the LLM never holds results in its context — it holds a *pointer*.
+A **`DataReference`** is a compact, opaque handle to science that stays on the server:
 
-1. `search_library(...)` returns immediately with a tiny `job_id` (a uuid4-hex key into the in-process job store). That ID is the pointer.
-2. The LLM stores the pointer — a few tokens — and continues reasoning.
-3. `check_search_status(job_id=...)` dereferences the pointer on demand, returning a wait message, the completed report, or a failure traceback.
+```
+ptr:spectrum:9f3c1a4e7b2d...
+```
 
-Because the pointer is all the LLM carries, context usage is **constant regardless of dataset size**, polls are idempotent and cheap, and any agent holding the pointer can resume the conversation where the last one left off. Results are compact Markdown by design — top-20 hit tables, one-line validation verdicts — engineered for token efficiency rather than human eyeballs.
+The flow is what keeps spectral data out of the context window:
+
+```text
+load_spectrum(file_path="run42.mzML", spectrum_index=0)
+  -> {"reference": "ptr:spectrum:9f3c…", "n_peaks": 100000,
+      "mz_range": [50.0, 2000.0], "tic": 1.7e9,
+      "provenance": {"operation": "load_spectrum", …}}
+
+search_library(spectrum_reference="ptr:spectrum:9f3c…",
+               database_file="libraries/metabolomics.db")
+  -> returns a job ID immediately; the peaks never left the server
+
+release_reference(reference="ptr:spectrum:9f3c…")
+  -> freed now instead of waiting for the retention period
+```
+
+The properties that make it safe to rely on:
+
+- **Opaque and stable** — generated from `secrets.token_hex`. Never a Python `id()`, a memory address or a path. Stable for the reference's lifetime, never reused after release.
+- **Metadata, never payload** — a reference describes its data (kind, shape, byte size, lifetime, provenance). Its serialised form cannot contain the peaks.
+- **Immutable** — registration validates the payload against its kind and stores it with read-only buffers, so a caller that mutates its own array cannot change what a later tool reads.
+- **Bounded** — `MSMCP_MAX_REFERENCES` (default 128) and `MSMCP_MAX_TOTAL_BYTES` (default 512 MiB) are enforced by **refusing** new registrations, never by evicting data someone still holds. A resource error must not become a wrong answer.
+- **Expiring and releasable** — `MSMCP_REFERENCE_TTL_SECONDS` (default 3600; `0` disables) expires references lazily on access; `release_reference` frees them immediately and is idempotent.
+- **Namespaced** — the store partitions references by namespace so one workflow cannot dereference another's data.
+
+**What is not claimed:** MSMCP does not claim *zero-copy*. Registration takes one defensive copy to guarantee immutability, and PyArrow is not a dependency. The guarantee that is actually tested is that the payload is **never serialised through MCP/JSON** — which is the one that matters to an agent.
+
+> **Migrating from the earlier “memory pointer” wording:** the job ID returned by `search_library` is an execution handle, not a data reference. Both remain: job IDs address *work in flight*, `DataReference`s address *data at rest*.
 
 ## How async dispatch solves execution timeouts
 
@@ -68,15 +107,15 @@ LLM hosts impose hard timeouts on tool calls — typically a minute or less. A l
 
 MSMCP's dispatcher/poller split changes the failure model:
 
-| Problem | The in-process job store's answer |
+| Problem | The job executor's answer |
 |---|---|
-| Tool call exceeds the host timeout | Dispatch returns in milliseconds; the scan continues on a worker thread via `asyncio.to_thread` |
-| Server restarts mid-search | Job state is in-memory and is lost — the price of zero infrastructure (see [roadmap](#known-limitations--roadmap)) |
+| Tool call exceeds the host timeout | `submit` returns in milliseconds; the scan continues on a worker thread via `asyncio.to_thread` |
+| Server restarts mid-search | Job state is in-memory and is lost — the price of zero infrastructure (see [limitations](#known-limitations--roadmap)) |
 | Too many concurrent searches | A bounded semaphore caps simultaneously running scans, so an eager agent cannot exhaust the CPU |
 | Failure with no signal | Failed jobs carry the full exception traceback, retrievable by the poller |
-| "Is it done yet?" | Status transitions (pending → running → completed/failed) are queryable by job ID at any time |
+| "Is it done yet?" | Status transitions (queued → running → completed/failed/cancelled) are queryable by job ID at any time |
 
-Finished jobs are expired from the store after a one-hour TTL, so a long-running server never accumulates unbounded state.
+Finished jobs are expired from the executor after a one-hour TTL, so a long-running server never accumulates unbounded state.
 
 ## Architecture
 
@@ -84,58 +123,71 @@ Finished jobs are expired from the store after a one-hour TTL, so a long-running
 flowchart TD
     Client["LLM Client (any MCP host)"]
 
-    subgraph MSMCP["MSMCP - stateless MCPServer (stdio)"]
-        Transport["MCPServer transport: JSON-RPC over stdio"]
+    subgraph MSMCP["MSMCP - MCPServer over stdio"]
+        Transport["Transport: JSON-RPC over stdio"]
         ToolRouting["Tool routing: io · chem · similarity · qc · search"]
     end
 
-    subgraph MSMCP["MSMCP - in-process async jobs"]
-        JobStore["Job store: pending → running → completed | failed"]
-        Worker["Worker thread (asyncio.to_thread): chunked SQLite scan + scoring"]
+    subgraph Ingest["Ingestion (ingest.py)"]
+        MassFlow["MassFlow: imzML imaging"]
+        Readers["MSMCP readers: mzML · MGF"]
     end
 
-    subgraph Models["Spectral foundation models"]
-        Embedders["SpectralEmbedder adapters: DreaMS · LSM-MS2 (1024-d float32)"]
+    subgraph State["Server-side state (bounded, TTL)"]
+        Refs["Data references: ptr:spectrum:..."]
+        Executor["JobExecutor: submit · status · cancel"]
+        Prov["Provenance records"]
     end
 
-    DB[("SQLite spectral library")]
+    subgraph Models["Spectral foundation models (optional)"]
+        Embedders["SpectralEmbedder: DreaMS · LSM-MS2"]
+    end
 
     Client -->|MCP stdio| Transport
     Transport --> ToolRouting
+    ToolRouting --> Ingest
+    ToolRouting --> Refs
+    ToolRouting --> Executor
+    ToolRouting --> Prov
     ToolRouting -->|embed_spectrum| Embedders
-    ToolRouting -->|"search_library · check_search_status"| JobStore
-    JobStore --> Worker
-    Worker --> DB
 ```
 
-**Separation of concerns in one sentence:** the MCP transport layer marshals requests, the tool modules implement the analytical engines, the model adapters own representation learning, and the job store owns in-flight execution state — no layer reaches into another's internals.
+**Separation of concerns in one sentence:** the transport marshals requests, the ingestion layer picks a reader, the tool modules implement the analytical engines, the reference store owns data at rest, the executor owns work in flight, and provenance records how each result was produced — no layer reaches into another's internals.
 
 ## Quick start
 
 Prerequisites: [uv](https://docs.astral.sh/uv/) and Python 3.13 (managed automatically via `.python-version`).
 
 ```bash
-# 1. Clone and install (creates the venv, syncs runtime + dev dependencies)
+# 1. Clone and sync (creates the venv, installs runtime + dev dependencies)
 git clone <repository-url> msmcp && cd msmcp
-make install
+uv sync --extra dev
 
 # 2. Lint, test, and launch the server
-make lint
-make test
-make run          # starts the MCP server on stdio
+uv run ruff check .
+uv run mypy
+uv run basedpyright
+uv run pytest       # fast unit suite (the eval notebook is deselected)
+uv run msmcp        # starts the MCP server on stdio
+
+# 3. Or run the whole pipeline — sync, format, lint, unit tests, eval notebook, repomix pack
+make all
 ```
 
-Makefile targets:
+`uv` is the canonical tool — every command runs through it:
 
-| Target | Command | Purpose |
-|---|---|---|
-| `install` | `uv sync --extra dev` | venv + all dependencies |
-| `format` | `ruff format` / `ruff check --fix` | formatting and safe fixes |
-| `lint` | `ruff check` + `mypy` | static analysis |
-| `test` | `pytest` | the 157-test suite |
-| `run` | `uv run msmcp` | launch the server on stdio |
+| Task | Command |
+|---|---|
+| Sync environment | `uv sync --extra dev` |
+| Format | `uv run ruff format .` |
+| Lint | `uv run ruff check .` · `uv run mypy` · `uv run basedpyright` |
+| Test | `uv run pytest` |
+| Evaluate end to end | `uv run pytest tests/test_eval_notebook.py -m eval -s -q` |
+| Run the server | `uv run msmcp` |
 
-`format`, `lint`, and `test` first sync the dev environment (`uv sync --extra dev`), so `make all` works from a fresh clone without a separate install step. The `repomix` target additionally requires the Node-based `repomix` CLI on `PATH`.
+The `Makefile` wraps these into one pipeline: `make lint`, `make test`, `make eval`, and `make all` (sync → format → lint → unit tests → evaluation notebook → repomix pack). Every target depends on `install`, so `make all` works from a fresh clone without a separate sync step. `make test` deliberately omits the evaluation notebook — that is `make eval` — to keep the inner loop at a few seconds.
+
+Re-run `uv sync --extra dev` after changing `pyproject.toml`. The optional `repomix` pack (Node-based) is run as `repomix --style xml --output repomix-output.xml`.
 
 ## Connecting an LLM client
 
@@ -159,49 +211,106 @@ Example configuration for **Zed** (`.zed/settings.json`):
 ## An agent working through MSMCP
 
 ```text
-User:    "Search this run against the metabolomics library and tell me what's in it."
+User:    "What's in run42/experiment.mzML? Then search it."
 
-Agent:   search_library(experimental_file="run42/experiment.mzML",
+Agent:   load_spectrum(file_path="run42/experiment.mzML", spectrum_index=0)
+  → {"reference": "ptr:spectrum:9f3c…", "format": "mzML",
+     "n_peaks": 842, "mz_range": [50.0, 900.1], "tic": 4.1e7,
+     "provenance": {"operation": "load_spectrum", …}}
+
+Agent:   summarise_reference(reference="ptr:spectrum:9f3c…")
+  → "Spectrum #0 | MS2 | RT: 2.00 min … Top 10 peaks …
+     Provenance: load_spectrum … source: run42/experiment.mzML"
+
+Agent:   search_library(spectrum_reference="ptr:spectrum:9f3c…",
                         database_file="libraries/metabolomics.db",
                         scoring_method="dreams")
-  → "Job ID: 362c0267-…-df4a31f61197
-     The spectral library search is running in the background as an
-     in-process async job; use check_search_status to poll for results."
+  → "Job ID: 362c0267… (the peaks never entered the conversation)"
 
-Agent:   check_search_status(job_id="362c0267-…-df4a31f61197")
-  → "🔄 Running — search job … is scanning the spectral library and
-     computing statistics. Poll again shortly."
+Agent:   check_search_status(job_id="362c0267…")
+  → "🔄 Running — scanning the spectral library …"
 
-Agent:   check_search_status(job_id="362c0267-…-df4a31f61197")
-  → "## Spectral Library Search Results
-     Scoring method: DreaMS deep embedding (1024-d)
+Agent:   check_search_status(job_id="362c0267…")
+  → "## Spectral Library Search Results …
      | Rank | Compound | Score | FDR (q-value) | Precursor m/z | Formula | …"
 
 Agent:   validate_precursor(theoretical_mass=194.0804, experimental_mass=194.0831)
   → "VALIDATION REJECTED — Mass error: 13.9 ppm … Reconsider the molecular
      formula, adduct assignment, or instrument calibration."
 
+Agent:   release_reference(reference="ptr:spectrum:9f3c…")
+  → "Released. The stored peaks are no longer available."
+
 Agent:   "The top hit is caffeine, but the precursor mass error (13.9 ppm)
          fails validation — likely a sodiated adduct. Let me check…"
 ```
 
-The agent carries job IDs and verdicts — never spectra.
+The agent carries references, job IDs and verdicts — never spectra.
+
+> **Note on this walkthrough:** the *query* spectrum is genuinely read from `experiment.mzML`. The **library** is not: MSMCP has no spectral-library reader yet, so `search_library` substitutes a synthetic library of 500–5,000 spectra seeded from the `metabolomics.db` string. Both the dispatch reply and the final report say so, in a banner that precedes the hit table. Treat the hits as a demonstration of the scoring machinery, never as identifications. See *Known limitations & roadmap*.
 
 ## Tool reference
 
-Nine tools are exposed to the model. Everything returns compact Markdown (or a single sentence).
+Thirteen tools are exposed to the model: compact Markdown (or a single sentence) for human/LLM reading, and a structured object where a data reference is involved.
 
 | Tool | Module | Purpose |
 |---|---|---|
 | `ping` | `server.py` | Diagnostic health check |
-| `load_mzml_summary` | `tools/io.py` | First-*N*-spectra summary of a local `.mzML` / `.mgf` file |
+| `load_mzml_summary` | `tools/io.py` | First-*N*-spectra text summary of a local `.mzML` file |
+| `load_spectrum` | `tools/io.py` | Parse one spectrum from any supported format and register it server-side; returns a `DataReference` plus metadata and provenance |
+| `summarise_reference` | `tools/io.py` | Read a referenced spectrum back from server memory (no file re-read) |
+| `release_reference` | `tools/io.py` | Free a reference immediately rather than waiting for expiry |
 | `predict_adduct_offset` | `tools/chem.py` | Exact mass shift for 14 canonical adducts |
 | `annotate_isotopes` | `tools/chem.py` | M / M+1 / M+2 pattern from a formula or SMILES |
 | `validate_precursor` | `tools/similarity.py` | ppm mass-error gate at the 5.0 ppm threshold |
-| `compute_cosine` | `tools/similarity.py` | Classical or embedding-based spectral similarity |
-| `generate_qc_summary` | `tools/qc.py` | Spectral QC metrics + pipeline routing recommendation (synthetic demo dataset until real parsing lands) |
-| `search_library` | `tools/search.py` | Asynchronous library search over a synthetic in-process SQLite library (job store; classical or embedding scoring) |
+| `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity (embeddings require real inference) |
+| `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file |
+| `search_library` | `tools/search.py` | Asynchronous library search (job executor; classical or real-embedding scoring). The **query** is real data; the **library** is explicitly synthetic |
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID |
+| `cancel_search` | `tools/search.py` | Cancel a pending or running search job |
+
+Only `cancel_search` and `release_reference` mutate server state, and both advertise that on the wire.
+
+## Supported input formats
+
+The reader is chosen from the file extension; every reader produces the same spectrum type, so no tool needs to know the format.
+
+| Format | Reader | Notes |
+|---|---|---|
+| `.mzML`, `.mzML.gz` | `msmcp.mzml` | dependency-free; zlib-compressed binary arrays supported |
+| `.mgf`, `.mgf.gz` | `msmcp.mgf` | strict: an unparseable peak line raises rather than being skipped |
+| `.imzML` (+ `.ibd`) | MassFlow | imaging data; pixel coordinates are preserved on each spectrum |
+| `.raw`, `.d`, `.wiff`, `.mzXML` | — | recognised and refused, naming the vendor and suggesting MSConvert |
+
+MassFlow is a required dependency, but the installed release (0.1.x) is an **imaging** framework: it reads imzML/zarr/HDF5 and exposes no mzML or MGF reader. MSMCP therefore routes exactly what MassFlow supports through MassFlow, and owns small readers for the rest. That is a documented consequence of the available library, not a preference.
+
+Two MassFlow behaviours are worth knowing before debugging an unexpected directory or log line:
+
+- Importing MassFlow's data manager **reconfigures the root logger to write to stdout**, which would corrupt the stdio JSON-RPC framing. `massflow_io` repoints those handlers at stderr on import, and a test asserts that no handler in the process targets stdout after a read.
+- The same import **creates a `logs/` directory** in the working directory. That is library behaviour MSMCP cannot suppress; it is gitignored and documented rather than hidden.
+
+MS-Numpress-compressed mzML arrays require the optional `pynumpress` package and raise a missing-dependency error without it.
+
+## Provenance
+
+Every significant object MSMCP derives carries a structured, immutable provenance record:
+
+```json
+{
+  "operation": "load_spectrum",
+  "created_at": "2026-09-21T17:24:18.809783+00:00",
+  "parameters": {"spectrum_index": 0, "source_format": "mzML", "reader_backend": "msmcp.mzml"},
+  "sources": [{"path": "run42.mzML", "format": "mzML", "backend": "msmcp.mzml",
+               "size_bytes": 84213, "digest": "sha256:5b1f…"}],
+  "parents": ["ptr:spectrum:9f3c…"],
+  "model": null,
+  "software": {"name": "msmcp", "versions": {"python": "3.13.7", "msmcp": "0.1.0", "massflow": "0.1.2", "numpy": "2.3.4"}}
+}
+```
+
+A search result can therefore answer, mechanically: which query reference, which file and which reader produced it, with which scoring method and parameters, under which software versions — and, for embedding-scored work, which model and checkpoint. Digests are computed for sources up to 64 MiB; larger files report `digest: null` rather than silently omitting the field.
+
+It is deliberately not a provenance framework: no graph, no query language, no storage. Records travel with the objects they describe.
 
 ### Example: exact-mass chemistry
 
@@ -238,7 +347,7 @@ LLM calls: compute_cosine(
    Scoring method: DreaMS deep embedding (1024-d, L2-normalised)"
 ```
 
-`scoring_method` accepts `"classical"` (greedy peak matching within a Da tolerance, with unmatched-peak reporting), `"dreams"`, or `"lsm-ms2"`. Embeddings matter for the Dark Metabolome: learned representations express *structural* similarity, so a spectrum with no library twin can still rank meaningfully against its nearest chemical neighbours — something raw peak alignment cannot do.
+`scoring_method` accepts `"classical"` (greedy peak matching within a Da tolerance, with unmatched-peak reporting), `"dreams"`, or `"lsm-ms2"`. The embedding methods require real inference: if the corresponding model is unavailable in production, the tool raises `EmbeddingBackendUnavailable` rather than returning a value that looks learned. Embeddings matter for the Dark Metabolome: learned representations express *structural* similarity, so a spectrum with no library twin can still rank meaningfully against its nearest chemical neighbours — something raw peak alignment cannot do.
 
 ## Spectral foundation models
 
@@ -247,7 +356,7 @@ LLM calls: compute_cosine(
 ```python
 class SpectralEmbedder(ABC):
     name: ClassVar[str]
-    backend: ClassVar[str] = "mock"  # "mock" (fallback) | "hf" (real inference)
+    backend: ClassVar[str] = "mock"  # "mock" (test/dev-only) | "hf" (real inference)
     embedding_dim: int = 1024
 
     @staticmethod
@@ -258,81 +367,141 @@ class SpectralEmbedder(ABC):
     def embed_spectrum(self, peaks, precursor_mz=None) -> np.ndarray: ...
 ```
 
-- **Deterministic fallbacks** — `DreaMSEmbedder` and `LSMMS2Embedder` project peaks onto a fixed 1024-bin m/z grid, apply per-model intensity compression (√ for DreaMS, log1p for LSM-MS2), seed deterministic noise from the precursor m/z + peak content (order-independent BLAKE2b hash), and L2-normalise to `float32`. Identical spectra score exactly 1.0; shared peaks score proportionally; disjoint spectra score 0.0. The fallbacks keep the server fully operational with zero ML dependencies and are the default in the test suite.
+- **Deterministic mocks (test/dev-only)** — `DreaMSEmbedder` and `LSMMS2Embedder` project peaks onto a fixed 1024-bin m/z grid, apply per-model intensity compression (√ for DreaMS, log1p for LSM-MS2), seed deterministic noise from the precursor m/z + peak content (order-independent BLAKE2b hash), and L2-normalise to `float32`. Identical spectra score exactly 1.0; shared peaks score proportionally; disjoint spectra score 0.0. **These are not learned models**: they exist only for hermetic tests/development, are reachable only under `MSMCP_EMBEDDING_BACKEND=mock`, and must never be reported as scientific results.
 - **Real inference (DreaMS)** — `DreaMSInferenceEmbedder` (`src/msmcp/models/backends.py`) runs the official pre-trained 1024-d transformer (Bushuiev et al., *Nature Biotechnology* 2025). Install the package from source (`uv pip install "git+https://github.com/pluskal-lab/DreaMS.git"` — the `dreams` name on PyPI is an unrelated nanophotonics library) and the embedding checkpoint downloads automatically on first use. Spectra are embedded through the model's own preprocessing pipeline (DataFormat-A: peaks sorted by m/z, intensity max-normalised, fragments strictly below the precursor) via a temporary MGF file; the checkpoint load is cached per process and the output is L2-normalised float32.
 - **Real inference (LSM-MS2)** — no public inference weights exist upstream (only peer-review code, `matterworksbio/LSM1-MS2`), so `LSMMS2InferenceEmbedder` is a bring-your-own-checkpoint adapter activated by the `MSMCP_LSM_MS2_CKPT` environment variable (the checkpoint must expose `encode(mz, intensity, precursor_mz)`); the embedding dimensionality is derived from the model output.
-- **Backend selection** — `MSMCP_EMBEDDING_BACKEND=mock|auto|hf` (default `auto`): `auto` uses real inference when the package is installed and logs a fallback warning otherwise; `mock` pins the deterministic stand-ins; `hf` fails loudly with install instructions when the backend is unavailable. Tool reports disclose which backend produced each score (`real inference` vs `deterministic fallback`).
+- **Backend selection** — `MSMCP_EMBEDDING_BACKEND=real|mock` (default `real`): `real` requires real inference and raises `EmbeddingBackendUnavailable` with install instructions when a model/checkpoint is unavailable; `mock` explicitly opts into the deterministic mocks for tests/development only. Legacy `auto`/`hf` values are treated as `real`. Tool reports disclose which backend produced each score (`real inference` vs `mock (dev/test-only, not a learned model)`).
 
 ## Asynchronous job orchestration
 
-Library searches are **in-process async jobs**, not fire-and-forget coroutines:
+All long-running work goes through one interface, `JobExecutor` (`src/msmcp/execution/executor.py`):
 
 ```python
-@dataclass
-class SearchJob:
-    job_id: str
-    experimental_file: str
-    database_file: str
-    scoring_method: str
-    status: str = "pending"  # pending → running → completed | failed
-    result: str | None = None  # final Markdown report once completed
-    error: str | None = None  # formatted traceback once failed
+class JobExecutor(ABC):
+    def submit(
+        self, operation, fn, *, parameters=None, ttl_seconds=None
+    ) -> JobHandle: ...
+    def status(self, job_id) -> JobStatusSnapshot: ...
+    def result(self, job_id) -> JobResult: ...
+    def cancel(self, job_id) -> JobStatusSnapshot: ...
+    def forget(self, job_id) -> bool: ...
+    def list_jobs(self) -> tuple[JobStatusSnapshot, ...]: ...
+    def shutdown(self) -> None: ...
 ```
 
-- The dispatcher (`search_library`) records the job in the module-level `_JOB_STORE` and spawns `_run_search_task` via `asyncio.create_task`; the CPU-bound scan runs on a worker thread via `asyncio.to_thread`, so the MCP event loop is never blocked.
-- The poller (`check_search_status`) reads the job by ID: `pending/running → wait message`, `completed → the Markdown report`, `failed → the exception traceback`.
-- A bounded semaphore caps concurrent searches, and finished jobs are expired from the store after a one-hour TTL (`_schedule_cleanup`), so a long-running server never accumulates unbounded state.
-- **Trade-off vs. an external orchestrator**: job state lives in server memory and is lost if the server restarts mid-search — the price of zero infrastructure. An earlier revision of this server used Prefect for durable flow runs; that dependency was removed in the async rewrite and is the roadmap path back to restart-safe, multi-process execution.
+v1.0 ships `LocalAsyncExecutor`: CPU-bound work dispatched with `asyncio.to_thread`, bounded by a semaphore (`max_concurrency`, default 4), with a one-hour TTL on finished records. No external service, daemon or database is involved.
+
+- The dispatcher (`search_library`) resolves the real query peaks, then `submit`s the scan and returns a job ID immediately.
+- The poller (`check_search_status`) reads the snapshot: `queued`/`running` → a wait message, `completed` → the report, `failed` → the exception traceback, `cancelled` → confirmation that partial work was discarded.
+- A job the executor no longer knows about (a restart, or after its TTL) is reported as a **terminal failure**, never as an ambiguous pending state a client could spin on.
+
+**Statuses are MCP task statuses** (`working` / `completed` / `failed` / `cancelled`), and `JobStatusSnapshot.to_task_dict()` renders a snapshot into the shape of an MCP `Task`. The installed SDK (`mcp` 2.1.1) defines the Tasks *types* but does not dispatch `tasks/get`, `tasks/result` or `tasks/cancel` — they are absent from its request unions — so MSMCP exposes the same semantics through its own polling tool and keeps the wire representation aligned. Inventing an application-level task protocol would be spec-incompatible and is deliberately not done.
+
+**Cancellation is honest about its limits:** a worker thread cannot be interrupted, so cancelling marks the job terminal and *discards* its output. A caller that sees `cancelled` never sees a partial result.
+
+**Portability:** the executor is the seam for a process pool, a job queue or Prefect. Nothing in v1.0 depends on one, and `JobExecutor` is what makes adding one a contained change.
 
 ## Developer ergonomics
 
-- **Testing**: 157 pytest cases across `tests/` — chemistry (exact masses against literature values, adduct validation), similarity (5.0-ppm boundary arithmetic, greedy matching, embedding semantics), embedding backends (backend resolution, hermetic real-inference pipelines with stubbed models, checkpoint-load safety gating, stdio transport protection), and search (a full dispatcher → job store → poller round trip, scorer routing, TTL cleanup, and the failure path). Tests run hermetically: embedding backends are pinned to the deterministic mocks and no network or external services are required.
-- **Linting/typing**: `ruff` (E/F/I/UP/B/SIM/RUF) and `mypy` on `src/` + `tests/` via `make lint`. Pre-existing findings in the older tool modules are tracked as explicit `per-file-ignores` debt in `pyproject.toml`, to be removed file-by-file; newer modules (server, models, search, tests) are clean.
+- **Testing**: 375 pytest cases across `tests/` — chemistry (exact masses against literature values, adduct validation), similarity (5.0-ppm boundary arithmetic, greedy matching, embedding semantics), embedding backends (backend resolution, hermetic real-inference pipelines with stubbed models, checkpoint-load safety gating, stdio transport protection), the **data-reference store** (`test_pointers.py`: registration, immutability, malformed/unknown/expired/wrong-kind failures, namespace isolation, byte and count ceilings, concurrent access from real threads), **provenance** (`test_provenance.py`: immutability, JSON-safety, digests, the multi-step chain), the **job executor** (`test_executor.py`: submit/status/result/cancel, non-blocking dispatch, concurrency cap, TTL sweep, traceback-carrying failures), **ingestion** (`test_mgf.py`, `test_ingest.py`: MGF parsing and its malformed inputs, format dispatch, MassFlow-backed imzML including the stdout-logging guard and a corrupt-payload path), search (a full dispatcher → executor → poller round trip, real vs. synthetic halves of the pipeline, scorer routing, cancellation, failure), mzML parsing, QC, the security boundary, the **wire contract** (`test_tool_schemas.py`), an **end-to-end workflow** (`test_workflow.py`: load → reference → summarise → search → provenance → release, plus the assertion that a 100k-peak spectrum serialises to under 4 kB), and an **end-to-end stdio smoke test** (`test_smoke_stdio.py`, the only test that drives the real transport: initialize handshake, `tools/list`, a `tools/call`, and a check that every stdout line parses as JSON-RPC). Tests run hermetically: embedding backends are pinned to the test/dev-only deterministic mocks and no network or external services are required.
+- **End-to-end evaluation**: `notebooks/eval_msmcp.ipynb` is the benchmark/stress suite — precursor and adduct boundaries, embedding shape/determinism/degenerate-input cases, real mzML parsing and QC, the full async search state machine (including failure, cancellation, lost-job and concurrency-cap behaviour), the server-side reference flow, and a per-tool diagnostic table. `tests/test_eval_notebook.py::test_eval_notebook_passes_every_check` executes every code cell headlessly and fails if any recorded check fails or if a registered tool is never exercised; `make eval` runs it and prints the per-tool roll-up (a machine-readable copy lands in `notebooks/.eval_artifacts/eval_report.json`). It is marked `eval` and excluded from the default `pytest` run so `make test` stays fast — `make all` runs both. A structural guard (`test_notebook_is_structurally_valid`) runs with the normal suite and fails if the notebook stops parsing, compiles, or has stored outputs.
+- **Where parameter documentation lives**: the MCP SDK builds each tool's `inputSchema` from the **function signature**, not from Pydantic models. Descriptions therefore belong on `Annotated[..., Field(description=...)]` in the signature; a description added only to an input model never reaches the host. The Pydantic models in each `tools/` module are for *validation* only (they are what raises `ValidationError` on bad arguments), and they deliberately carry no `description=`. `tests/test_tool_schemas.py` fails the build if a parameter reaches the wire undocumented, or if a body constraint (e.g. `ge=1, le=50`) is missing from the schema.
+- **Linting/typing**: `ruff` (E/F/I/UP/B/SIM/RUF), `mypy` and `basedpyright` all run clean over `src/`, `tests/` and the evaluation notebook, via `uv run ruff check .`, `uv run mypy` and `uv run basedpyright`. There are **no per-file suppressions for source code and no `ignore_errors` overrides**: the temporary debt from the earlier milestones has been removed rather than relocated. The only remaining ignore is `E402` on the notebook, where a cell must set environment flags before importing `msmcp`.
 - **Formatting**: `ruff format`, line length 88, PEP 695 syntax, `from __future__ import annotations` throughout.
 
 ## Repository layout
 
 ```text
 msmcp/
-├── Makefile                     # install · format · lint · test · run
 ├── pyproject.toml               # deps, dev extras, ruff/mypy/pytest config
 ├── uv.lock                      # reproducible lockfile
+├── Makefile                     # developer pipeline: install/format/lint/test/eval/all
+├── README.md                    # this file
+├── ARCHITECTURE.md              # v1.0 scope, layers, limitations, acceptance criteria
 ├── src/msmcp/
 │   ├── server.py                # MCPServer transport layer + entry point
+│   ├── errors.py                # shared error taxonomy (malformed/missing/inaccessible)
+│   ├── security.py              # local file-access boundary (root, size, spectrum limits)
+│   ├── provenance.py            # structured, immutable provenance records
+│   ├── ingest.py                # format dispatch: file -> the right reader
+│   ├── mzml.py                  # dependency-free mzML reader (MSMCP-owned)
+│   ├── mgf.py                   # dependency-free MGF reader (MSMCP-owned)
+│   ├── massflow_io.py           # MassFlow-backed imzML reader + stdout-logging guard
+│   ├── state/
+│   │   ├── pointers.py          # DataReference + PointerStore (bounded, TTL, namespaces)
+│   │   └── store.py             # the process-wide store and tool-facing helpers
+│   ├── execution/
+│   │   └── executor.py          # JobExecutor interface + LocalAsyncExecutor
 │   ├── models/
-│   │   ├── embeddings.py        # SpectralEmbedder ABC + deterministic fallbacks
+│   │   ├── embeddings.py        # SpectralEmbedder ABC + test/dev-only deterministic mocks
 │   │   └── backends.py          # real-inference adapters (DreaMS/LSM-MS2) + resolver
 │   └── tools/
-│       ├── io.py                # mzML/mgf ingestion summaries
+│       ├── io.py                # ingestion, data references, compact summaries
 │       ├── chem.py              # adduct shifts, isotope annotation
 │       ├── similarity.py        # ppm validation, classical + embedding cosine
-│       ├── qc.py                # QC metrics + pipeline routing
-│       └── search.py            # in-process async job store + library scan
+│       ├── qc.py                # truthful QC metrics
+│       └── search.py            # executor-backed library scan
+├── notebooks/
+│   ├── eval_msmcp.ipynb         # end-to-end evaluation/benchmark suite (see `make eval`)
+│   └── .eval_artifacts/         # generated mzML fixtures + eval_report.json (gitignored)
 └── tests/
-    ├── conftest.py              # hermetic fixtures + registered-tool harness
+    ├── conftest.py              # hermetic fixtures (mzML, MGF, imzML) + tool harness
     ├── test_chem.py
     ├── test_similarity.py
     ├── test_embeddings.py
     ├── test_search.py
-    └── smoke_stdio.py           # end-to-end JSON-RPC session over a real stdio pipe
+    ├── test_security.py
+    ├── test_mzml.py
+    ├── test_mgf.py
+    ├── test_ingest.py           # format dispatch + MassFlow imzML integration
+    ├── test_qc.py
+    ├── test_pointers.py         # the data-reference store
+    ├── test_provenance.py
+    ├── test_executor.py         # the JobExecutor contract
+    ├── test_workflow.py         # end-to-end: load -> reference -> search -> provenance
+    ├── test_tool_schemas.py     # wire contract: titles, annotations, param docs, constraint drift
+    ├── test_eval_notebook.py    # runs the eval notebook headlessly (`make eval`)
+    └── test_smoke_stdio.py      # end-to-end JSON-RPC session over a real stdio pipe
 ```
 
 ## Known limitations & roadmap
 
-- **MCP SDK migration (complete)**: the current `mcp>=2` SDK line removed the legacy `FastMCP` API; `src/msmcp/server.py` targets the `MCPServer` API (`mcp.server.mcpserver`). The analytical engines and tests are transport-agnostic.
-- **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 awaits a public weights release; its adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`mock` / `auto` / `hf`).
-- **In-process job state**: search jobs live in server memory and do not survive a restart; a durable orchestrator (e.g. Prefect or a job queue) is the roadmap item for restart-safe, multi-process execution.
-- **Synthetic analysis data (current)**: `search_library` and `generate_qc_summary` run their full pipelines on deterministic synthetic data seeded from their path arguments — an in-memory SQLite library of 500–5 000 spectra for the search, a synthetic metric dataset for QC. The `experimental_file` / `database_file` / `file_path` arguments are validated but not yet read; everything downstream (chunked scanning, scoring, FDR / empirical p-values, report formatting) is real. Treat current reports as pipeline demonstrations, not identifications of real data.
-- **Real vendor/library I/O (roadmap)**: wire `massflow` parsing of real `.mzML`/`.mgf` files into the tools (replacing the development mocks) and open user-supplied SQLite spectral libraries in `search_library`.
+- **Search is half real, and says which half**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. The **library** is still synthetic — MSMCP has no spectral-library reader, because MassFlow exposes none and inventing a library format would be worse than admitting the gap. `database_file` is not opened; a deterministic in-memory library is generated from that string, and the report carries a banner saying so ahead of any hit table. Closing this is the first v1.1 item.
+- **In-process job state**: jobs live in server memory and do not survive a restart; the poller reports a lost job as failed rather than pending. A durable executor is a drop-in `JobExecutor` implementation.
+- **MCP Tasks are not dispatchable by the installed SDK**: `mcp` 2.1.1 ships the Tasks types but omits `tasks/get`, `tasks/result` and `tasks/cancel` from its request unions, so no server can answer them. MSMCP keeps its snapshots in the MCP `Task` shape and exposes the semantics through `check_search_status` instead of inventing a protocol.
+- **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself, because MassFlow 0.1.x is imaging-only. `.imzML` goes through MassFlow. Vendor formats are refused with conversion guidance.
+- **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 awaits a public weights release; its adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
+- **Whole-slide images**: MassFlow materialises one placeholder per pixel when loading an imzML acquisition, so very large images are bounded by MassFlow's own behaviour.
+- **MS-Numpress-compressed mzML arrays** need the optional `pynumpress` package and report a missing-dependency error without it.
+- **Hardware control is out of scope for v1.0.** There is no instrument-control code in this repository; if it is added later it must sit behind an independent, deterministic safety/interlock layer, so the MCP application layer is never the only barrier between a model and physical hardware.
+
+See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full limitations list and the v1.0 acceptance criteria.
 
 ## Security notes
 
 MSMCP is a **local, single-user server**: the MCP host spawns it as a child process with your credentials, so anything the server can do, a misused agent can do too. Keep these boundaries in mind:
 
 - **Trust boundary** — anyone who can drive the LLM client can drive the server. Run it only on machines you own; it speaks stdio by design and must never be exposed as a network service.
-- **File access** — `load_mzml_summary` reads whatever path the model names (when `massflow` is installed). Don't attach this server to an agent that may be prompted to read sensitive files.
+- **File access** — every file-reading tool (`load_mzml_summary`, `load_spectrum`, `generate_qc_summary`, and `search_library`'s query) is confined to a single allowed root directory (`src/msmcp/security.py`). The default root is the server's working directory, override it with `MSMCP_ALLOWED_ROOT`. Paths that resolve outside that root — including symlinks that point outside it — are rejected with `PathEscapeError`, and for imzML the paired `.ibd` payload is checked against the same root. Files are also capped by a size limit (`MSMCP_MAX_FILE_SIZE_BYTES`, default 500 MiB) and a per-request spectrum-count limit (`MSMCP_MAX_SPECTRA`). Access failures are reported truthfully and distinctly (`InaccessiblePathError` for missing/unreadable paths, `MalformedFileError` for unparseable data, `UnsupportedFormatError` for vendor formats, `MissingDependencyError` when an optional decoder is absent) rather than as a generic failure.
+- **Server-side data** — registered references are bounded (`MSMCP_MAX_REFERENCES`, `MSMCP_MAX_TOTAL_BYTES`), expire after `MSMCP_REFERENCE_TTL_SECONDS` (default 3600), are held read-only, and are namespaced. Exceeding a limit refuses the request; it never silently discards data a caller still holds. Reference identifiers are opaque random tokens, never object ids, addresses or paths.
+- **Execution** — concurrent jobs are capped by the executor (default 4). A cancelled job's partial output is discarded rather than returned.
 - **Checkpoint loading** — the LSM-MS2 adapter deserialises a checkpoint file (`torch.jit.load`, falling back to `torch.load` with `weights_only=True`); checkpoint files can execute arbitrary code, so only point `MSMCP_LSM_MS2_CKPT` at files you trust. A checkpoint that needs full-pickle loading is **rejected unless `MSMCP_LSM_MS2_ALLOW_UNSAFE=1` explicitly opts in** — that fallback (`torch.load` without `weights_only`) can execute arbitrary code from the file. The DreaMS adapter downloads pre-trained weights from the upstream repository on first use — pin the `dreams` install to a commit you trust.
+- **Dependency side effects** — importing MassFlow's data manager reconfigures the Python root logger to write to stdout and creates a `logs/` directory in the working directory. MSMCP neutralises the first (it would corrupt the stdio framing) and documents the second. See [Supported input formats](#supported-input-formats).
 - **No secrets** — the server stores no credentials, requires no API keys, and makes no network calls of its own.
+
+## Configuration reference
+
+| Variable | Default | Effect |
+|---|---|---|
+| `MSMCP_ALLOWED_ROOT` | process working directory | Filesystem root every file-reading tool is confined to |
+| `MSMCP_MAX_FILE_SIZE_BYTES` | 500 MiB | Per-file size ceiling |
+| `MSMCP_MAX_SPECTRA` | 1000 | Spectra a single request may ask to process |
+| `MSMCP_MAX_REFERENCES` | 128 | Live server-side data references |
+| `MSMCP_MAX_TOTAL_BYTES` | 512 MiB | Summed payload size held by the reference store |
+| `MSMCP_REFERENCE_TTL_SECONDS` | 3600 | Reference lifetime (`0` disables expiry) |
+| `MSMCP_EMBEDDING_BACKEND` | `real` | `real` requires real inference; `mock` selects the test/dev-only stand-ins |
+| `MSMCP_LSM_MS2_CKPT` | unset | Path to a bring-your-own LSM-MS2 checkpoint |
+| `MSMCP_LSM_MS2_ALLOW_UNSAFE` | unset | `1` opts into full-pickle checkpoint loading (unsafe) |
 
 ---
 

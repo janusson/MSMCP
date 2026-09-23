@@ -1,17 +1,21 @@
-"""Tests for the async job-store spectral library search tools.
+"""Tests for the executor-backed spectral library search tools.
 
-Covers the dispatcher/poller contract (``search_library`` records a job in
-``_JOB_STORE`` and spawns ``_run_search_task``; ``check_search_status`` polls
-the store), the scorer routing (classical vs. foundation-model embeddings),
-and the report builder behind the CPU-bound scan.
+Covers the dispatcher/poller contract (``search_library`` submits to the
+:class:`~msmcp.execution.executor.JobExecutor`; ``check_search_status`` polls
+it), the scorer routing (classical vs. foundation-model embeddings), the
+truthfulness of the synthetic-library banner, and the negative paths
+(malformed / missing / unreferenced queries).
+
+The query spectrum is always real data now, so the round-trip tests feed the
+tools a genuine mzML fixture rather than a path string.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import ClassVar
 
 import numpy as np
@@ -19,23 +23,49 @@ import pytest
 from pydantic import ValidationError
 
 from msmcp.models.embeddings import DreaMSEmbedder, LSMMS2Embedder
+from msmcp.state import store as reference_store
+from msmcp.state.pointers import UnknownReferenceError
 from msmcp.tools import search
 from msmcp.tools.search import (
+    SearchRequest,
     _build_mock_database,
-    _build_report,
     _build_scorer,
     _cosine,
-    _mock_load_experimental,
+    _run_scan,
     _scoring_label,
 )
 from msmcp.tools.similarity import _cosine as _vector_cosine
 
-EXP_FILE = "experimental/test_spectrum.mzML"
 DB_FILE = "library/test_library.db"
+
+QUERY_PEAKS: list[tuple[float, float]] = [
+    (110.0713, 40.0),
+    (120.0808, 100.0),
+    (136.0757, 60.0),
+    (500.1, 55.0),
+]
+
+
+def _scan(
+    database_file: str = DB_FILE,
+    scoring_method: str = "classical",
+    peaks: list[tuple[float, float]] | None = None,
+    *,
+    experimental_file: str | None = "experimental/test_spectrum.mzML",
+) -> str:
+    """Run the CPU-bound scan directly with real query peaks."""
+    return _run_scan(
+        SearchRequest(
+            database_file=database_file,
+            experimental_peaks=tuple(peaks if peaks is not None else QUERY_PEAKS),
+            scoring_method=scoring_method,  # type: ignore[arg-type]
+            experimental_file=experimental_file,
+        )
+    ).report
 
 
 # ---------------------------------------------------------------------------
-# Search components — mock database, experimental loader, report builder
+# Search components — synthetic library, report builder
 # ---------------------------------------------------------------------------
 class TestSearchComponents:
     def test_mock_database_schema_and_rows(self) -> None:
@@ -48,16 +78,9 @@ class TestSearchComponents:
         finally:
             conn.close()
 
-    def test_mock_experimental_loader(self) -> None:
-        peaks = _mock_load_experimental(EXP_FILE)
-        assert len(peaks) >= 15
-        for mz, intensity in peaks:
-            assert mz > 0.0
-            assert intensity > 0.0
-
-    def test_build_report_well_formed(self) -> None:
+    def test_scan_report_well_formed(self) -> None:
         """The report builder renders a complete Markdown report."""
-        report = _build_report(EXP_FILE, DB_FILE, "classical")
+        report = _scan()
         assert "## Spectral Library Search Results" in report
         assert "Scoring method: classical (greedy peak matching, ±0.02 Da)" in report
         # The synthetic library is hash-seeded per process, so the number of
@@ -66,6 +89,11 @@ class TestSearchComponents:
         assert ("| Rank | Compound" in report) or (
             "No hits passed the significance threshold" in report
         )
+
+    def test_scan_requires_a_non_empty_query(self) -> None:
+        """An empty query is a programming error, not a zero-score search."""
+        with pytest.raises(search.MsmcpError, match="no peaks"):
+            _scan(peaks=[])
 
 
 # ---------------------------------------------------------------------------
@@ -118,16 +146,28 @@ class TestScorerRouting:
             "classical (greedy peak matching, ±0.02 Da)"
         )
         assert _scoring_label("dreams") == (
-            "DreaMS deep embedding (1024-d, deterministic fallback)"
+            "DreaMS deep embedding (1024-d, mock (dev/test-only, not a learned model))"
         )
         assert _scoring_label("lsm-ms2") == (
-            "LSM-MS2 deep embedding (1024-d, deterministic fallback)"
+            "LSM-MS2 deep embedding (1024-d, mock (dev/test-only, not a learned model))"
         )
 
 
 # ---------------------------------------------------------------------------
-# Dispatcher → poller round trip against the in-process job store
+# Dispatcher → poller round trip against the executor
 # ---------------------------------------------------------------------------
+@pytest.fixture()
+def query_mzml(valid_mzml: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A real mzML fixture the search tools are allowed to read."""
+    from msmcp import ingest
+    from msmcp.security import SecurityPolicy
+
+    monkeypatch.setattr(
+        ingest, "DEFAULT_POLICY", SecurityPolicy(allowed_root=valid_mzml.parent)
+    )
+    return valid_mzml
+
+
 class TestSearchDispatcherAndPoller:
     async def _poll_until_final(
         self,
@@ -148,16 +188,17 @@ class TestSearchDispatcherAndPoller:
         pytest.fail(f"search job {job_id} did not finish within {timeout}s")
 
     async def test_full_round_trip(
-        self, search_tools: dict[str, Callable[..., Awaitable[str]]]
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        query_mzml: Path,
     ) -> None:
         dispatched = await search_tools["search_library"](
-            experimental_file=EXP_FILE,
+            experimental_file=str(query_mzml),
             database_file=DB_FILE,
         )
         assert dispatched.startswith("## Search Dispatched")
         job_id = dispatched.split("`")[1]  # first code span is the job ID
         assert len(job_id) == 32  # uuid4 hex, no dashes
-        uuid.UUID(job_id)  # must be a valid UUID
 
         report = await self._poll_until_final(
             search_tools["check_search_status"], job_id
@@ -168,12 +209,59 @@ class TestSearchDispatcherAndPoller:
             "No hits passed the significance threshold" in report
         )
 
+    async def test_real_query_is_read_and_reported(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        query_mzml: Path,
+    ) -> None:
+        """The query spectrum is genuinely read, and the report says so."""
+        dispatched = await search_tools["search_library"](
+            experimental_file=str(query_mzml),
+            database_file=DB_FILE,
+        )
+        job_id = dispatched.split("`")[1]
+        report = await self._poll_until_final(
+            search_tools["check_search_status"], job_id
+        )
+        assert f"Query spectrum: `{query_mzml}`" in report
+        assert "real peaks, read from disk" in report
+        assert "SYNTHETIC LIBRARY" in report
+        assert "Provenance: search_library" in report
+
+    async def test_spectrum_reference_round_trip(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        query_mzml: Path,
+    ) -> None:
+        """A registered spectrum can drive a search without re-uploading peaks."""
+        from msmcp import ingest
+
+        source = ingest.resolve_source(query_mzml)
+        spectrum = next(iter(source.iter_spectra()))
+        reference = reference_store.store_spectrum(spectrum)
+        try:
+            dispatched = await search_tools["search_library"](
+                spectrum_reference=reference.identifier,
+                database_file=DB_FILE,
+            )
+            assert dispatched.startswith("## Search Dispatched")
+            job_id = dispatched.split("`")[1]
+            report = await self._poll_until_final(
+                search_tools["check_search_status"], job_id
+            )
+            assert f"reference `{reference.identifier}`" in report
+            assert "held server-side" in report
+        finally:
+            reference_store.release(reference.identifier)
+
     async def test_dreams_embedding_round_trip(
-        self, search_tools: dict[str, Callable[..., Awaitable[str]]]
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        query_mzml: Path,
     ) -> None:
         """An embedding-scored search states the model in its report."""
         dispatched = await search_tools["search_library"](
-            experimental_file=EXP_FILE,
+            experimental_file=str(query_mzml),
             database_file=DB_FILE,
             scoring_method="dreams",
         )
@@ -181,21 +269,26 @@ class TestSearchDispatcherAndPoller:
         report = await self._poll_until_final(
             search_tools["check_search_status"], job_id
         )
-        assert "## Spectral Library Search Results" in report
         assert (
-            "Scoring method: DreaMS deep embedding (1024-d, deterministic fallback)"
-            in report
-        )
-        assert ("| Rank | Compound" in report) or (
-            "No hits passed the significance threshold" in report
+            "Scoring method: DreaMS deep embedding (1024-d, "
+            "mock (dev/test-only, not a learned model))" in report
         )
 
     async def test_unknown_job_id(
         self, search_tools: dict[str, Callable[..., Awaitable[str]]]
     ) -> None:
-        out = await search_tools["check_search_status"](job_id=uuid.uuid4().hex)
-        assert out.startswith("❓ **Unknown Job**")
-        assert "No search job found" in out
+        """A well-formed ID with no record is a terminal failure.
+
+        The poller must treat an absent job as failed (e.g. after a server
+        restart or post-TTL cleanup) rather than as an ambiguous "unknown"
+        state it could loop on forever; only malformed IDs are "unknown".
+        """
+        import uuid
+
+        job_id = uuid.uuid4().hex
+        out = await search_tools["check_search_status"](job_id=job_id)
+        assert out.startswith("❌ **Failed (not found)**")
+        assert f"no search job `{job_id}` exists" in out
 
     async def test_malformed_job_id(
         self, search_tools: dict[str, Callable[..., Awaitable[str]]]
@@ -212,28 +305,51 @@ class TestSearchDispatcherAndPoller:
     ) -> None:
         with pytest.raises(ValidationError):
             await search_tools["search_library"](
-                experimental_file=EXP_FILE,
+                experimental_file="a.mzML",
                 database_file=DB_FILE,
                 scoring_method=bad,
+            )
+
+    async def test_both_query_sources_rejected(
+        self, search_tools: dict[str, Callable[..., Awaitable[str]]]
+    ) -> None:
+        with pytest.raises(ValidationError, match="exactly one"):
+            await search_tools["search_library"](
+                experimental_file="a.mzML",
+                spectrum_reference="ptr:spectrum:abc",
+                database_file=DB_FILE,
+            )
+
+    async def test_neither_query_source_rejected(
+        self, search_tools: dict[str, Callable[..., Awaitable[str]]]
+    ) -> None:
+        with pytest.raises(ValidationError, match="exactly one"):
+            await search_tools["search_library"](database_file=DB_FILE)
+
+    async def test_unknown_reference_is_refused_before_dispatch(
+        self, search_tools: dict[str, Callable[..., Awaitable[str]]]
+    ) -> None:
+        import uuid
+
+        with pytest.raises(UnknownReferenceError, match="No live data reference"):
+            await search_tools["search_library"](
+                spectrum_reference=f"ptr:spectrum:{uuid.uuid4().hex}",
+                database_file=DB_FILE,
             )
 
     async def test_failed_job_returns_traceback(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
+        query_mzml: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        def explode(
-            experimental_file: str,
-            database_file: str,
-            scoring_method: str,
-            chunk_size: int = 2000,
-        ) -> str:
+        def explode(request: SearchRequest) -> None:
             raise RuntimeError("synthetic library generation failure")
 
-        monkeypatch.setattr(search, "_build_report", explode)
+        monkeypatch.setattr(search, "_run_scan", explode)
 
         dispatched = await search_tools["search_library"](
-            experimental_file=EXP_FILE,
+            experimental_file=str(query_mzml),
             database_file=DB_FILE,
         )
         job_id = dispatched.split("`")[1]
@@ -251,44 +367,46 @@ class TestSearchDispatcherAndPoller:
     ) -> None:
         with pytest.raises(ValidationError):
             await search_tools["search_library"](
-                experimental_file=EXP_FILE,
+                experimental_file="a.mzML",
                 database_file=DB_FILE,
                 chunk_size=bad,
             )
 
-    async def test_schedule_cleanup_expires_job(self) -> None:
-        """A finished job is removed from the store once the TTL elapses."""
-        job_id = uuid.uuid4().hex
-        search._JOB_STORE[job_id] = search.SearchJob(
-            job_id=job_id,
-            experimental_file=EXP_FILE,
-            database_file=DB_FILE,
-            scoring_method="classical",
-        )
-
-        await search._schedule_cleanup(job_id, delay_sec=0)
-        assert job_id not in search._JOB_STORE
-
-    async def test_run_search_task_schedules_cleanup(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
+    async def test_completed_job_is_expired_after_its_ttl(
+        self, search_tools: dict[str, Callable[..., Awaitable[str]]], query_mzml: Path
     ) -> None:
-        """The task's ``finally`` spawns a TTL cleanup for the finished job."""
-        cleaned: list[str] = []
-
-        async def fake_cleanup(job_id: str, delay_sec: int = 3600) -> None:
-            cleaned.append(job_id)
-
-        monkeypatch.setattr(search, "_schedule_cleanup", fake_cleanup)
-        job_id = uuid.uuid4().hex
-        search._JOB_STORE[job_id] = search.SearchJob(
-            job_id=job_id,
-            experimental_file=EXP_FILE,
+        """A finished job is dropped by the executor once its TTL elapses."""
+        dispatched = await search_tools["search_library"](
+            experimental_file=str(query_mzml),
             database_file=DB_FILE,
-            scoring_method="classical",
         )
+        job_id = dispatched.split("`")[1]
+        await self._poll_until_final(search_tools["check_search_status"], job_id)
 
-        await search._run_search_task(job_id, EXP_FILE, DB_FILE, "classical")
-        await asyncio.sleep(0)  # let the spawned cleanup task run
-        assert cleaned == [job_id]
-        assert search._JOB_STORE[job_id].status == "completed"
+        # The record is retained for its TTL, then swept.
+        assert search._EXECUTOR.status(job_id).is_terminal
+        record = search._EXECUTOR._records[job_id]
+        record.deadline = 0.0  # already elapsed
+        assert search._EXECUTOR.purge_expired() >= 1
+
+        out = await search_tools["check_search_status"](job_id=job_id)
+        assert out.startswith("❌ **Failed (not found)**")
+
+
+# ---------------------------------------------------------------------------
+# Truthfulness of the banner
+# ---------------------------------------------------------------------------
+def test_report_banner_precedes_the_hit_table() -> None:
+    """A synthetic-library hit table must say so, in the report itself."""
+    report = _scan()
+    assert "SYNTHETIC LIBRARY" in report
+    assert "NOT A COMPOUND IDENTIFICATION" in report
+    assert report.index("SYNTHETIC LIBRARY") < report.index("| Rank | Compound")
+    assert "not opened" in report
+
+
+@pytest.mark.parametrize("method", ["classical", "dreams", "lsm-ms2"])
+def test_report_builder_is_well_formed_for_every_scorer(method: str) -> None:
+    report = _scan(scoring_method=method)
+    assert report.startswith(">")
+    assert "SYNTHETIC LIBRARY" in report

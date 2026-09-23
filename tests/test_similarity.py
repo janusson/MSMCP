@@ -275,7 +275,7 @@ class TestComputeCosineEmbeddings:
         assert "Cosine Similarity (DreaMS): **1.0000**" in out
         assert (
             "Scoring method: DreaMS deep embedding "
-            "(1024-d, L2-normalised, deterministic fallback)"
+            "(1024-d, L2-normalised, mock (dev/test-only, not a learned model))"
         ) in out
         assert "Matched:" not in out  # no per-peak counts in embedding space
 
@@ -288,7 +288,8 @@ class TestComputeCosineEmbeddings:
         )
         assert "Cosine Similarity (LSM-MS2): **1.0000**" in out
         assert (
-            "LSM-MS2 deep embedding (1024-d, L2-normalised, deterministic fallback)"
+            "LSM-MS2 deep embedding (1024-d, L2-normalised, "
+            "mock (dev/test-only, not a learned model))"
         ) in out
 
     def test_disjoint_spectra_score_zero_in_embedding_space(

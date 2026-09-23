@@ -45,8 +45,14 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+# `-ra` shows a summary of skips/failures; the `eval` marker is excluded here so
+# `make test` stays a fast unit run.  `make eval` (or an explicit `-m eval` on
+# the command line, which wins over addopts) runs the notebook suite.
+addopts = "-ra -m 'not eval'"
 asyncio_mode = "auto"
+markers = [
+    "eval: executes notebooks/eval_msmcp.ipynb end to end (slow; run via `make eval`)",
+]
 
 [tool.ruff]
 target-version = "py313"
@@ -59,15 +65,11 @@ extend-exclude = ["MCP server configuration.md"]
 select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-# Pre-existing findings in src/ (documented debt).  This step only adds the
-# testing/tooling infrastructure; src/ is intentionally left untouched and
-# these suppressions should be removed one-by-one as the code is cleaned up.
-"src/msmcp/__init__.py" = ["RUF002"]
-"src/msmcp/tools/__init__.py" = ["RUF002"]
-"src/msmcp/tools/chem.py" = ["B905", "F841", "RUF002", "RUF003"]
-"src/msmcp/tools/io.py" = ["F541", "RUF001", "RUF003", "RUF023"]
-"src/msmcp/tools/qc.py" = ["B007", "F841", "RUF001", "RUF003", "RUF005", "SIM114"]
-"src/msmcp/tools/similarity.py" = ["RUF002"]
+# Notebook cells run setup (environment flags, sys.path bootstrap) *before*
+# importing the package under test, so `import msmcp` cannot sit at the top of
+# a cell.  The notebook is otherwise lint-, format- and type-clean, and
+# `make eval` executes it end to end.
+"notebooks/*.ipynb" = ["E402"]
 
 [tool.mypy]
 python_version = "3.13"
@@ -83,16 +85,10 @@ warn_redundant_casts = true
 module = ["rdkit", "massflow.*", "torch"]
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-# Pre-existing type errors in src/ (documented debt; src/ is not modified in
-# this step).  Remove once the mock I/O layer is refactored.
-module = "msmcp.tools.io"
-ignore_errors = true
-
 [tool.basedpyright]
 # Mirrors the defaults of the Zed language server so `make lint` catches the
 # same error classes (import cycles, missing imports, abstract instantiation)
-# that the editor reports.  Only errors fail the build; the remaining warnings
-# are tracked as debt alongside the ruff/mypy suppressions above.
+# that the editor reports.  No warnings are tolerated as "debt": src/, tests/
+# and the evaluation notebook all check clean at this setting.
 typeCheckingMode = "standard"
 pythonVersion = "3.13"

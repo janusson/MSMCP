@@ -1,8 +1,6 @@
 """Real PyTorch inference backends for the spectral embedding adapters.
 
-The deterministic stand-ins in :mod:`msmcp.models.embeddings` keep the MCP
-server fully operational without heavyweight model dependencies.  This
-module provides the real-inference counterparts behind the same
+This module provides the real-inference counterparts behind the same
 :class:`~msmcp.models.embeddings.SpectralEmbedder` contract:
 
 * :class:`DreaMSInferenceEmbedder` - the official DreaMS transformer
@@ -30,10 +28,13 @@ CPU-bound and runs inside the worker threads of the search dispatcher.
 
 Embedder resolution
 -------------------
-:func:`get_embedder` selects between the deterministic mock embedders in
-:mod:`msmcp.models.embeddings` and the real-inference adapters below based
-on the ``MSMCP_EMBEDDING_BACKEND`` environment variable (``mock`` |
-``auto`` | ``hf``).
+:func:`get_embedder` selects between the real-inference adapters below and
+the deterministic *mock* embedders in :mod:`msmcp.models.embeddings` based
+on the ``MSMCP_EMBEDDING_BACKEND`` environment variable (``real`` |
+``mock``).  ``real`` is the production default and raises
+:class:`EmbeddingBackendUnavailable` when a model is unavailable; ``mock``
+is the explicit test/dev-only flag for the deterministic mocks and must not
+be used for scientific results.
 """
 
 from __future__ import annotations
@@ -429,29 +430,51 @@ HF_EMBEDDERS: dict[str, type[SpectralEmbedder]] = {
 
 
 # ======================================================================
-# Embedder resolution (deterministic mock fallback vs. real inference)
+# Embedder resolution (strict real inference vs. test/dev-only mock)
 # ======================================================================
-BACKEND_MODES: tuple[str, ...] = ("auto", "mock", "hf")
-"""Valid values for the ``MSMCP_EMBEDDING_BACKEND`` environment variable."""
+BACKEND_MODES: tuple[str, ...] = ("real", "mock")
+"""Valid values for the ``MSMCP_EMBEDDING_BACKEND`` environment variable.
+
+``real`` (default) requires real inference and raises when unavailable;
+``mock`` selects the test/dev-only deterministic mocks.
+"""
+
+_LEGACY_BACKEND_MODES: dict[str, str] = {"auto": "real", "hf": "real"}
+"""Legacy mode spellings kept as strict ``real`` aliases."""
 
 _EMBEDDER_REGISTRY: dict[str, type[SpectralEmbedder]] = {
     "dreams": DreaMSEmbedder,
     "lsm-ms2": LSMMS2Embedder,
 }
-"""Deterministic mock embedder classes keyed by the registered method names."""
+"""Deterministic mock embedder classes keyed by the registered method names.
+
+These are test/dev-only and are selected only under ``mode == 'mock'``.
+"""
 
 
 def _resolve_backend_mode(backend: str | None) -> str:
-    """Resolve the effective backend mode from *backend* or the environment."""
-    mode = backend or os.environ.get("MSMCP_EMBEDDING_BACKEND", "auto")
-    if mode not in BACKEND_MODES:
+    """Resolve the effective backend mode from *backend* or the environment.
+
+    Defaults to ``"real"`` (strict production).  Legacy ``"auto"`` / ``"hf"``
+    spellings are aliases for ``"real"``; anything unrecognised is treated as
+    strict ``"real"`` so a typo can never silently enable the mocks.
+    """
+    raw = backend or os.environ.get("MSMCP_EMBEDDING_BACKEND", "real")
+    if raw in BACKEND_MODES:
+        return raw
+    if raw in _LEGACY_BACKEND_MODES:
         logger.warning(
-            "Unknown embedding backend mode %r (expected %s); using 'auto'",
-            mode,
-            ", ".join(BACKEND_MODES),
+            "Embedding mode %r is deprecated; use %r (strict real inference)",
+            raw,
+            _LEGACY_BACKEND_MODES[raw],
         )
-        return "auto"
-    return mode
+        return _LEGACY_BACKEND_MODES[raw]
+    logger.warning(
+        "Unknown embedding backend mode %r (expected %s); using strict 'real'",
+        raw,
+        ", ".join(BACKEND_MODES),
+    )
+    return "real"
 
 
 def get_embedder(method: str, backend: str | None = None) -> SpectralEmbedder:
@@ -463,19 +486,19 @@ def get_embedder(method: str, backend: str | None = None) -> SpectralEmbedder:
         Registered embedding method (``"dreams"``, ``"lsm-ms2"``).
     backend
         Backend selection overriding the ``MSMCP_EMBEDDING_BACKEND``
-        environment variable.  ``"auto"`` (default) uses real inference when
-        the model package / checkpoint is available and falls back to the
-        deterministic mock otherwise; ``"mock"`` always uses the
-        deterministic fallback; ``"hf"`` requires real inference and raises
+        environment variable.  ``"real"`` (default) requires real inference
+        and raises
         :class:`~msmcp.models.backends.EmbeddingBackendUnavailable` with
-        install instructions when it is not available.
+        install instructions when it is not available.  ``"mock"`` is the
+        explicit test/dev-only flag for the deterministic mocks and must not
+        be used for scientific results.
 
     Raises
     ------
     ValueError
         If *method* is not a registered embedding method.
     msmcp.models.backends.EmbeddingBackendUnavailable
-        In ``"hf"`` mode when the real backend cannot be loaded.
+        In production (``"real"``) when the real backend cannot be loaded.
     """
     try:
         mock_cls = _EMBEDDER_REGISTRY[method]
@@ -487,20 +510,14 @@ def get_embedder(method: str, backend: str | None = None) -> SpectralEmbedder:
 
     mode = _resolve_backend_mode(backend)
     if mode == "mock":
+        logger.warning(
+            "Using the %s deterministic mock embedder for tests/development "
+            "only; it is not a learned model and must not be used for "
+            "scientific results.",
+            method,
+        )
         return mock_cls()
 
     hf_cls = HF_EMBEDDERS[method]
-    try:
-        hf_cls.check_available()
-    except EmbeddingBackendUnavailable as exc:
-        if mode == "hf":
-            raise
-        logger.warning(
-            "Real %s inference unavailable (%s); falling back to the "
-            "deterministic mock.  Set MSMCP_EMBEDDING_BACKEND=mock to "
-            "silence this warning.",
-            method,
-            exc,
-        )
-        return mock_cls()
+    hf_cls.check_available()  # raises EmbeddingBackendUnavailable if missing
     return hf_cls()

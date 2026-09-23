@@ -4,20 +4,24 @@ Scoring backends
 ----------------
 * ``classical`` - greedy one-to-one peak matching within a Da tolerance,
   scored with cosine similarity on the matched intensities.
-* ``dreams`` / ``lsm-ms2`` - whole-spectrum embeddings produced by the
-  foundation-model adapters in :mod:`msmcp.models.embeddings`, scored with
-  cosine similarity in 1024-dimensional embedding space.
+* ``dreams`` / ``lsm-ms2`` - whole-spectrum embeddings produced by the real
+  foundation-model adapters in :mod:`msmcp.models.backends`.  These require
+  real inference; when a backend is unavailable in production mode, the tool
+  raises
+  :class:`~msmcp.models.backends.EmbeddingBackendUnavailable` instead of
+  returning a result that looks learned.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import numpy as np
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
-from msmcp.models import get_embedder
+from msmcp.models import EmbeddingBackendUnavailable, get_embedder
 
 logger = logging.getLogger("msmcp.tools.similarity")
 
@@ -28,44 +32,17 @@ logger = logging.getLogger("msmcp.tools.similarity")
 class ValidatePrecursorInput(BaseModel):
     """Input for the validate_precursor tool."""
 
-    theoretical_mass: float = Field(
-        ...,
-        gt=0.0,
-        description="Exact monoisotopic mass of the hypothesised compound (Da).",
-    )
-    experimental_mass: float = Field(
-        ...,
-        gt=0.0,
-        description="Experimentally observed precursor m/z (Da).",
-    )
+    theoretical_mass: float = Field(..., gt=0.0)
+    experimental_mass: float = Field(..., gt=0.0)
 
 
 class ComputeCosineInput(BaseModel):
     """Input for the compute_cosine tool."""
 
-    query_peaks: list[list[float]] = Field(
-        ...,
-        min_length=1,
-        description="Query spectrum peaks as [[m/z, intensity], ...].",
-    )
-    reference_peaks: list[list[float]] = Field(
-        ...,
-        min_length=1,
-        description="Reference spectrum peaks as [[m/z, intensity], ...].",
-    )
-    ms2_tolerance: float = Field(
-        default=0.02,
-        gt=0.0,
-        le=1.0,
-        description="m/z matching tolerance in Da (default 0.02).",
-    )
-    scoring_method: Literal["classical", "dreams", "lsm-ms2"] = Field(
-        default="classical",
-        description=(
-            "Scoring method: 'classical' greedy peak matching, or deep "
-            "foundation-model embeddings ('dreams' / 'lsm-ms2')."
-        ),
-    )
+    query_peaks: list[list[float]] = Field(..., min_length=1)
+    reference_peaks: list[list[float]] = Field(..., min_length=1)
+    ms2_tolerance: float = Field(default=0.02, gt=0.0, le=1.0)
+    scoring_method: Literal["classical", "dreams", "lsm-ms2"] = "classical"
 
 
 # ======================================================================
@@ -107,9 +84,9 @@ def _match_peaks(
 
     Returns
     -------
-    q_intensities : (K,) float64  – intensity vector for matched query peaks
-    r_intensities : (K,) float64  – intensity vector for matched ref peaks
-    unmatched_q   : list[int]     – indices of query peaks with no match
+    q_intensities : (K,) float64  - intensity vector for matched query peaks
+    r_intensities : (K,) float64  - intensity vector for matched ref peaks
+    unmatched_q   : list[int]     - indices of query peaks with no match
     """
     # Sort reference by m/z for binary-search acceleration
     ref_order = np.argsort(reference[:, 0])
@@ -188,6 +165,8 @@ def _embedding_score(
     try:
         q_emb = embedder.embed_spectrum(query)
         r_emb = embedder.embed_spectrum(reference)
+    except EmbeddingBackendUnavailable:
+        raise  # availability failures must not be swallowed into a string
     except Exception as exc:  # adapters must never crash the tool
         logger.warning("%s embedding failed: %s", embedder.name, exc)
         return f"ERROR: {embedder.name} embedding failed: {exc}"
@@ -204,9 +183,7 @@ def _embedding_score(
     else:
         score = float(np.dot(u / u_norm, v / v_norm))
 
-    backend_label = (
-        "real inference" if embedder.backend == "hf" else "deterministic fallback"
-    )
+    backend_label = embedder.backend_label
 
     logger.info(
         "compute_cosine(method=%s, query=%d, ref=%d) → %.4f",
@@ -238,13 +215,43 @@ def register_tools(mcp: Any) -> None:
     # ------------------------------------------------------------------
     # Tool: validate_precursor
     # ------------------------------------------------------------------
-    @mcp.tool()
-    def validate_precursor(theoretical_mass: float, experimental_mass: float) -> str:
-        """Validate an experimental precursor mass against a theoretical mass.
+    @mcp.tool(
+        title="Validate Precursor Mass",
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    def validate_precursor(
+        theoretical_mass: Annotated[
+            float,
+            Field(
+                gt=0.0,
+                description="Exact monoisotopic mass of the hypothesised compound (Da).",
+            ),
+        ],
+        experimental_mass: Annotated[
+            float,
+            Field(
+                gt=0.0,
+                description="Experimentally observed precursor m/z (Da).",
+            ),
+        ],
+    ) -> str:
+        """Check whether an observed precursor mass matches a theoretical mass.
 
-        Computes the parts-per-million mass error.  If the error exceeds
-        5.0 ppm the match is rejected — the observed spectrum is
-        physically inconsistent with the hypothesised compound.
+        Use this before interpreting an MS/MS spectrum to confirm that the
+        precursor ion is physically consistent with the hypothesised compound,
+        or to discriminate between candidate molecular formulas, adducts or
+        charge states.
+
+        Both masses must be given in daltons (Da) and must be greater than 0;
+        the theoretical mass is the exact monoisotopic mass of the neutral (or
+        already ionised) species being compared, and the experimental mass is
+        the observed precursor m/z.
+
+        Returns the parts-per-million (ppm) mass error together with a PASSED
+        or REJECTED verdict.  The match passes only when the absolute error is
+        5.0 ppm or less; a rejection means the observation is inconsistent
+        with the hypothesis and the formula, adduct assignment or instrument
+        calibration should be reconsidered.
         """
         _ = ValidatePrecursorInput(
             theoretical_mass=theoretical_mass,
@@ -286,22 +293,76 @@ def register_tools(mcp: Any) -> None:
     # ------------------------------------------------------------------
     # Tool: compute_cosine
     # ------------------------------------------------------------------
-    @mcp.tool()
+    @mcp.tool(
+        title="Compute MS/MS Cosine Similarity",
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
     def compute_cosine(
-        query_peaks: list[list[float]],
-        reference_peaks: list[list[float]],
-        ms2_tolerance: float = 0.02,
-        scoring_method: Literal["classical", "dreams", "lsm-ms2"] = "classical",
+        query_peaks: Annotated[
+            list[list[float]],
+            Field(
+                min_length=1,
+                description=(
+                    "Query spectrum peaks as [[m/z, intensity], ...]; at least "
+                    "one peak is required."
+                ),
+            ),
+        ],
+        reference_peaks: Annotated[
+            list[list[float]],
+            Field(
+                min_length=1,
+                description=(
+                    "Reference spectrum peaks as [[m/z, intensity], ...]; at "
+                    "least one peak is required."
+                ),
+            ),
+        ],
+        ms2_tolerance: Annotated[
+            float,
+            Field(
+                gt=0.0,
+                le=1.0,
+                description=(
+                    "m/z matching tolerance in Da (default 0.02); must be "
+                    "greater than 0 and at most 1.0."
+                ),
+            ),
+        ] = 0.02,
+        scoring_method: Annotated[
+            Literal["classical", "dreams", "lsm-ms2"],
+            Field(
+                description=(
+                    "Scoring method: 'classical' performs greedy one-to-one "
+                    "peak matching within ms2_tolerance, while 'dreams' and "
+                    "'lsm-ms2' compare whole-spectrum embeddings from the "
+                    "corresponding foundation model."
+                ),
+            ),
+        ] = "classical",
     ) -> str:
-        """Compute the similarity between two MS/MS peak lists.
+        """Score the similarity between an experimental MS/MS spectrum and a reference spectrum.
 
-        With *scoring_method='classical'* (default), query peaks are matched
-        to the closest reference peak within *ms2_tolerance* Da (greedy,
-        one-to-one) and the cosine score is computed on matched intensities;
-        the most intense unmatched query peaks are reported to guide
-        structural revision.  With 'dreams' or 'lsm-ms2', whole-spectrum
-        embeddings from the corresponding foundation-model adapter are
-        compared instead, capturing global fragmentation patterns.
+        Use this for spectral library matching, to rank candidate reference
+        spectra against an unknown query spectrum, or to judge how well a
+        proposed structure explains the observed fragmentation.
+
+        Peaks are supplied as [[m/z, intensity], ...] lists in daltons; each
+        list needs at least one peak, intensities must be non-negative, and
+        intensities should be on a consistent scale within each spectrum.
+
+        Returns a cosine score between 0 and 1 (1.0 means identical), the
+        number of matched peaks and the percentage of query peaks matched, and
+        a list of the most intense unmatched query peaks, which point at
+        structural differences to investigate.
+
+        With scoring_method='classical' (the default) query peaks are matched
+        to the closest unused reference peak within ms2_tolerance Da (greedy,
+        one-to-one), so the tolerance must be greater than 0 and at most 1.0.
+        With 'dreams' or 'lsm-ms2' the comparison happens in whole-spectrum
+        embedding space instead and no peak-matching counts are reported;
+        those methods need the corresponding foundation model to be installed,
+        otherwise the tool returns an error rather than a score.
         """
         _ = ComputeCosineInput(
             query_peaks=query_peaks,

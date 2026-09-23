@@ -50,7 +50,7 @@ def _peaks(rows: list[list[float]]) -> np.ndarray:
 
 
 class TestEmbedderContract:
-    """Both concrete embedders must honour the SpectralEmbedder contract."""
+    """Both deterministic mock embedders must honour the SpectralEmbedder contract."""
 
     def test_abc_cannot_be_instantiated(self) -> None:
         with pytest.raises(TypeError):
@@ -100,7 +100,7 @@ class TestEmbedderContract:
 
 
 class TestEmbeddingSemantics:
-    """Embeddings should reflect spectral content in a graded fashion."""
+    """The deterministic mocks should reflect spectral content in a graded fashion."""
 
     def test_identical_spectra_score_one(self) -> None:
         peaks = _peaks(PEPTIDE_LIKE)
@@ -133,8 +133,8 @@ class TestEmbeddingSemantics:
 
 class TestGetEmbedder:
     def test_registry_resolves_known_methods(self) -> None:
-        assert isinstance(get_embedder("dreams"), DreaMSEmbedder)
-        assert isinstance(get_embedder("lsm-ms2"), LSMMS2Embedder)
+        assert isinstance(get_embedder("dreams", backend="mock"), DreaMSEmbedder)
+        assert isinstance(get_embedder("lsm-ms2", backend="mock"), LSMMS2Embedder)
 
     def test_unknown_method_raises(self) -> None:
         with pytest.raises(ValueError, match="dreams, lsm-ms2"):
@@ -142,7 +142,7 @@ class TestGetEmbedder:
 
 
 class TestBackendResolution:
-    """get_embedder must honour MSMCP_EMBEDDING_BACKEND and degrade gracefully."""
+    """Production requires real inference; the mocks are gated behind 'mock'."""
 
     def test_mock_mode_never_touches_real_backends(
         self, monkeypatch: pytest.MonkeyPatch
@@ -152,25 +152,10 @@ class TestBackendResolution:
         assert isinstance(get_embedder("dreams"), DreaMSEmbedder)
         assert isinstance(get_embedder("lsm-ms2"), LSMMS2Embedder)
 
-    def test_auto_mode_falls_back_when_backend_unavailable(
+    def test_default_mode_raises_when_backend_unavailable(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("MSMCP_EMBEDDING_BACKEND", raising=False)
-
-        def unavailable() -> None:
-            raise EmbeddingBackendUnavailable("The DreaMS package is not installed.")
-
-        monkeypatch.setattr(
-            backends.DreaMSInferenceEmbedder, "check_available", unavailable
-        )
-        embedder = get_embedder("dreams")
-        assert isinstance(embedder, DreaMSEmbedder)
-        assert embedder.backend == "mock"
-
-    def test_hf_mode_raises_with_instructions_when_unavailable(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("MSMCP_EMBEDDING_BACKEND", "hf")
 
         def unavailable() -> None:
             raise EmbeddingBackendUnavailable("The DreaMS package is not installed.")
@@ -181,21 +166,52 @@ class TestBackendResolution:
         with pytest.raises(EmbeddingBackendUnavailable, match="DreaMS package"):
             get_embedder("dreams")
 
-    def test_auto_mode_falls_back_for_lsm_ms2_without_checkpoint(
+    def test_real_mode_raises_with_instructions_when_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MSMCP_EMBEDDING_BACKEND", "real")
+
+        def unavailable() -> None:
+            raise EmbeddingBackendUnavailable("The DreaMS package is not installed.")
+
+        monkeypatch.setattr(
+            backends.DreaMSInferenceEmbedder, "check_available", unavailable
+        )
+        with pytest.raises(EmbeddingBackendUnavailable, match="DreaMS package"):
+            get_embedder("dreams")
+
+    def test_lsm_ms2_without_checkpoint_raises_in_production(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("MSMCP_EMBEDDING_BACKEND", raising=False)
         monkeypatch.delenv("MSMCP_LSM_MS2_CKPT", raising=False)
-        embedder = get_embedder("lsm-ms2")
-        assert isinstance(embedder, LSMMS2Embedder)
-        assert embedder.backend == "mock"
+        with pytest.raises(EmbeddingBackendUnavailable, match="LSM-MS2"):
+            get_embedder("lsm-ms2")
 
-    def test_unknown_mode_is_treated_as_auto(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_legacy_hf_mode_is_strict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MSMCP_EMBEDDING_BACKEND", "hf")
+
+        def unavailable() -> None:
+            raise EmbeddingBackendUnavailable("The DreaMS package is not installed.")
+
+        monkeypatch.setattr(
+            backends.DreaMSInferenceEmbedder, "check_available", unavailable
+        )
+        with pytest.raises(EmbeddingBackendUnavailable):
+            get_embedder("dreams")
+
+    def test_unknown_mode_is_strict(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MSMCP_EMBEDDING_BACKEND", "banana")
-        # auto: backend unavailable -> deterministic mock, not an exception
-        assert isinstance(get_embedder("dreams"), DreaMSEmbedder)
+
+        def unavailable() -> None:
+            raise EmbeddingBackendUnavailable("The DreaMS package is not installed.")
+
+        monkeypatch.setattr(
+            backends.DreaMSInferenceEmbedder, "check_available", unavailable
+        )
+        # An unknown mode is treated as strict 'real', never a silent mock.
+        with pytest.raises(EmbeddingBackendUnavailable):
+            get_embedder("dreams")
 
 
 class TestDreaMSInferenceAdapter:

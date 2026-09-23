@@ -1,17 +1,17 @@
 """Spectral foundation-model embedding adapters.
 
 This module defines the :class:`SpectralEmbedder` contract and the
-deterministic, fixed-grid fallback implementations (DreaMS / LSM-MS2) that
-keep the server fully operational without ML dependencies.  Real PyTorch
-inference and the :func:`msmcp.models.backends.get_embedder` resolver live
-in :mod:`msmcp.models.backends`; the resolver picks between the
-deterministic implementations and real inference based on the
-``MSMCP_EMBEDDING_BACKEND`` environment variable (``mock`` | ``auto`` |
-``hf``), falling back to the deterministic implementations when a real
-backend is unavailable so agentic workflows always keep working.
+fixed-grid *mock* implementations (:class:`DreaMSEmbedder`,
+:class:`LSMMS2Embedder`).  The mocks exist only for tests and development:
+they are **not** learned models and must never be presented as scientific
+results.  They are reachable only when the explicit
+``MSMCP_EMBEDDING_BACKEND=mock`` flag is set; in production the resolver in
+:mod:`msmcp.models.backends` requires real inference and raises
+:class:`~msmcp.models.backends.EmbeddingBackendUnavailable` when a model is
+unavailable.
 
-Embedding scheme (deterministic fallback)
------------------------------------------
+Deterministic mock embedding scheme (test/dev-only)
+---------------------------------------------------
 1. Peaks are projected onto a fixed m/z grid (``EMBEDDING_DIM`` bins spanning
    ``MZ_SPAN`` Da) with per-model intensity compression (sqrt for DreaMS,
    log1p for LSM-MS2).
@@ -114,7 +114,8 @@ class SpectralEmbedder(ABC):
     """Human-readable model name used in tool reports."""
 
     backend: ClassVar[str] = "mock"
-    """Execution backend: ``"mock"`` (deterministic fallback) or ``"hf"``."""
+    """Execution backend: ``"mock"`` (test/dev-only deterministic mock) or
+    ``"hf"`` (real inference)."""
 
     embedding_dim: int = EMBEDDING_DIM
     """Dimensionality of the vectors returned by :meth:`embed_spectrum`.
@@ -123,13 +124,26 @@ class SpectralEmbedder(ABC):
     dimensionality overwrite it on the instance after loading.
     """
 
+    @property
+    def backend_label(self) -> str:
+        """Human-readable backend label for tool reports.
+
+        Real inference and the test/dev-only mock must never be conflated in
+        output, so reports call this property instead of reading ``backend``
+        directly.
+        """
+        if self.backend == "hf":
+            return "real inference"
+        return "mock (dev/test-only, not a learned model)"
+
     @staticmethod
     @abstractmethod
     def check_available() -> None:
         """Verify the backend can be loaded without raising.
 
-        Deterministic fallbacks are always available; real-inference
-        backends raise
+        The deterministic mock embedders are always importable, but they are
+        only reachable through the explicit ``MSMCP_EMBEDDING_BACKEND=mock``
+        flag.  Real-inference backends raise
         :class:`~msmcp.models.backends.EmbeddingBackendUnavailable` when the
         model package or checkpoint is missing.
         """
@@ -156,13 +170,13 @@ class SpectralEmbedder(ABC):
 
 
 class DreaMSEmbedder(SpectralEmbedder):
-    """DreaMS-style embedder (deterministic fallback).
+    """DreaMS-style deterministic mock embedder (test/dev-only).
 
-    Used when the real DreaMS transformer package is not installed (or the
-    ``MSMCP_EMBEDDING_BACKEND=mock`` mode is selected).  The fallback
-    projects peaks onto the fixed m/z grid with sqrt intensity compression
-    and applies content-seeded noise, sharing the interface (and the
-    determinism contract) of the real adapter.
+    This is **not** the DreaMS model.  It projects peaks onto the fixed m/z
+    grid with sqrt intensity compression and content-seeded noise solely so
+    the embedding pipeline can be exercised hermetically.  It is selected
+    only under ``MSMCP_EMBEDDING_BACKEND=mock`` and must never be reported
+    as a learned representation.
     """
 
     name: ClassVar[str] = "DreaMS"
@@ -170,7 +184,7 @@ class DreaMSEmbedder(SpectralEmbedder):
 
     @staticmethod
     def check_available() -> None:
-        """Deterministic fallbacks are always available."""
+        """The mock embedder is always importable."""
 
     def embed_spectrum(
         self, peaks: np.ndarray, precursor_mz: float | None = None
@@ -183,12 +197,13 @@ class DreaMSEmbedder(SpectralEmbedder):
 
 
 class LSMMS2Embedder(SpectralEmbedder):
-    """LSM-MS2-style embedder (deterministic fallback).
+    """LSM-MS2-style deterministic mock embedder (test/dev-only).
 
-    Used when no real LSM-MS2 checkpoint is configured (no public inference
-    weights exist upstream; see :class:`~msmcp.models.backends.LSMMS2InferenceEmbedder`).
-    The fallback mirrors the adapter contract with log1p intensity
-    compression and an LSM-MS2-specific embedding salt.
+    This is **not** the LSM-MS2 model.  It projects peaks onto the fixed m/z
+    grid with log1p intensity compression and an LSM-MS2-specific salt solely
+    so the embedding pipeline can be exercised hermetically.  It is selected
+    only under ``MSMCP_EMBEDDING_BACKEND=mock`` and must never be reported
+    as a learned representation.
     """
 
     name: ClassVar[str] = "LSM-MS2"
@@ -196,7 +211,7 @@ class LSMMS2Embedder(SpectralEmbedder):
 
     @staticmethod
     def check_available() -> None:
-        """Deterministic fallbacks are always available."""
+        """The mock embedder is always importable."""
 
     def embed_spectrum(
         self, peaks: np.ndarray, precursor_mz: float | None = None

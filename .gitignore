@@ -78,6 +78,15 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Evaluation notebook fixtures
+notebooks/.eval_artifacts/
+
+# MassFlow log directory
+#   Importing MassFlow's data manager initialises its logger, which creates a
+#   `logs/` directory in the process working directory.  That is library
+#   behaviour, not MSMCP output; see ARCHITECTURE.md "MassFlow integration".
+logs/
+
 # IPython
 profile_default/
 ipython_config.py
@@ -217,8 +226,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 repomix-output.xml
-Makefile
 .repomixignore
 
 # macOS
 .DS_Store
+drafts/
