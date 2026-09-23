@@ -403,11 +403,12 @@ v1.0 ships `LocalAsyncExecutor`: CPU-bound work dispatched with `asyncio.to_thre
 
 ## Developer ergonomics
 
-- **Testing**: 375 pytest cases across `tests/` — chemistry (exact masses against literature values, adduct validation), similarity (5.0-ppm boundary arithmetic, greedy matching, embedding semantics), embedding backends (backend resolution, hermetic real-inference pipelines with stubbed models, checkpoint-load safety gating, stdio transport protection), the **data-reference store** (`test_pointers.py`: registration, immutability, malformed/unknown/expired/wrong-kind failures, namespace isolation, byte and count ceilings, concurrent access from real threads), **provenance** (`test_provenance.py`: immutability, JSON-safety, digests, the multi-step chain), the **job executor** (`test_executor.py`: submit/status/result/cancel, non-blocking dispatch, concurrency cap, TTL sweep, traceback-carrying failures), **ingestion** (`test_mgf.py`, `test_ingest.py`: MGF parsing and its malformed inputs, format dispatch, MassFlow-backed imzML including the stdout-logging guard and a corrupt-payload path), search (a full dispatcher → executor → poller round trip, real vs. synthetic halves of the pipeline, scorer routing, cancellation, failure), mzML parsing, QC, the security boundary, the **wire contract** (`test_tool_schemas.py`), an **end-to-end workflow** (`test_workflow.py`: load → reference → summarise → search → provenance → release, plus the assertion that a 100k-peak spectrum serialises to under 4 kB), and an **end-to-end stdio smoke test** (`test_smoke_stdio.py`, the only test that drives the real transport: initialize handshake, `tools/list`, a `tools/call`, and a check that every stdout line parses as JSON-RPC). Tests run hermetically: embedding backends are pinned to the test/dev-only deterministic mocks and no network or external services are required.
+- **Testing**: 406 pytest cases across `tests/` — chemistry (exact masses against literature values, adduct validation), similarity (5.0-ppm boundary arithmetic, greedy matching, embedding semantics), **spectral scoring** (`test_scoring.py`: the `SpectrumScorer` contract and its invariants — unmatched intensity must lower the score, empty/zero-intensity spectra score 0.0 not `nan`, scorers are pure and thread-safe), embedding backends (backend resolution, hermetic real-inference pipelines with stubbed models, checkpoint-load safety gating, stdio transport protection), the **data-reference store** (`test_pointers.py`: registration, immutability, malformed/unknown/expired/wrong-kind failures, namespace isolation, byte and count ceilings, concurrent access from real threads), **provenance** (`test_provenance.py`: immutability, JSON-safety, digests, the multi-step chain), the **job executor** (`test_executor.py`: submit/status/result/cancel, non-blocking dispatch, concurrency cap, TTL sweep, traceback-carrying failures), **ingestion** (`test_mgf.py`, `test_ingest.py`: MGF parsing and its malformed inputs, format dispatch, MassFlow-backed imzML including the stdout-logging guard and a corrupt-payload path), search (a full dispatcher → executor → poller round trip, real vs. synthetic halves of the pipeline, scorer routing, cancellation, failure), mzML parsing, QC, the security boundary, the **wire contract** (`test_tool_schemas.py`), an **end-to-end workflow** (`test_workflow.py`: load → reference → summarise → search → provenance → release, plus the assertion that a 100k-peak spectrum serialises to under 4 kB), and an **end-to-end stdio smoke test** (`test_smoke_stdio.py`, the only test that drives the real transport: initialize handshake, `tools/list`, a `tools/call`, and a check that every stdout line parses as JSON-RPC). Tests run hermetically: embedding backends are pinned to the test/dev-only deterministic mocks and no network or external services are required.
 - **End-to-end evaluation**: `notebooks/eval_msmcp.ipynb` is the benchmark/stress suite — precursor and adduct boundaries, embedding shape/determinism/degenerate-input cases, real mzML parsing and QC, the full async search state machine (including failure, cancellation, lost-job and concurrency-cap behaviour), the server-side reference flow, and a per-tool diagnostic table. `tests/test_eval_notebook.py::test_eval_notebook_passes_every_check` executes every code cell headlessly and fails if any recorded check fails or if a registered tool is never exercised; `make eval` runs it and prints the per-tool roll-up (a machine-readable copy lands in `notebooks/.eval_artifacts/eval_report.json`). It is marked `eval` and excluded from the default `pytest` run so `make test` stays fast — `make all` runs both. A structural guard (`test_notebook_is_structurally_valid`) runs with the normal suite and fails if the notebook stops parsing, compiles, or has stored outputs.
 - **Where parameter documentation lives**: the MCP SDK builds each tool's `inputSchema` from the **function signature**, not from Pydantic models. Descriptions therefore belong on `Annotated[..., Field(description=...)]` in the signature; a description added only to an input model never reaches the host. The Pydantic models in each `tools/` module are for *validation* only (they are what raises `ValidationError` on bad arguments), and they deliberately carry no `description=`. `tests/test_tool_schemas.py` fails the build if a parameter reaches the wire undocumented, or if a body constraint (e.g. `ge=1, le=50`) is missing from the schema.
-- **Linting/typing**: `ruff` (E/F/I/UP/B/SIM/RUF), `mypy` and `basedpyright` all run clean over `src/`, `tests/` and the evaluation notebook, via `uv run ruff check .`, `uv run mypy` and `uv run basedpyright`. There are **no per-file suppressions for source code and no `ignore_errors` overrides**: the temporary debt from the earlier milestones has been removed rather than relocated. The only remaining ignore is `E402` on the notebook, where a cell must set environment flags before importing `msmcp`.
+- **Linting/typing**: `ruff` (E/F/I/UP/B/SIM/RUF), `mypy` and `basedpyright` all run clean over `src/`, `tests/` and the evaluation notebook, via `uv run ruff check .`, `uv run mypy` and `uv run basedpyright`. There are **no per-file suppressions for source code and no `ignore_errors` overrides**: the temporary debt from the earlier milestones has been removed rather than relocated. The only remaining ignore is `E402` on the notebook, where a cell must set environment flags before importing `msmcp`. The gitignored `drafts/` scratch directory is excluded from all three — it holds audit probes and one-off scripts, not shipped code.
 - **Formatting**: `ruff format`, line length 88, PEP 695 syntax, `from __future__ import annotations` throughout.
+- **Design log**: [`docs/mcp-server-configuration.md`](docs/mcp-server-configuration.md) is an unedited transcript of the early host-configuration sessions — useful context for *why* the transport and logging boundaries are what they are, not a reference manual.
 
 ## Repository layout
 
@@ -418,6 +419,12 @@ msmcp/
 ├── Makefile                     # developer pipeline: install/format/lint/test/eval/all
 ├── README.md                    # this file
 ├── ARCHITECTURE.md              # v1.0 scope, layers, limitations, acceptance criteria
+├── CHANGELOG.md                 # what landed, by release
+├── docs/
+│   └── mcp-server-configuration.md  # unedited design-session transcript (host setup)
+├── examples/
+│   ├── msmcp_infographic.html   # one-page visual overview (illustrative)
+│   └── msmcp_interactive_application.html  # interactive mock-up (illustrative)
 ├── src/msmcp/
 │   ├── server.py                # MCPServer transport layer + entry point
 │   ├── errors.py                # shared error taxonomy (malformed/missing/inaccessible)
@@ -434,6 +441,7 @@ msmcp/
 │   │   └── executor.py          # JobExecutor interface + LocalAsyncExecutor
 │   ├── models/
 │   │   ├── embeddings.py        # SpectralEmbedder ABC + test/dev-only deterministic mocks
+│   │   ├── scoring.py           # SpectrumScorer contract + classical/embedding scorers
 │   │   └── backends.py          # real-inference adapters (DreaMS/LSM-MS2) + resolver
 │   └── tools/
 │       ├── io.py                # ingestion, data references, compact summaries
@@ -449,6 +457,7 @@ msmcp/
     ├── test_chem.py
     ├── test_similarity.py
     ├── test_embeddings.py
+    ├── test_scoring.py          # SpectrumScorer contract + its scientific invariants
     ├── test_search.py
     ├── test_security.py
     ├── test_mzml.py

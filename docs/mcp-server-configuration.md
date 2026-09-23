@@ -1,3 +1,9 @@
+> **Provenance.** This file is an unedited transcript of the design sessions that
+> shaped MSMCP's MCP host configuration, transport framing and logging boundaries.
+> It is kept as a record of the reasoning, not maintained as documentation; some
+> options discussed here were not taken. For the maintained description see
+> [`README.md`](../README.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md).
+
 ## User (checkpoint)
 
 Role: You are an expert scientific software developer configuring a Model Context Protocol (MCP) server for a computational mass spectrometry toolkit.

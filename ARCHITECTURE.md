@@ -102,6 +102,7 @@ Constraints that follow from the offline posture:
 | MassFlow-backed ingestion | `massflow_io.py`, `ingest.py` | imzML imaging data, via MassFlow's own reader |
 | MSMCP-owned readers | `mzml.py`, `mgf.py` | formats MassFlow does not cover |
 | Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py` | exact mass, isotopes, ppm validation, cosine, QC |
+| Spectral scoring contract | `models/scoring.py` | `SpectrumScorer`; classical (in-house, reference implementation) and embedding scorers behind one interface |
 | Server-side data references | `state/pointers.py`, `state/store.py` | payloads never cross MCP/JSON |
 | Provenance / reproducibility | `provenance.py` | structured, immutable, JSON-safe |
 | Asynchronous execution | `execution/executor.py`, `tools/search.py` | pluggable; local asyncio implementation |
@@ -316,6 +317,9 @@ during the v1.0 work:
 5. **MassFlow materialises one placeholder per pixel** when loading an imzML
    acquisition, so whole-slide images are bounded by MassFlow's own behaviour.
 6. **The eval notebook is the slowest artefact** to run (`make eval`, ~15 s).
+7. **A completed search re-returns the whole report on every poll** (audit F13), so a
+   long report can be pulled into the context window repeatedly. Answered with a
+   digest on repeat polls in the ordered backlog.
 
 ## Acceptance criteria for v1.0
 

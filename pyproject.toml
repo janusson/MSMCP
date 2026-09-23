@@ -58,8 +58,10 @@ markers = [
 target-version = "py313"
 line-length = 88
 src = ["src"]
-# Design-log markdown with embedded Python snippets; not source code.
-extend-exclude = ["MCP server configuration.md"]
+# Not source code, so not in the gate: the design-log markdown (it embeds
+# Python snippets) and the gitignored `drafts/` scratch directory, which holds
+# audit probes and one-off scripts from concurrent work.
+extend-exclude = ["docs/mcp-server-configuration.md", "drafts/"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
@@ -92,3 +94,12 @@ ignore_missing_imports = true
 # and the evaluation notebook all check clean at this setting.
 typeCheckingMode = "standard"
 pythonVersion = "3.13"
+# The gitignored `drafts/` scratch directory is not part of the gate: it holds
+# audit probes and one-off scripts, including from concurrent work, and linting
+# it would fail the build on code that is never shipped.
+#
+# NOTE: pyright's `exclude` REPLACES its defaults rather than extending them
+# (`**/node_modules`, `**/__pycache__`, `**/.*`), so they are restated here.
+# Dropping them makes the checker walk `.venv` and `.git` and the run does not
+# finish.
+exclude = ["**/node_modules", "**/__pycache__", "**/.*", "drafts"]
