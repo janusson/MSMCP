@@ -1,0 +1,55 @@
+# The gate this repository claims in README.md and ARCHITECTURE.md, run on every
+# push and pull request: the same commands `make lint`, `make test` and
+# `make eval` run locally, so a green build here means what it means on a
+# developer's machine.  The design log in docs/ and the gitignored `drafts/`
+# scratch directory are outside the lint gate by configuration, not by omission.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install the interpreter named in .python-version
+        run: uv python install
+
+      - name: Sync dependencies from the lockfile (dev extras)
+        run: uv sync --extra dev --locked
+
+      - name: Format check (ruff format --check)
+        run: uv run ruff format --check .
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Types (mypy)
+        run: uv run mypy
+
+      - name: Types (basedpyright)
+        run: uv run basedpyright
+
+      - name: Tests (fast suite; the eval notebook is deselected)
+        run: uv run pytest
+
+      - name: Evaluation notebook (make eval)
+        run: uv run pytest tests/test_eval_notebook.py -m eval -s -q
