@@ -290,6 +290,51 @@ class TestSearchDispatcherAndPoller:
             "No hits passed the significance threshold" in report
         )
 
+    async def test_the_report_is_delivered_once_then_digested(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        query_mzml: Path,
+    ) -> None:
+        """The report crosses the wire once; every later poll answers with a digest."""
+        dispatched = await search_tools["search_library"](
+            experimental_file=str(query_mzml),
+            database_file=DB_FILE,
+        )
+        job_id = dispatched.split("`")[1]
+        check = search_tools["check_search_status"]
+        report = await self._poll_until_final(check, job_id)
+        assert "## Spectral Library Search Results" in report
+
+        digest = await check(job_id=job_id)
+        assert "✅ **Completed**" in digest
+        assert "## Spectral Library Search Results" not in digest
+        assert "| Rank | Compound" not in digest
+        # The honesty banner must survive into the digest, and the way back to
+        # the report must be stated where a host will read it.
+        assert "Synthetic library" in digest
+        assert "full_report=True" in digest
+        # The point of the digest is context: a repeat poll costs a fraction of
+        # the report it stands in for.
+        assert len(digest) * 3 < len(report) * 2
+
+    async def test_full_report_re_requests_the_delivered_report(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        query_mzml: Path,
+    ) -> None:
+        """A client that lost the report can ask for it again, verbatim."""
+        dispatched = await search_tools["search_library"](
+            experimental_file=str(query_mzml),
+            database_file=DB_FILE,
+        )
+        job_id = dispatched.split("`")[1]
+        check = search_tools["check_search_status"]
+        report = await self._poll_until_final(check, job_id)
+
+        assert await check(job_id=job_id, full_report=True) == report
+        # Re-requesting must not reset the delivery state.
+        assert "## Spectral Library Search Results" not in await check(job_id=job_id)
+
     async def test_real_query_is_read_and_reported(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],

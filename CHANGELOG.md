@@ -9,13 +9,6 @@ planned as `1.0.0` once the acceptance criteria in
 [ARCHITECTURE.md](ARCHITECTURE.md) are met. Everything below is unreleased work
 accumulated on `main`.
 
-One item is deliberately **not** claimed below, because it is not done: a
-completed search re-reports its full report on every poll, so a client that
-polls twice pulls the report into its context twice. That is the context-cost
-limitation recorded as item 7 of *Known limitations* in
-[ARCHITECTURE.md](ARCHITECTURE.md); delivering the report once and answering
-repeat polls with a digest remains a tracked item.
-
 ## [Unreleased]
 
 ### Added
@@ -82,3 +75,10 @@ repeat polls with a digest remains a tracked item.
 - Reports state which half of a search is real: the query spectrum is read from
   disk, while the library is synthetic and says so in a banner ahead of any hit
   table.
+- A completed search reports its result **once**. The first poll after the job
+  finishes returns the full report; every later poll returns a short digest
+  (library size, hit count, top hit) that keeps the synthetic-library warning,
+  so a client that keeps polling no longer pulls the whole report into its
+  context again. `check_search_status(job_id=..., full_report=True)` re-requests
+  the report for a client that no longer has it. The delivery record is bounded
+  to the 1024 most recent jobs.

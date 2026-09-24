@@ -251,6 +251,12 @@ Cancellation semantics are explicit: a worker thread cannot be interrupted, so
 cancelling marks the job terminal and **discards** its output. A caller that
 sees `cancelled` never sees partial results.
 
+Delivery semantics are explicit too: a finished job's report is handed out
+**once**, and every later poll answers with a short digest of it (library size,
+hit count, top hit); `check_search_status(..., full_report=True)` re-requests
+the report itself. Repeated polling therefore cannot pull the whole report into
+a host's context window over and over.
+
 ## MCP Tasks: what is implemented and what is not
 
 Statuses use the MCP vocabulary (`mcp.types.TaskStatus`), and
@@ -317,9 +323,11 @@ during the v1.0 work:
 5. **MassFlow materialises one placeholder per pixel** when loading an imzML
    acquisition, so whole-slide images are bounded by MassFlow's own behaviour.
 6. **The eval notebook is the slowest artefact** to run (`make eval`, ~15 s).
-7. **A completed search re-returns the whole report on every poll** (audit F13), so a
-   long report can be pulled into the context window repeatedly. Answered with a
-   digest on repeat polls in the ordered backlog.
+7. **Report delivery is remembered in-process and bounded.** The poller hands a
+   finished report out once and digests every later poll, remembering the 1024
+   most recent deliveries. A job polled again after 1024 later searches re-sends
+   its report once before digesting; a durable executor would keep this record
+   beside the job instead.
 
 ## Acceptance criteria for v1.0
 

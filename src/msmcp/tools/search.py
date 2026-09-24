@@ -31,6 +31,7 @@ import random
 import sqlite3
 import uuid
 import zlib
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Annotated, Any, Final, Literal
 
@@ -99,6 +100,17 @@ class StatusInput(BaseModel):
     """Validated input for check_search_status and cancel_search."""
 
     job_id: str = Field(..., min_length=1)
+
+
+class PollInput(BaseModel):
+    """Validated input for the check_search_status tool.
+
+    Separate from :class:`StatusInput` because polling takes one extra argument:
+    the report is delivered once, and ``full_report`` re-requests it.
+    """
+
+    job_id: str = Field(..., min_length=1)
+    full_report: bool = False
 
 
 # ======================================================================
@@ -488,11 +500,32 @@ class SearchRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class SearchSummary:
+    """The headline numbers of a finished scan, without the report text.
+
+    Rendered by :func:`_digest_lines` when a client polls a job whose report it
+    has already been given, so a repeat poll costs a few hundred bytes instead
+    of the whole report.
+    """
+
+    library_size: int
+    query_peaks: int
+    query_source: str
+    mode: str
+    threshold: float
+    n_hits: int
+    top_compound: str | None
+    top_score: float | None
+    top_significance: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class SearchOutcome:
-    """The report plus the provenance of the search that produced it."""
+    """The report, its provenance, and the numbers a repeat poll needs."""
 
     report: str
     provenance: Any
+    summary: SearchSummary
 
 
 def _library_spec(database_file: str) -> tuple[int, int]:
@@ -747,7 +780,26 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             len(hits),
             hits[0]["score"] if hits else 0.0,
         )
-        return SearchOutcome(report="\n".join(lines), provenance=provenance)
+        summary = SearchSummary(
+            library_size=n_spectra,
+            query_peaks=len(exp_peaks),
+            query_source=request.spectrum_reference
+            or request.experimental_file
+            or "unknown",
+            mode="FDR" if use_fdr else "empirical p-value",
+            threshold=report_threshold,
+            n_hits=len(hits),
+            top_compound=hits[0]["compound_name"] if hits else None,
+            top_score=hits[0]["score"] if hits else None,
+            top_significance=(
+                hits[0]["q_value"]
+                if hits and use_fdr
+                else (hits[0]["p_value"] if hits else None)
+            ),
+        )
+        return SearchOutcome(
+            report="\n".join(lines), provenance=provenance, summary=summary
+        )
 
     finally:
         conn.close()
@@ -825,6 +877,70 @@ touching the tools below.
 """
 
 _TERMINAL = frozenset({"completed", "failed", "cancelled"})
+
+# ---------------------------------------------------------------------------
+# Report delivery — the report is handed out once, then digested
+# ---------------------------------------------------------------------------
+_DELIVERED_LIMIT: Final[int] = 1024
+"""How many delivered job IDs are remembered before the oldest is forgotten."""
+
+_delivered_reports: OrderedDict[str, None] = OrderedDict()
+
+
+def _claim_report(job_id: str) -> bool:
+    """Record that *job_id*'s report is being handed out; True if it is the first.
+
+    Bounded on purpose: the oldest entry is dropped once
+    :data:`_DELIVERED_LIMIT` job IDs have been remembered, so a long-lived
+    server cannot accumulate one entry per search it ever ran.  Forgetting a
+    job ID costs at most one extra delivery of a report that is still inside
+    its retention window, which is harmless next to its context cost.
+    """
+    if job_id in _delivered_reports:
+        return False
+    _delivered_reports[job_id] = None
+    while len(_delivered_reports) > _DELIVERED_LIMIT:
+        _delivered_reports.popitem(last=False)
+    return True
+
+
+def _digest_lines(job_id: str, summary: SearchSummary) -> str:
+    """Render the short repeat-poll answer for an already-delivered report.
+
+    The point of the digest is context: a client that polls a finished job
+    repeatedly should not keep paying for the whole report, so this carries the
+    numbers a reader needs to decide whether to ask for the report again - and
+    the synthetic-library warning, because a digest that drops the warning
+    would be the one place the honesty banner could be missed.
+    """
+    if summary.top_compound is not None and summary.top_score is not None:
+        label = "q" if summary.mode == "FDR" else "p"
+        top = (
+            f"`{summary.top_compound}`, score {summary.top_score:.4f}"
+            f" ({label} = {summary.top_significance:.4f})"
+            if summary.top_significance is not None
+            else f"`{summary.top_compound}`, score {summary.top_score:.4f}"
+        )
+    else:
+        top = "none passed the threshold"
+
+    return "\n".join(
+        [
+            f"✅ **Completed** — search job `{job_id}` finished; its report was "
+            f"already returned.",
+            "",
+            f"- Library: {summary.library_size:,} synthetic spectra (not read "
+            f"from disk)",
+            f"- Query: {summary.query_peaks} real peaks from `{summary.query_source}`",
+            f"- {summary.mode} threshold {summary.threshold}: {summary.n_hits} hit(s)",
+            f"- Top hit: {top}",
+            "",
+            "Poll again with `full_report=True` to fetch the full report; other "
+            "polls keep returning this digest.",
+            "",
+            "> ⚠️  **Synthetic library** — not compound identifications.",
+        ]
+    )
 
 
 def _status_lines(snapshot: JobStatusSnapshot, job_id: str) -> str:
@@ -1000,19 +1116,34 @@ def register_tools(mcp: Any) -> None:
                 description="The job ID returned by search_library.",
             ),
         ],
+        full_report: Annotated[
+            bool,
+            Field(
+                description="Request the whole report again after it has "
+                "already been returned once.  Leave it false to keep repeat "
+                "polls small.",
+            ),
+        ] = False,
     ) -> str:
-        """Fetch the current state, or the final report, of a background search.
+        """Fetch the current state, or the report, of a background search.
 
         Pass the job ID returned by `search_library`.  While the job is queued
         or scanning this returns a short status line, so poll again after a
-        pause.  Once the job finishes it returns the full Markdown report, or
-        a description of the failure.
+        pause.
+
+        The finished report is delivered **once**: the first poll after the job
+        completes returns the full Markdown report, and any later poll returns
+        a short digest of it (library size, hit count, top hit) so that a client
+        which keeps polling does not pull the whole report into its context
+        again.  Pass `full_report=True` to get the report itself back when it is
+        no longer in context.  A failed or cancelled job is reported as such on
+        every poll.
 
         A job the server no longer knows about (for example after a restart)
         is reported as failed rather than as pending, so it is always safe to
         keep polling.
         """
-        _ = StatusInput(job_id=job_id)
+        _ = PollInput(job_id=job_id, full_report=full_report)
 
         if not _valid_job_id(job_id):
             return (
@@ -1040,9 +1171,21 @@ def register_tools(mcp: Any) -> None:
         outcome = _EXECUTOR.result(job_id)
 
         if outcome.status == "completed":
-            logger.info("check_search_status(%s): returning completed report", job_id)
-            report = outcome.value.report if outcome.value is not None else None
-            return report or "ERROR: job completed without a report."
+            payload = outcome.value
+            if payload is None or payload.report is None:
+                return "ERROR: job completed without a report."
+            if full_report or _claim_report(job_id):
+                logger.info(
+                    "check_search_status(%s): returning the full report (%s)",
+                    job_id,
+                    "re-requested" if full_report else "first delivery",
+                )
+                return payload.report
+            logger.info(
+                "check_search_status(%s): report already delivered; digest",
+                job_id,
+            )
+            return _digest_lines(job_id, payload.summary)
 
         if outcome.status == "failed":
             logger.info("check_search_status(%s): reporting failure", job_id)

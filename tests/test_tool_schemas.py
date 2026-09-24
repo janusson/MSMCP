@@ -25,7 +25,7 @@ from msmcp.server import mcp
 from msmcp.tools.chem import AdductInput, IsotopeInput
 from msmcp.tools.io import LoadSpectrumInput, MzMLParseInput, ReferenceInput
 from msmcp.tools.qc import QCInput
-from msmcp.tools.search import SearchInput, StatusInput
+from msmcp.tools.search import PollInput, SearchInput, StatusInput
 from msmcp.tools.similarity import ComputeCosineInput, ValidatePrecursorInput
 
 # Tool name -> the Pydantic model that validates its arguments.
@@ -40,7 +40,7 @@ MODEL_FOR_TOOL: dict[str, type[Any]] = {
     "validate_precursor": ValidatePrecursorInput,
     "compute_cosine": ComputeCosineInput,
     "search_library": SearchInput,
-    "check_search_status": StatusInput,
+    "check_search_status": PollInput,
     "cancel_search": StatusInput,
 }
 
