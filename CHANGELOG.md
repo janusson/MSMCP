@@ -9,6 +9,13 @@ planned as `1.0.0` once the acceptance criteria in
 [ARCHITECTURE.md](ARCHITECTURE.md) are met. Everything below is unreleased work
 accumulated on `main`.
 
+One item is deliberately **not** claimed below, because it is not done: a
+completed search re-reports its full report on every poll, so a client that
+polls twice pulls the report into its context twice. That is the context-cost
+limitation recorded as item 7 of *Known limitations* in
+[ARCHITECTURE.md](ARCHITECTURE.md); delivering the report once and answering
+repeat polls with a digest remains a tracked item.
+
 ## [Unreleased]
 
 ### Added
@@ -75,5 +82,3 @@ accumulated on `main`.
 - Reports state which half of a search is real: the query spectrum is read from
   disk, while the library is synthetic and says so in a banner ahead of any hit
   table.
-- A completed search job reports its result once, so repeat polls do not pull the
-  full report into the context window again.
