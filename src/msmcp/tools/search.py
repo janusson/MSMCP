@@ -48,6 +48,13 @@ from msmcp.execution import (
     LocalAsyncExecutor,
     UnknownJobError,
 )
+from msmcp.instruments import (
+    DEFAULT_INSTRUMENT_CLASS,
+    INSTRUMENT_CLASS_NAMES,
+    InstrumentClass,
+    InstrumentProfile,
+    get_profile,
+)
 from msmcp.library import LibraryInfo, LibraryProvider
 from msmcp.models import get_embedder
 from msmcp.models.backends import LSM_MS2_CKPT_ENV
@@ -79,6 +86,7 @@ class SearchInput(BaseModel):
     database_file: str = Field(..., min_length=1)
     scoring_method: ScoringMethod = "classical"
     chunk_size: int = Field(default=2000, ge=100, le=10000)
+    instrument_class: InstrumentClass | None = None
 
     @model_validator(mode="after")
     def _exactly_one_query_source(self) -> SearchInput:
@@ -309,16 +317,18 @@ def _iter_spectra_chunked(
 def _cosine(
     peaks_a: list[tuple[float, float]],
     peaks_b: list[tuple[float, float]],
-    tolerance: float = 0.02,
+    tolerance: float | None = None,
 ) -> float:
     """Reference spelling of the classical score, delegated to the scorer.
 
     Kept as the stable entry point the audit probes and the scorer-agreement
     tests call.  There is one implementation of the matching and normalisation —
     :class:`~msmcp.models.scoring.ClassicalScorer` — and this is a thin alias for
-    it, not a second copy.
+    it, not a second copy.  *tolerance* defaults to the generic instrument
+    class's documented window rather than a local literal.
     """
-    return ClassicalScorer(tolerance).score(peaks_a, peaks_b)
+    window = get_profile(None).ms2_tolerance_da if tolerance is None else tolerance
+    return ClassicalScorer(window).score(peaks_a, peaks_b)
 
 
 # ======================================================================
@@ -326,22 +336,39 @@ def _cosine(
 # ======================================================================
 def _build_scorer(
     scoring_method: str,
+    ms2_tolerance_da: float | None = None,
 ) -> SpectrumScorer:
-    """Return the scorer for *scoring_method*.
+    """Return the scorer for *scoring_method* and its m/z window.
 
     ``classical`` scores matched peak intensities with greedy m/z alignment; the
     foundation-model methods score whole-spectrum embeddings produced by the
     corresponding real ``SpectralEmbedder`` adapter.  Both are
     :class:`~msmcp.models.scoring.SpectrumScorer` implementations, so the scan and
     its null model are written once against the interface.
+
+    ``ms2_tolerance_da`` defaults to the generic instrument class's documented
+    window, so the window is a parameter even when the caller does not set one.
     """
-    return get_scorer(scoring_method)
+    window = (
+        get_profile(None).ms2_tolerance_da
+        if ms2_tolerance_da is None
+        else ms2_tolerance_da
+    )
+    return get_scorer(scoring_method, window)
 
 
-def _scoring_label(scoring_method: str) -> str:
+def _scoring_label(
+    scoring_method: str,
+    ms2_tolerance_da: float | None = None,
+) -> str:
     """Human-readable scoring description for report headers."""
     if scoring_method == "classical":
-        return "classical (greedy peak matching, ±0.02 Da)"
+        window = (
+            get_profile(None).ms2_tolerance_da
+            if ms2_tolerance_da is None
+            else ms2_tolerance_da
+        )
+        return f"classical (greedy peak matching, ±{window:g} Da)"
     embedder = get_embedder(scoring_method)
     return (
         f"{embedder.name} deep embedding ({embedder.embedding_dim}-d, "
@@ -500,6 +527,7 @@ class SearchRequest:
     chunk_size: int = 2000
     experimental_file: str | None = None
     spectrum_reference: str | None = None
+    instrument_class: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -588,8 +616,10 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     scoring_method = request.scoring_method
     database_file = request.database_file
     chunk_size = request.chunk_size
+    profile = get_profile(request.instrument_class)
+    ms2_tolerance_da = profile.ms2_tolerance_da
 
-    scorer = _build_scorer(scoring_method)
+    scorer = _build_scorer(scoring_method, ms2_tolerance_da)
     # A real library (MSP/NIST text) is read through the security boundary; a
     # path with no reader falls back to the labelled synthetic library.
     provider = _library_provider_for(database_file)
@@ -613,7 +643,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             )
         logger.info("Scoring %d real query peaks", len(exp_peaks))
 
-        small_library_threshold = 2000
+        small_library_threshold = profile.small_library_threshold
         use_fdr = n_spectra >= small_library_threshold
 
         small_lib_warning = ""
@@ -705,7 +735,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             )
 
         n_null_actual = len(null_scores)
-        report_threshold = 0.05
+        report_threshold = profile.fdr_threshold
 
         if use_fdr:
             p_values = _estimate_empirical_p(target_scores, null_scores)
@@ -753,7 +783,14 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 f"Query spectrum: `{request.experimental_file}` "
                 f"({len(exp_peaks)} real peaks, read from disk)"
             )
-        lines.append(f"Scoring method: {_scoring_label(scoring_method)}")
+        lines.append(
+            f"Scoring method: {_scoring_label(scoring_method, ms2_tolerance_da)}"
+        )
+        lines.append(
+            f"Instrument class: {profile.instrument_class} "
+            f"(MS2 window ±{ms2_tolerance_da:g} Da, "
+            f"significance threshold {report_threshold:g})"
+        )
         lines.append("")
 
         if small_lib_warning:
@@ -811,7 +848,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 lines.append(f"{total_passing} hit(s) passed the threshold.")
 
         provenance = _search_provenance(
-            request, n_spectra, len(exp_peaks), library_info
+            request, n_spectra, len(exp_peaks), library_info, profile
         )
         lines.append("")
         lines.append("---")
@@ -922,8 +959,16 @@ def _search_provenance(
     n_spectra: int,
     n_query_peaks: int,
     library_info: LibraryInfo | None,
+    profile: InstrumentProfile,
 ) -> Provenance:
-    """Build the provenance record for one search."""
+    """Build the provenance record for one search.
+
+    The record carries the experimental thresholds the scan actually applied —
+    the MS2 window, the significance threshold and the small-library floor —
+    together with the instrument class they were defaulted from and that class's
+    documented provenance, so a report can be read back against the assumption
+    it was produced under (audit F7).
+    """
     sources = []
     if request.experimental_file:
         sources.append(
@@ -939,6 +984,12 @@ def _search_provenance(
         "library_spectra": n_spectra,
         "query_peaks": n_query_peaks,
         "query_is_real_data": True,
+        "instrument_class": profile.instrument_class,
+        "ms2_tolerance_da": profile.ms2_tolerance_da,
+        "precursor_tolerance": profile.precursor_tolerance.to_dict(),
+        "fdr_threshold": profile.fdr_threshold,
+        "small_library_threshold": profile.small_library_threshold,
+        "instrument_defaults_provenance": profile.provenance,
     }
     if library_info is None:
         parameters["library_synthetic"] = True
@@ -1150,6 +1201,21 @@ def register_tools(mcp: Any) -> None:
                 "memory and I/O batching, not the result.",
             ),
         ] = 2000,
+        instrument_class: Annotated[
+            InstrumentClass | None,
+            Field(
+                description=(
+                    "Instrument class whose documented defaults set the "
+                    "experimental thresholds this scan applies — the MS2 m/z "
+                    "window, the significance threshold and the small-library "
+                    f"FDR floor (default '{DEFAULT_INSTRUMENT_CLASS}').  The "
+                    "class and the values used are recorded in the report and "
+                    "its provenance.  One of: "
+                    + ", ".join(INSTRUMENT_CLASS_NAMES)
+                    + "."
+                ),
+            ),
+        ] = None,
     ) -> str:
         """Start a background spectral-library search and return a job ID.
 
@@ -1167,6 +1233,12 @@ def register_tools(mcp: Any) -> None:
         read one from disk.  The chunked scan, scoring and FDR estimation are
         real in every case.
 
+        The experimental thresholds the scan applies — the MS2 m/z window, the
+        significance threshold and the small-library FDR floor — come from the
+        named `instrument_class` (default 'generic', MSMCP's v1.0 values) rather
+        than from literals, and the class plus the values used are stated in the
+        report and recorded in its provenance.
+
         Returns immediately with a job ID, because the scan takes far longer
         than a request timeout.  Poll `check_search_status` with that ID to
         collect the report.  This tool does not return results directly.
@@ -1177,6 +1249,7 @@ def register_tools(mcp: Any) -> None:
             database_file=database_file,
             scoring_method=scoring_method,
             chunk_size=chunk_size,
+            instrument_class=instrument_class,
         )
 
         # Resolve real query data *before* dispatch, so a bad reference or an
@@ -1205,6 +1278,7 @@ def register_tools(mcp: Any) -> None:
             chunk_size=validated.chunk_size,
             experimental_file=validated.experimental_file,
             spectrum_reference=validated.spectrum_reference,
+            instrument_class=validated.instrument_class,
         )
 
         handle = _EXECUTOR.submit(
@@ -1216,6 +1290,7 @@ def register_tools(mcp: Any) -> None:
                 "chunk_size": validated.chunk_size,
                 "spectrum_reference": validated.spectrum_reference,
                 "experimental_file": validated.experimental_file,
+                "instrument_class": validated.instrument_class,
             },
         )
 

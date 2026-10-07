@@ -41,6 +41,13 @@ string rather than opening it, and every report says so.
 - **Spectral foundation-model adapters** — `SpectralEmbedder` contract with a
   real DreaMS inference backend, an LSM-MS2 adapter gated on a checkpoint, and
   deterministic mocks reachable only under `MSMCP_EMBEDDING_BACKEND=mock`.
+- **Instrument-class defaults** — `msmcp.instruments` is the single home for the
+  experimental thresholds (precursor tolerance, MS2 and diagnostic-ion windows,
+  SNR bands, FDR threshold and small-library floor). Each instrument class
+  (generic, orbitrap, tof, ion_trap, triple_quad) documents its own defaults and
+  the basis for them, and every tool that applies one takes an `instrument_class`
+  argument. Accurate-mass classes express the precursor gate in ppm; unit-
+  resolution classes use a dalton window, where a ppm gate would be meaningless.
 - **Security boundary** — every file-reading tool is confined to one allowed root
   (`MSMCP_ALLOWED_ROOT`), with size, reference-count and spectrum-count ceilings;
   escapes, including symlinks pointing outside the root, are rejected.
@@ -100,6 +107,15 @@ string rather than opening it, and every report says so.
   format, spectrum count and SHA-256 digest; a path with no reader keeps the
   synthetic fallback and is labelled as synthetic. The banner is no longer a
   fixed warning.
+- **The experimental thresholds are parameters, not literals.** The precursor
+  acceptance gate, the classical peak-match tolerance, the diagnostic-ion
+  window, the SNR bands and the FDR / small-library thresholds now come from the
+  named `instrument_class` (default `generic`, which reproduces MSMCP's v1.0
+  values exactly). The class and the values actually applied are stated in the
+  result — the report body for `validate_precursor`, `compute_cosine` and
+  `generate_qc_summary`, and `Provenance.parameters` for `search_library` — so an
+  analysis can be re-run under another instrument's assumptions and the
+  assumption behind any result is readable from the result itself.
 - A completed search reports its result **once**. The first poll after the job
   finishes returns the full report; every later poll returns a short digest
   (library size, hit count, top hit) that keeps the synthetic-library warning,

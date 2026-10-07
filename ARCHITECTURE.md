@@ -108,6 +108,7 @@ Constraints that follow from the offline posture:
 | Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions |
 | Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py` | exact mass, isotopes, ppm validation, cosine, QC |
 | Spectral scoring contract | `models/scoring.py` | `SpectrumScorer`; classical (in-house, reference implementation) and embedding scorers behind one interface |
+| Instrument-class defaults | `instruments.py` | every experimental threshold, its default per instrument class, and the provenance of each default |
 | Server-side data references | `state/pointers.py`, `state/store.py` | payloads never cross MCP/JSON |
 | Provenance / reproducibility | `provenance.py` | structured, immutable, JSON-safe |
 | Asynchronous execution | `execution/executor.py`, `tools/search.py` | pluggable; local asyncio implementation |
@@ -239,6 +240,14 @@ storage. A record travels with the result it describes and is embedded in the
 `DataReference`s registered alongside it. Parents are stored as plain
 identifier strings so that `provenance` has no dependency on the reference
 store — the store depends on provenance, not the reverse.
+
+Experimental thresholds are parameters, not literals. `instruments.py` is the
+single home for the precursor gate, the MS2 and diagnostic-ion windows, the SNR
+bands and the FDR / small-library thresholds; each instrument class carries its
+own defaults and the basis for them, and the tool that applies one records the
+class and the values used — in the report body for the string-returning tools,
+and in `Provenance.parameters` for `search_library`. A result therefore states
+the assumption it was produced under instead of hiding it in the source.
 
 ## Execution
 
