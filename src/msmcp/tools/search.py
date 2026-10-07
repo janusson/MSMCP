@@ -810,7 +810,9 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             else:
                 lines.append(f"{total_passing} hit(s) passed the threshold.")
 
-        provenance = _search_provenance(request, n_spectra, len(exp_peaks), library_info)
+        provenance = _search_provenance(
+            request, n_spectra, len(exp_peaks), library_info
+        )
         lines.append("")
         lines.append("---")
         if library_info is not None:
@@ -1042,8 +1044,7 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
             f"{summary.library_format or 'library'} spectra (read from disk)"
         )
         warning = (
-            "> ✅  **Real library** — candidate matches, not validated "
-            "identifications."
+            "> ✅  **Real library** — candidate matches, not validated identifications."
         )
 
     return "\n".join(

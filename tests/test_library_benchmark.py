@@ -81,8 +81,7 @@ def _perturb(
         return [(mz + shift, intensity) for mz, intensity in peaks]
     if kind == "intensity_noise":
         return [
-            (mz, intensity * rng.lognormvariate(0.0, 0.3))
-            for mz, intensity in peaks
+            (mz, intensity * rng.lognormvariate(0.0, 0.3)) for mz, intensity in peaks
         ]
     if kind.startswith("drop_") and kind.endswith("pct"):
         fraction = int(kind.removeprefix("drop_").removesuffix("pct")) / 100.0
@@ -102,7 +101,9 @@ def _perturb(
     raise AssertionError(f"unknown perturbation {kind!r}")
 
 
-def _provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[LibraryProvider, dict[str, list[tuple[float, float]]]]:
+def _provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[LibraryProvider, dict[str, list[tuple[float, float]]]]:
     """Build the benchmark library in *tmp_path* and read it back."""
     from msmcp import security
 
