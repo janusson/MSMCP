@@ -1186,12 +1186,16 @@ def register_tools(mcp: Any) -> None:
         elif validated.experimental_file is not None:
             exp_peaks = tuple(_peaks_from_file(validated.experimental_file))
 
-        # Validate the library path *before* dispatch too.  A path in a
-        # readable library format is resolved through the security boundary
-        # here, so an out-of-root or missing library is an immediate tool error
-        # rather than a failed background job; a path with no reader returns
-        # None and the scan uses the labelled synthetic fallback.
+        # Validate the library before dispatch — not just its path.  Resolving
+        # it (allowed root, size, readability) makes an out-of-root or missing
+        # library an immediate tool error; the bounded parse probe does the same
+        # for a file that is not the format its suffix claims, matching the
+        # query path, which also reads its first spectrum here rather than
+        # inside the job.  A path with no reader returns None and the scan uses
+        # the labelled synthetic fallback.
         library_provider = _library_provider_for(validated.database_file)
+        if library_provider is not None:
+            library_provider.validate()
 
         request = SearchRequest(
             database_file=validated.database_file,

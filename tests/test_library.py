@@ -163,6 +163,39 @@ class TestRealLibrarySearch:
         assert "not opened" in report
         assert outcome.provenance.to_dict()["parameters"]["library_synthetic"] is True
 
+    def test_an_empty_library_is_searched_and_reports_no_hits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An empty library is legal: it is read for real, finds nothing, says so.
+
+        Zero spectra is a *data* condition, not a parse failure — the report must
+        describe the real (empty) library rather than fall back to claiming the
+        query hit anything.
+        """
+        from msmcp import security
+
+        empty = tmp_path / "empty.msp"
+        empty.write_text("# a library with no records\n", encoding="utf-8")
+        monkeypatch.setattr(
+            security, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path)
+        )
+
+        outcome = _run_scan(
+            SearchRequest(
+                database_file=str(empty),
+                experimental_peaks=tuple(CAFFEINE_PEAKS),
+                experimental_file="caffeine_experimental.mzML",
+            )
+        )
+        report = outcome.report
+
+        assert "REAL LIBRARY" in report
+        assert "SYNTHETIC LIBRARY" not in report
+        assert "No hits passed the significance threshold" in report
+        parameters = outcome.provenance.to_dict()["parameters"]
+        assert parameters["library_synthetic"] is False
+        assert parameters["library_spectra"] == 0
+
 
 # ---------------------------------------------------------------------------
 # Security: the library path crosses the same boundary as acquisitions
@@ -241,6 +274,86 @@ class TestLibrarySecurityBoundary:
         )
         assert "REAL LIBRARY" in outcome.report
         assert msp.read_text(encoding="utf-8").startswith("# Ground-truth")
+
+
+# ---------------------------------------------------------------------------
+# Pre-dispatch validation: a malformed library fails like a malformed query
+# ---------------------------------------------------------------------------
+class TestLibraryValidatedBeforeDispatch:
+    """The library probe matches the query path, which is read before dispatch."""
+
+    async def test_search_library_refuses_a_malformed_library_before_dispatch(
+        self,
+        search_tools: dict[str, SearchTool],
+        valid_mzml: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A file that is not the format its suffix claims is an immediate error.
+
+        The library is probed before a job is submitted, so a host gets a typed
+        ``MalformedFileError`` from the tool call instead of a job ID that later
+        fails in the background.
+        """
+        from msmcp import ingest, security
+        from msmcp.errors import MalformedFileError
+
+        root = tmp_path / "root"
+        root.mkdir()
+        query = root / "query.mzML"
+        query.write_text(valid_mzml.read_text(encoding="utf-8"), encoding="utf-8")
+        # A .msp that claims five peaks and supplies one.
+        bad = root / "not_really.msp"
+        bad.write_text("Name: Broken\nNum Peaks: 5\n100.0 1.0\n", encoding="utf-8")
+
+        policy = SecurityPolicy(allowed_root=root)
+        monkeypatch.setattr(ingest, "DEFAULT_POLICY", policy)
+        monkeypatch.setattr(security, "DEFAULT_POLICY", policy)
+
+        with pytest.raises(MalformedFileError, match="Num Peaks"):
+            await search_tools["search_library"](
+                experimental_file=str(query), database_file=str(bad)
+            )
+
+    async def test_a_malformed_query_and_a_malformed_library_fail_the_same_way(
+        self,
+        search_tools: dict[str, SearchTool],
+        valid_mzml: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Both halves of the pipeline are refused pre-dispatch, not in a job."""
+        from msmcp import ingest, security
+        from msmcp.errors import MalformedFileError, MsmcpError
+
+        root = tmp_path / "root"
+        root.mkdir()
+        query = root / "query.mzML"
+        query.write_text(valid_mzml.read_text(encoding="utf-8"), encoding="utf-8")
+        good = _write_msp(root / "good.msp")
+        broken = root / "broken.msp"
+        broken.write_text("Name: Broken\n100.0 1.0\nnonsense\n", encoding="utf-8")
+        torn = root / "torn.mzML"
+        torn.write_text("<mzML><spectrum", encoding="utf-8")
+
+        policy = SecurityPolicy(allowed_root=root)
+        monkeypatch.setattr(ingest, "DEFAULT_POLICY", policy)
+        monkeypatch.setattr(security, "DEFAULT_POLICY", policy)
+
+        search_library = search_tools["search_library"]
+
+        # The query is read first, so a torn one is refused before the library
+        # is even touched.
+        with pytest.raises(MsmcpError):
+            await search_library(
+                experimental_file=str(torn), database_file=str(good)
+            )
+
+        # A good query with a broken library is refused by the library probe.
+        with pytest.raises(MalformedFileError, match="peak line"):
+            await search_library(
+                experimental_file=str(query), database_file=str(broken)
+            )
 
 
 # ---------------------------------------------------------------------------

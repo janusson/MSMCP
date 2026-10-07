@@ -49,7 +49,10 @@ accumulated on `main`.
   interface, and `search_library` searches it for real. `database_file` is
   resolved through the same `SecurityPolicy` as acquisitions (allowed root,
   size limit, read-only) before any open, so a library outside the allowed root
-  is refused rather than read. A ground-truth benchmark
+  is refused rather than read. The library is also *probed* before dispatch, so
+  a file that is not the format its suffix claims raises `MalformedFileError`
+  from the tool call instead of failing a background job — matching the query
+  path, which is read before dispatch too. A ground-truth benchmark
   (`tests/test_library_benchmark.py`) reports per-perturbation recovery — m/z
   shift, intensity noise, dropped and added peaks — including a shift beyond
   the matching window that must fail to recover.

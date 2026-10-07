@@ -105,6 +105,7 @@ Constraints that follow from the offline posture:
 |---|---|---|
 | MassFlow-backed ingestion | `massflow_io.py`, `ingest.py` | imzML imaging data, via MassFlow's own reader |
 | MSMCP-owned readers | `mzml.py`, `mgf.py` | formats MassFlow does not cover |
+| Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions |
 | Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py` | exact mass, isotopes, ppm validation, cosine, QC |
 | Spectral scoring contract | `models/scoring.py` | `SpectrumScorer`; classical (in-house, reference implementation) and embedding scorers behind one interface |
 | Server-side data references | `state/pointers.py`, `state/store.py` | payloads never cross MCP/JSON |
