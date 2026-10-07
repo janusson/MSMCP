@@ -315,9 +315,7 @@ class MSPLibraryProvider(LibraryProvider):
 
     def describe(self) -> LibraryInfo:
         """Count the library's spectra and digest the file it came from."""
-        n_spectra = sum(
-            len(chunk) for chunk in self.iter_spectra(_COUNT_CHUNK)
-        )
+        n_spectra = sum(len(chunk) for chunk in self.iter_spectra(_COUNT_CHUNK))
         try:
             size = self._path.stat().st_size
         except OSError:

@@ -249,9 +249,7 @@ class TestLibrarySecurityBoundary:
 
         search_library = search_tools["search_library"]
         with pytest.raises(PathEscapeError, match="outside the allowed root"):
-            await search_library(
-                experimental_file=str(query), database_file=str(evil)
-            )
+            await search_library(experimental_file=str(query), database_file=str(evil))
 
     def test_library_is_opened_read_only(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -345,9 +343,7 @@ class TestLibraryValidatedBeforeDispatch:
         # The query is read first, so a torn one is refused before the library
         # is even touched.
         with pytest.raises(MsmcpError):
-            await search_library(
-                experimental_file=str(torn), database_file=str(good)
-            )
+            await search_library(experimental_file=str(torn), database_file=str(good))
 
         # A good query with a broken library is refused by the library probe.
         with pytest.raises(MalformedFileError, match="peak line"):
@@ -417,9 +413,7 @@ class TestMSPReader:
         from msmcp.library import get_library_provider
 
         bad = tmp_path / "bad.msp"
-        bad.write_text(
-            "Name: Broken\n100.0 1.0\nnot_a_number\n", encoding="utf-8"
-        )
+        bad.write_text("Name: Broken\n100.0 1.0\nnot_a_number\n", encoding="utf-8")
         provider = get_library_provider(str(bad), SecurityPolicy(allowed_root=tmp_path))
         assert provider is not None
         with pytest.raises(MalformedFileError, match="peak line"):
@@ -439,7 +433,9 @@ class TestMSPReader:
 
         path = tmp_path / "lib.msp.gz"
         path.write_bytes(gzip.compress(GROUND_TRUTH_MSP.encode("utf-8")))
-        provider = get_library_provider(str(path), SecurityPolicy(allowed_root=tmp_path))
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
         assert provider is not None
         assert provider.describe().n_spectra == 3
 
@@ -452,7 +448,9 @@ class TestMSPReader:
             "100.0 1.0; 150.0 2.0; 200.0 3.0\n",
             encoding="utf-8",
         )
-        provider = get_library_provider(str(path), SecurityPolicy(allowed_root=tmp_path))
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
         assert provider is not None
         spectrum = next(s for chunk in provider.iter_spectra(10) for s in chunk)
         assert spectrum.peaks == ((100.0, 1.0), (150.0, 2.0), (200.0, 3.0))
