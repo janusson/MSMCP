@@ -248,13 +248,15 @@ async def test_signature_advertises_the_models_constraints() -> None:
 # ---------------------------------------------------------------------------
 # Truthfulness of the search pipeline
 # ---------------------------------------------------------------------------
-async def test_search_library_declares_its_library_is_synthetic() -> None:
+async def test_search_library_declares_when_its_library_is_real_or_synthetic() -> None:
     """The tool must not let a host mistake its output for an identification."""
     tool = next(t for t in await _tools() if t.name == "search_library")
     description = (tool.description or "").lower()
-    assert "the **library** is synthetic" in description
-    assert "synthetic" in description
-    assert "not opened" in description
+    # A supported library format is read from disk through the security boundary...
+    assert "read for real" in description
+    assert "msp" in description
+    # ...and a path with no reader is a labelled synthetic fallback, not silence.
+    assert "synthetic library" in description
     assert "never treat" in description
 
 
