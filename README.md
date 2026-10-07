@@ -263,7 +263,7 @@ Thirteen tools are exposed to the model: compact Markdown (or a single sentence)
 | `predict_adduct_offset` | `tools/chem.py` | Exact mass shift for 14 canonical adducts |
 | `annotate_isotopes` | `tools/chem.py` | M / M+1 / M+2 pattern from a formula or SMILES |
 | `validate_precursor` | `tools/similarity.py` | ppm mass-error gate at the 5.0 ppm threshold |
-| `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity (embeddings require real inference) |
+| `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference) |
 | `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file |
 | `search_library` | `tools/search.py` | Asynchronous library search (job executor; classical or real-embedding scoring). The **query** is real data; the **library** is explicitly synthetic |
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID. The report is delivered once; later polls return a short digest, and `full_report=True` re-requests it |

@@ -82,3 +82,16 @@ accumulated on `main`.
   context again. `check_search_status(job_id=..., full_report=True)` re-requests
   the report for a client that no longer has it. The delivery record is bounded
   to the 1024 most recent jobs.
+- **`compute_cosine` accepts a server-side reference on either side.** The tool
+  previously required both peak lists inline, so an agent that had already
+  loaded a spectrum with `load_spectrum` had to push the peaks back through the
+  conversation to score it. `query_peaks` / `reference_peaks` are now
+  alternatives to `query_reference` / `reference_reference`, with exactly one
+  source required per side (`ValidationError` otherwise), a stale or unknown
+  handle raising `UnknownReferenceError` instead of scoring zero, and the
+  response naming the source of each side. Dereferenced peaks take the same
+  code path as inline ones, so both spellings score identically.
+- The wire-contract guard in `tests/test_tool_schemas.py` now finds a numeric
+  bound nested in an `anyOf` union as well as at the top level. An optional
+  parameter (`X | None`) carries its keywords inside the union, so a
+  top-level-only lookup would silently stop checking its bounds.
