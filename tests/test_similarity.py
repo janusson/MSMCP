@@ -9,12 +9,16 @@ provided by the foundation-model adapters.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Iterator
 
 import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from msmcp.mzml import Spectrum
+from msmcp.state import store as reference_store
+from msmcp.state.pointers import UnknownReferenceError
 from msmcp.tools.similarity import _cosine, _cosine_over_all_peaks, _match_peaks
 
 
@@ -403,3 +407,226 @@ class TestComputeCosineEmbeddings:
                 reference_peaks=[[100.0, 1.0]],
                 scoring_method=bad,
             )
+
+
+# ---------------------------------------------------------------------------
+# compute_cosine — server-side data references
+# ---------------------------------------------------------------------------
+def _body_without_source_lines(report: str) -> str:
+    """The report with its two provenance lines removed, for identity checks."""
+    return "\n".join(
+        line
+        for line in report.splitlines()
+        if not line.startswith(("Query source:", "Reference source:"))
+    )
+
+
+@pytest.fixture()
+def stored_peaks() -> Iterator[Callable[..., str]]:
+    """Register peak lists server-side, releasing each one after the test."""
+    identifiers: list[str] = []
+
+    def store(*peaks: tuple[float, float]) -> str:
+        reference = reference_store.store_peak_list(_arr(*peaks))
+        identifiers.append(reference.identifier)
+        return reference.identifier
+
+    yield store
+    for identifier in identifiers:
+        reference_store.release(identifier)
+
+
+class TestComputeCosineDataReferences:
+    """``compute_cosine`` accepts a server-side reference on either side.
+
+    The point of the data-reference design is that an agent which has already
+    loaded a spectrum can score it without pushing the peak list back through
+    the conversation.  These tests hold the tool to that contract, and to the
+    rule that a bad handle fails loudly instead of scoring zero.
+    """
+
+    def test_reference_scores_identically_to_the_same_inline_peaks(
+        self,
+        sim_tools: dict[str, Callable[..., str]],
+        stored_peaks: Callable[..., str],
+    ) -> None:
+        """Dereferencing is a spelling of the same request, not a second path."""
+        query = [(100.0, 50.0), (200.0, 100.0), (300.0, 25.0)]
+        reference = [(100.0, 50.0), (200.0, 100.0)]
+        query_reference = stored_peaks(*query)
+
+        inline = sim_tools["compute_cosine"](
+            query_peaks=[list(peak) for peak in query],
+            reference_peaks=[list(peak) for peak in reference],
+        )
+        via_reference = sim_tools["compute_cosine"](
+            query_reference=query_reference,
+            reference_peaks=[list(peak) for peak in reference],
+        )
+
+        assert _displayed_score(via_reference) == _displayed_score(inline)
+        # Not just the score: every matching detail is byte-identical too.
+        assert _body_without_source_lines(via_reference) == _body_without_source_lines(
+            inline
+        )
+
+    def test_reference_on_both_sides(
+        self,
+        sim_tools: dict[str, Callable[..., str]],
+        stored_peaks: Callable[..., str],
+    ) -> None:
+        peaks = [(100.0, 1.0), (200.0, 2.0)]
+        out = sim_tools["compute_cosine"](
+            query_reference=stored_peaks(*peaks),
+            reference_reference=stored_peaks(*peaks),
+        )
+        assert "Cosine Similarity: **1.0000**" in out
+        assert "All query peaks were matched to the reference spectrum." in out
+
+    def test_spectrum_reference_pairs_both_arrays(
+        self, sim_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        """A stored *spectrum* dereferences to its paired m/z and intensity arrays."""
+        spectrum = Spectrum(
+            index=0,
+            ms_level=2,
+            retention_time=1.5,
+            precursor_mz=200.0,
+            mz=np.asarray([100.0, 200.0], dtype=np.float64),
+            intensity=np.asarray([1.0, 2.0], dtype=np.float64),
+        )
+        reference = reference_store.store_spectrum(spectrum)
+        try:
+            out = sim_tools["compute_cosine"](
+                query_reference=reference.identifier,
+                reference_peaks=[[100.0, 1.0], [200.0, 2.0]],
+            )
+        finally:
+            reference_store.release(reference.identifier)
+        assert "Cosine Similarity: **1.0000**" in out
+        assert "Matched: 2 / 2 query peaks (100.0%)" in out
+
+    def test_report_names_the_source_of_each_side(
+        self,
+        sim_tools: dict[str, Callable[..., str]],
+        stored_peaks: Callable[..., str],
+    ) -> None:
+        """A score has to be traceable to where its peaks came from."""
+        query_reference = stored_peaks((100.0, 50.0), (200.0, 100.0))
+        out = sim_tools["compute_cosine"](
+            query_reference=query_reference,
+            reference_peaks=[[100.0, 50.0]],
+        )
+        assert (
+            f"Query source: reference `{query_reference}` (peaks held server-side)"
+            in out
+        )
+        assert "Reference source: inline peak list (1 peak)" in out
+
+    def test_embedding_report_also_names_the_source(
+        self,
+        sim_tools: dict[str, Callable[..., str]],
+        stored_peaks: Callable[..., str],
+    ) -> None:
+        peaks = [(110.0713, 40.0), (120.0808, 100.0)]
+        query_reference = stored_peaks(*peaks)
+        inline = sim_tools["compute_cosine"](
+            query_peaks=[list(peak) for peak in peaks],
+            reference_peaks=[list(peak) for peak in peaks],
+            scoring_method="dreams",
+        )
+        via_reference = sim_tools["compute_cosine"](
+            query_reference=query_reference,
+            reference_peaks=[list(peak) for peak in peaks],
+            scoring_method="dreams",
+        )
+        assert (
+            f"Query source: reference `{query_reference}` (peaks held server-side)"
+            in via_reference
+        )
+        assert _body_without_source_lines(via_reference) == _body_without_source_lines(
+            inline
+        )
+
+    def test_unknown_reference_raises_rather_than_scoring_zero(
+        self, sim_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        """A handle that names nothing must not look like a real result."""
+        with pytest.raises(UnknownReferenceError, match="No live data reference"):
+            sim_tools["compute_cosine"](
+                query_reference=f"ptr:peak-list:{uuid.uuid4().hex}",
+                reference_peaks=[[100.0, 1.0]],
+            )
+
+    def test_stale_reference_raises_rather_than_scoring_zero(
+        self,
+        sim_tools: dict[str, Callable[..., str]],
+        stored_peaks: Callable[..., str],
+    ) -> None:
+        """A reference released between calls is stale, not empty.
+
+        (An *expired* reference raises ``ExpiredReferenceError`` from the store;
+        both are hard failures, which is the property that matters here.)
+        """
+        query_reference = stored_peaks((100.0, 50.0))
+        reference_store.release(query_reference)
+        with pytest.raises(UnknownReferenceError):
+            sim_tools["compute_cosine"](
+                query_reference=query_reference,
+                reference_peaks=[[100.0, 1.0]],
+            )
+
+    @pytest.mark.parametrize(
+        ("kwargs", "match"),
+        [
+            pytest.param(
+                {
+                    "query_peaks": [[100.0, 1.0]],
+                    "query_reference": "ptr:peak-list:abc",
+                    "reference_peaks": [[100.0, 1.0]],
+                },
+                "exactly one of query_peaks",
+                id="both-query-sources",
+            ),
+            pytest.param(
+                {
+                    "query_peaks": [[100.0, 1.0]],
+                    "reference_peaks": [[100.0, 1.0]],
+                    "reference_reference": "ptr:peak-list:abc",
+                },
+                "exactly one of reference_peaks",
+                id="both-reference-sources",
+            ),
+            pytest.param(
+                {"reference_peaks": [[100.0, 1.0]]},
+                "exactly one of query_peaks",
+                id="neither-query-source",
+            ),
+            pytest.param(
+                {"query_peaks": [[100.0, 1.0]]},
+                "exactly one of reference_peaks",
+                id="neither-reference-source",
+            ),
+        ],
+    )
+    def test_each_side_needs_exactly_one_source(
+        self,
+        sim_tools: dict[str, Callable[..., str]],
+        kwargs: dict[str, object],
+        match: str,
+    ) -> None:
+        with pytest.raises(ValidationError, match=match):
+            sim_tools["compute_cosine"](**kwargs)
+
+    @pytest.mark.parametrize("side", ["query", "reference"])
+    def test_blank_reference_is_rejected(
+        self, sim_tools: dict[str, Callable[..., str]], side: str
+    ) -> None:
+        kwargs: dict[str, object] = {"reference_peaks": [[100.0, 1.0]]}
+        kwargs[f"{side}_reference"] = "   "
+        if side == "reference":
+            kwargs["query_peaks"] = [[100.0, 1.0]]
+        with pytest.raises(
+            ValidationError, match=f"{side}_reference must not be empty"
+        ):
+            sim_tools["compute_cosine"](**kwargs)

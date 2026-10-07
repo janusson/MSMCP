@@ -150,6 +150,29 @@ async def test_signature_names_match_the_validating_model() -> None:
         }
 
 
+async def test_compute_cosine_advertises_one_peak_source_per_side() -> None:
+    """Both spellings of each side reach the wire, and the exclusion is stated.
+
+    The mutual exclusion is enforced by the model validator; a host can only
+    respect it if the schema names both parameters and says they are
+    alternatives, and if neither is marked required.
+    """
+    tool = next(t for t in await _tools() if t.name == "compute_cosine")
+    properties = tool.input_schema["properties"]
+    for side in ("query", "reference"):
+        peaks, reference = f"{side}_peaks", f"{side}_reference"
+        assert peaks in properties, f"{peaks} is not on the wire"
+        assert reference in properties, f"{reference} is not on the wire"
+        assert reference in properties[peaks]["description"]
+        assert peaks in properties[reference]["description"]
+    assert not set(tool.input_schema.get("required", [])) & {
+        "query_peaks",
+        "query_reference",
+        "reference_peaks",
+        "reference_reference",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Constraint drift
 # ---------------------------------------------------------------------------
@@ -176,6 +199,26 @@ def _declared_constraints(field: Any) -> dict[str, Any]:
     return found
 
 
+def _wire_constraint(spec: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    """Look up a JSON-Schema keyword at the top level or inside a union.
+
+    A parameter declared ``X | None`` has its type-specific keywords nested
+    under ``anyOf`` (``[<the type>, {"type": "null"}]``), so a top-level-only
+    lookup silently stops checking an optional parameter the moment it gains a
+    default.  Searching the union branches keeps those bounds guarded.
+    """
+    for key in keys:
+        if key in spec:
+            return spec[key]
+    for keyword in ("anyOf", "oneOf"):
+        for branch in spec.get(keyword, []):
+            if isinstance(branch, dict):
+                nested = _wire_constraint(branch, keys)
+                if nested is not None:
+                    return nested
+    return None
+
+
 async def test_signature_advertises_the_models_constraints() -> None:
     """Bounds enforced in the body must also appear in the wire schema.
 
@@ -191,7 +234,7 @@ async def test_signature_advertises_the_models_constraints() -> None:
             spec = tool.input_schema["properties"].get(name, {})
             for constraint, expected in _declared_constraints(field).items():
                 keys = _JSON_KEY_FOR_CONSTRAINT[constraint]
-                actual = next((spec.get(k) for k in keys if k in spec), None)
+                actual = _wire_constraint(spec, keys)
                 if actual != expected:
                     problems.append(
                         f"{tool.name}.{name}: {constraint}={expected!r} not in "

@@ -19,9 +19,11 @@ from typing import Annotated, Any, Literal
 
 import numpy as np
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from msmcp.errors import MsmcpError
 from msmcp.models import EmbeddingBackendUnavailable, get_embedder
+from msmcp.state import store as reference_store
 
 logger = logging.getLogger("msmcp.tools.similarity")
 
@@ -37,12 +39,48 @@ class ValidatePrecursorInput(BaseModel):
 
 
 class ComputeCosineInput(BaseModel):
-    """Input for the compute_cosine tool."""
+    """Input for the compute_cosine tool.
 
-    query_peaks: list[list[float]] = Field(..., min_length=1)
-    reference_peaks: list[list[float]] = Field(..., min_length=1)
+    Each side of the comparison comes from exactly one source: an inline
+    ``*_peaks`` array, or a ``*_reference`` naming a spectrum or peak list that
+    is already registered in the server-side store.  The mutual exclusion is
+    enforced here rather than documented, so a caller that supplies both (or
+    neither) is told which one to drop instead of being silently ignored.
+    """
+
+    query_peaks: list[list[float]] | None = Field(default=None, min_length=1)
+    query_reference: str | None = None
+    reference_peaks: list[list[float]] | None = Field(default=None, min_length=1)
+    reference_reference: str | None = None
     ms2_tolerance: float = Field(default=0.02, gt=0.0, le=1.0)
     scoring_method: Literal["classical", "dreams", "lsm-ms2"] = "classical"
+
+    @model_validator(mode="after")
+    def _exactly_one_source_per_side(self) -> ComputeCosineInput:
+        """Require exactly one peak source per side, mirroring ``SearchInput``."""
+        for side, peaks, reference in (
+            ("query", self.query_peaks, self.query_reference),
+            ("reference", self.reference_peaks, self.reference_reference),
+        ):
+            sources = {f"{side}_peaks": peaks, f"{side}_reference": reference}
+            supplied = {
+                name: value for name, value in sources.items() if value is not None
+            }
+            empty = sorted(
+                name
+                for name, value in supplied.items()
+                if isinstance(value, str) and not value.strip()
+            )
+            if empty:
+                raise ValueError(f"{', '.join(empty)} must not be empty")
+            if len(supplied) != 1:
+                raise ValueError(
+                    f"provide exactly one of {side}_peaks (inline [m/z, intensity] "
+                    f"pairs) or {side}_reference (a spectrum or peak-list reference "
+                    f"already registered server-side); got "
+                    f"{sorted(supplied) or 'neither'}"
+                )
+        return self
 
 
 # ======================================================================
@@ -62,6 +100,30 @@ def _validate_peak_list(
             raise ValueError(f"{label} peak [{i}] has negative intensity ({p[1]})")
     arr = np.asarray(peaks, dtype=np.float64)
     return arr
+
+
+def _peaks_from_reference(reference: str) -> list[list[float]]:
+    """Dereference a registered spectrum or peak list into ``[m/z, intensity]`` pairs.
+
+    Mirrors ``search_library``'s query resolution: a malformed, stale, expired
+    or never-registered reference raises out of the store rather than being
+    scored as an empty spectrum, so a bad handle can never look like a result.
+    """
+    peaks = np.asarray(reference_store.peak_list_of(reference), dtype=np.float64)
+    if peaks.ndim != 2 or peaks.shape[1] != 2 or peaks.shape[0] == 0:
+        raise MsmcpError(
+            f"Reference {reference!r} does not hold a usable peak list; got "
+            f"shape {peaks.shape}."
+        )
+    return [[float(mz), float(intensity)] for mz, intensity in peaks]
+
+
+def _source_label(inline: list[list[float]] | None, reference: str | None) -> str:
+    """Name where one side's peaks came from, for the response body."""
+    if reference is not None:
+        return f"reference `{reference}` (peaks held server-side)"
+    count = len(inline) if inline else 0
+    return f"inline peak list ({count} {'peak' if count == 1 else 'peaks'})"
 
 
 def _fmt_mz(val: float) -> str:
@@ -190,8 +252,13 @@ def _embedding_score(
     n_query: int,
     n_ref: int,
     method: str,
+    source_lines: list[str],
 ) -> str:
-    """Score two peak lists in deep-embedding space and render the report."""
+    """Score two peak lists in deep-embedding space and render the report.
+
+    *source_lines* records where each side's peaks came from, so an
+    embedding-space score is as traceable as a classical one.
+    """
     embedder = get_embedder(method)
     try:
         q_emb = embedder.embed_spectrum(query)
@@ -215,6 +282,7 @@ def _embedding_score(
         score = float(np.dot(u / u_norm, v / v_norm))
 
     backend_label = embedder.backend_label
+    source_block = "".join(f"{line}\n" for line in source_lines)
 
     logger.info(
         "compute_cosine(method=%s, query=%d, ref=%d) → %.4f",
@@ -230,6 +298,7 @@ def _embedding_score(
         f"Scoring method: {embedder.name} deep embedding "
         f"({embedder.embedding_dim}-d, L2-normalised, {backend_label})\n"
         f"Query peaks: {n_query} | Reference peaks: {n_ref}\n"
+        f"{source_block}"
         "\n"
         "Similarity is computed in embedding space: whole-spectrum\n"
         "fragmentation patterns are compared rather than individual\n"
@@ -330,25 +399,47 @@ def register_tools(mcp: Any) -> None:
     )
     def compute_cosine(
         query_peaks: Annotated[
-            list[list[float]],
+            list[list[float]] | None,
             Field(
                 min_length=1,
                 description=(
                     "Query spectrum peaks as [[m/z, intensity], ...]; at least "
-                    "one peak is required."
+                    "one peak is required.  Provide this or query_reference, "
+                    "not both."
                 ),
             ),
-        ],
+        ] = None,
+        query_reference: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "A reference from load_spectrum (or a stored peak list), "
+                    "used as the query instead of inline peaks.  Provide this "
+                    "or query_peaks, not both."
+                ),
+            ),
+        ] = None,
         reference_peaks: Annotated[
-            list[list[float]],
+            list[list[float]] | None,
             Field(
                 min_length=1,
                 description=(
                     "Reference spectrum peaks as [[m/z, intensity], ...]; at "
-                    "least one peak is required."
+                    "least one peak is required.  Provide this or "
+                    "reference_reference, not both."
                 ),
             ),
-        ],
+        ] = None,
+        reference_reference: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "A reference from load_spectrum (or a stored peak list), "
+                    "used as the reference spectrum instead of inline peaks.  "
+                    "Provide this or reference_peaks, not both."
+                ),
+            ),
+        ] = None,
         ms2_tolerance: Annotated[
             float,
             Field(
@@ -378,9 +469,13 @@ def register_tools(mcp: Any) -> None:
         spectra against an unknown query spectrum, or to judge how well a
         proposed structure explains the observed fragmentation.
 
-        Peaks are supplied as [[m/z, intensity], ...] lists in daltons; each
-        list needs at least one peak, intensities must be non-negative, and
-        intensities should be on a consistent scale within each spectrum.
+        Each side comes from exactly one source.  Either pass peaks directly as
+        [[m/z, intensity], ...] lists in daltons — each list needs at least one
+        peak, intensities must be non-negative, and intensities should be on a
+        consistent scale within each spectrum — or pass a `query_reference` /
+        `reference_reference` naming data already loaded server-side, which
+        keeps a large spectrum out of the conversation.  Supplying both sources
+        for the same side, or neither, is rejected.
 
         Returns a cosine score between 0 and 1, the number of matched peaks and
         the percentage of query peaks matched, and a list of the most intense
@@ -389,7 +484,9 @@ def register_tools(mcp: Any) -> None:
         intensities normalised over **all** peaks in each spectrum, so 1.0 means
         the matched peaks account for all of the intensity in both spectra —
         not that the two spectra are identical; a spectrum that shares a single
-        peak with the query scores near zero, not 1.0.
+        peak with the query scores near zero, not 1.0.  The response names the
+        source of each side, so a score is traceable back to where its peaks
+        came from.
 
         With scoring_method='classical' (the default) query peaks are matched
         to the closest unused reference peak within ms2_tolerance Da (greedy,
@@ -399,27 +496,57 @@ def register_tools(mcp: Any) -> None:
         those methods need the corresponding foundation model to be installed,
         otherwise the tool returns an error rather than a score.
         """
-        _ = ComputeCosineInput(
+        validated = ComputeCosineInput(
             query_peaks=query_peaks,
+            query_reference=query_reference,
             reference_peaks=reference_peaks,
+            reference_reference=reference_reference,
             ms2_tolerance=ms2_tolerance,
             scoring_method=scoring_method,
         )
 
+        # --- resolve server-side references ---------------------------------
+        # Dereferencing happens before scoring, so a stale, expired or mistyped
+        # handle raises instead of contributing an empty spectrum and scoring
+        # zero.  The dereferenced peaks then take the identical code path as
+        # inline peaks, so the two spellings score identically.
+        q_source = (
+            _peaks_from_reference(validated.query_reference)
+            if validated.query_reference is not None
+            else validated.query_peaks
+        )
+        r_source = (
+            _peaks_from_reference(validated.reference_reference)
+            if validated.reference_reference is not None
+            else validated.reference_peaks
+        )
+        if q_source is None or r_source is None:
+            # Unreachable: ComputeCosineInput requires one source per side.  The
+            # raise exists so the types are narrowed without an unchecked cast.
+            raise MsmcpError("compute_cosine needs one peak source per side.")
+
         # --- validate & convert peak lists ----------------------------------
         try:
-            q_arr = _validate_peak_list(query_peaks, "Query")
-            r_arr = _validate_peak_list(reference_peaks, "Reference")
+            q_arr = _validate_peak_list(q_source, "Query")
+            r_arr = _validate_peak_list(r_source, "Reference")
         except ValueError as exc:
             logger.warning("Peak list validation failed: %s", exc)
             return f"ERROR: {exc}"
+
+        q_label = _source_label(validated.query_peaks, validated.query_reference)
+        r_label = _source_label(
+            validated.reference_peaks, validated.reference_reference
+        )
+        source_lines = [f"Query source: {q_label}", f"Reference source: {r_label}"]
 
         n_query = len(q_arr)
         n_ref = len(r_arr)
 
         # --- foundation-model embedding scoring -----------------------------
         if scoring_method != "classical":
-            return _embedding_score(q_arr, r_arr, n_query, n_ref, scoring_method)
+            return _embedding_score(
+                q_arr, r_arr, n_query, n_ref, scoring_method, source_lines
+            )
 
         # --- classical greedy matching --------------------------------------
         q_matched, r_matched, unmatched_q_idx = _match_peaks(
@@ -464,6 +591,7 @@ def register_tools(mcp: Any) -> None:
             f"Cosine Similarity: **{score:.4f}**",
             "",
             "Scoring method: classical (greedy peak matching)",
+            *source_lines,
             f"Matched: {n_matched} / {n_query} query peaks ({pct_matched:.1f}%)",
             f"Reference peaks utilised: {n_ref_used} / {n_ref} ({pct_ref_used:.1f}%)",
             f"MS/MS tolerance: ±{ms2_tolerance:.3f} Da",

@@ -335,6 +335,32 @@ class TestSearchDispatcherAndPoller:
         # Re-requesting must not reset the delivery state.
         assert "## Spectral Library Search Results" not in await check(job_id=job_id)
 
+    async def test_full_report_first_delivery_is_digested_on_repeat(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        query_mzml: Path,
+    ) -> None:
+        """A race-recovery full-report read still counts as the first delivery."""
+        dispatched = await search_tools["search_library"](
+            experimental_file=str(query_mzml),
+            database_file=DB_FILE,
+        )
+        job_id = dispatched.split("`")[1]
+        deadline = time.monotonic() + 180.0
+        while time.monotonic() < deadline:
+            if search._EXECUTOR.status(job_id).status in search._TERMINAL:
+                break
+            await asyncio.sleep(0.25)
+        else:
+            pytest.fail(f"search job {job_id} did not finish within 180s")
+
+        check = search_tools["check_search_status"]
+        report = await check(job_id=job_id, full_report=True)
+        assert "## Spectral Library Search Results" in report
+        digest = await check(job_id=job_id)
+        assert "✅ **Completed**" in digest
+        assert "## Spectral Library Search Results" not in digest
+
     async def test_real_query_is_read_and_reported(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],

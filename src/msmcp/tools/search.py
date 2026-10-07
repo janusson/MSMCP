@@ -1174,7 +1174,8 @@ def register_tools(mcp: Any) -> None:
             payload = outcome.value
             if payload is None or payload.report is None:
                 return "ERROR: job completed without a report."
-            if full_report or _claim_report(job_id):
+            first_delivery = _claim_report(job_id)
+            if full_report or first_delivery:
                 logger.info(
                     "check_search_status(%s): returning the full report (%s)",
                     job_id,
