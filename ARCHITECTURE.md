@@ -77,12 +77,16 @@ class LibraryProvider(ABC):
     def iter_spectra(self, chunk_size) -> Iterator[LibrarySpectrum]
 
 
-def get_library_provider(path) -> LibraryProvider  # registry, like get_embedder
+def get_library_provider(path, policy) -> LibraryProvider  # registry, like get_embedder
 ```
+
+`policy` is required, not defaulted: a library cannot be opened without crossing
+the same `SecurityPolicy` as an acquisition.
 
 Planned implementations, in order: **MGF** (reusing `mgf.py`), **MSP** (the
 NIST text interchange format most libraries ship as), then a local **SQLite**
-peak store. Each is selected from `search_library`'s `database_file` argument,
+peak store.  **MSP is implemented** (`msmcp.library`); MGF and SQLite are still
+planned.  Each is selected from `search_library`'s `database_file` argument,
 and `provenance.SourceRef` records which library, format and version answered a
 query — the reproducibility requirement that a hit table be traceable.
 
@@ -308,11 +312,15 @@ during the v1.0 work:
 
 ## Known limitations (v1.0)
 
-1. **No spectral-library reader.** `search_library` scans a synthetic
-   in-memory library seeded from the database path string. The query spectrum
-   is real data; the library is not, and the report says so. This is the
-   largest gap, it is the repository's stated forward focus, and it is the
-   first v1.1 deliverable — see *Direction: local MS database connectivity*.
+1. **Library readers are partial: MSP is real, SQLite is not yet.**
+   `search_library` reads an **MSP/NIST-style text** library (`.msp`, `.msp.gz`)
+   from disk through the same `SecurityPolicy` as acquisitions
+   (`msmcp.library.LibraryProvider`) and searches it for real; the query and the
+   library are both genuine data, and the report names the file it opened.
+   A path with no reader — an MGF library or a local SQLite peak store, both
+   still planned — falls back to a deterministic synthetic library, and the
+   report says so. This is the repository's stated forward focus — see
+   *Direction: local MS database connectivity*.
 2. **Job state is in-process.** It does not survive a restart; the poller
    reports a lost job as failed rather than pending, so a client can never spin
    forever.

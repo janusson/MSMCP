@@ -9,13 +9,14 @@ delegated to an orchestrator.
 
 Honesty about the data
 ----------------------
-MSMCP has no spectral-library reader: MassFlow, the canonical MS I/O layer,
-exposes none, and inventing a library format would be worse than admitting the
-gap.  The **library side** of this search is therefore still synthetic - a
-deterministic in-memory SQLite database seeded from the ``database_file``
-string.  The scanning, scoring, FDR/p-value estimation and report formatting
-are real.  Reports always carry a banner saying so, because a plausible-looking
-hit table is the single most dangerous thing this server could emit.
+The **library** side is real whenever ``database_file`` names a format MSMCP can
+read: an MSP/NIST-style text library is resolved through the same
+:class:`~msmcp.security.SecurityPolicy` as acquisitions (allowed root, size
+limit, read-only) and searched for real — see :mod:`msmcp.library`.  A path with
+no reader falls back to a deterministic in-memory library seeded from the path
+string, and the report says *that* too: the banner always names which of the two
+paths produced the hits, because a plausible-looking hit table is the single
+most dangerous thing this server could emit.
 
 The **query** spectrum is always real data: either read from disk through the
 ingestion layer, or dereferenced from the server-side reference store.  There
@@ -32,6 +33,7 @@ import sqlite3
 import uuid
 import zlib
 from collections import OrderedDict
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Annotated, Any, Final, Literal
 
@@ -39,13 +41,14 @@ import numpy as np
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, model_validator
 
-from msmcp import ingest
+from msmcp import ingest, library, security
 from msmcp.errors import MsmcpError
 from msmcp.execution import (
     JobStatusSnapshot,
     LocalAsyncExecutor,
     UnknownJobError,
 )
+from msmcp.library import LibraryInfo, LibraryProvider
 from msmcp.models import get_embedder
 from msmcp.models.backends import LSM_MS2_CKPT_ENV
 from msmcp.models.scoring import ClassicalScorer, SpectrumScorer, get_scorer
@@ -509,6 +512,8 @@ class SearchSummary:
     """
 
     library_size: int
+    library_synthetic: bool
+    library_format: str | None
     query_peaks: int
     query_source: str
     mode: str
@@ -539,15 +544,43 @@ def _library_spec(database_file: str) -> tuple[int, int]:
     return rng.randint(500, 5000), rng.randint(0, 2**31)
 
 
+def _library_provider_for(database_file: str) -> LibraryProvider | None:
+    """Return a real provider for *database_file*, or ``None`` for the fallback.
+
+    A path whose suffix names a supported library format is resolved through the
+    security boundary — allowed root (symlinks resolved), size limit, read-only
+    — and any failure propagates rather than being papered over.  A path no
+    reader understands returns ``None``, and the scan uses the labelled synthetic
+    library instead.
+
+    The policy is looked up at call time (``security.DEFAULT_POLICY``) so a test
+    or embedder can substitute one, matching how ingestion resolves its paths.
+    """
+    if not library.is_supported_library_path(database_file):
+        return None
+    return library.get_library_provider(database_file, security.DEFAULT_POLICY)
+
+
+def _library_scan_dict(spectrum: library.LibrarySpectrum) -> dict[str, Any]:
+    """Shape a :class:`~msmcp.library.LibrarySpectrum` for the scan loop."""
+    return {
+        "id": spectrum.index,
+        "compound_name": spectrum.compound_name,
+        "formula": spectrum.formula,
+        "precursor_mz": spectrum.precursor_mz,
+        "peaks": list(spectrum.peaks),
+    }
+
+
 def _run_scan(request: SearchRequest) -> SearchOutcome:
     """Run the full library search and return the report with its provenance.
 
-    The library comes from :func:`_build_mock_database` (seeded from
-    ``database_file``) and is *never* read from disk.  The query spectrum is
-    real data resolved before dispatch.  The chunked scan, scoring,
-    FDR/p-value estimation and report formatting below are all real, so the
-    report is a truthful demonstration of the pipeline and is labelled as
-    such.
+    The library is read from disk when ``database_file`` names a readable
+    library format (:mod:`msmcp.library`, routed through the security boundary);
+    otherwise a deterministic synthetic library is generated and the report
+    says so.  The query spectrum is real data resolved before dispatch.  The
+    chunked scan, scoring, FDR/p-value estimation and report formatting are the
+    same on either path.
 
     This function is CPU-bound; the executor runs it on a worker thread so the
     MCP event loop stays responsive.
@@ -557,14 +590,20 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     chunk_size = request.chunk_size
 
     scorer = _build_scorer(scoring_method)
-    n_spectra, library_seed = _library_spec(database_file)
+    # A real library (MSP/NIST text) is read through the security boundary; a
+    # path with no reader falls back to the labelled synthetic library.
+    provider = _library_provider_for(database_file)
+    library_info: LibraryInfo | None = None
+    conn: sqlite3.Connection | None = None
+    if provider is not None:
+        library_info = provider.describe()
+        n_spectra = library_info.n_spectra
+    else:
+        n_spectra, library_seed = _library_spec(database_file)
+        conn = _build_mock_database(n_spectra=n_spectra, seed=library_seed)
     # The null draw is deterministic too, so a report is reproducible: same
     # library path in, same p-values out.
     rng = random.Random(_stable_seed(database_file) + 1)
-    conn = _build_mock_database(
-        n_spectra=n_spectra,
-        seed=library_seed,
-    )
     try:
         exp_peaks = list(request.experimental_peaks)
         if not exp_peaks:
@@ -602,7 +641,15 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             "FDR" if use_fdr else "p-value",
         )
 
-        for chunk_id, chunk in _iter_spectra_chunked(conn, chunk_size):
+        def _chunks() -> Iterator[tuple[int, list[dict[str, Any]]]]:
+            if provider is not None:
+                for chunk_id, spectra in enumerate(provider.iter_spectra(chunk_size)):
+                    yield chunk_id, [_library_scan_dict(s) for s in spectra]
+            else:
+                assert conn is not None
+                yield from _iter_spectra_chunked(conn, chunk_size)
+
+        for chunk_id, chunk in _chunks():
             for spec in chunk:
                 score = scorer.score(exp_peaks, spec["peaks"])
                 target_scores.append(score)
@@ -694,7 +741,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             )
 
         top_n = min(len(hits), 20)
-        lines = _report_banner(request, database_file, n_spectra)
+        lines = _report_banner(request, database_file, n_spectra, library_info)
 
         if request.spectrum_reference:
             lines.append(
@@ -735,8 +782,9 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 for i, h in enumerate(hits[:top_n], start=1):
                     lines.append(
                         f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | "
-                        f"{h['q_value']:.4f}       | {h['precursor_mz']:>13.4f} | "
-                        f"{h['formula']:<10} |"
+                        f"{h['q_value']:.4f}       | "
+                        f"{_cell_precursor(h['precursor_mz']):>13} | "
+                        f"{_cell_formula(h['formula']):<10} |"
                     )
             else:
                 lines.append(
@@ -748,8 +796,9 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 for i, h in enumerate(hits[:top_n], start=1):
                     lines.append(
                         f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | "
-                        f"{h['p_value']:.4f}   | {h['precursor_mz']:>13.4f} | "
-                        f"{h['formula']:<10} |"
+                        f"{h['p_value']:.4f}   | "
+                        f"{_cell_precursor(h['precursor_mz']):>13} | "
+                        f"{_cell_formula(h['formula']):<10} |"
                     )
 
             lines.append("")
@@ -761,16 +810,25 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             else:
                 lines.append(f"{total_passing} hit(s) passed the threshold.")
 
-        provenance = _search_provenance(request, n_spectra, len(exp_peaks))
+        provenance = _search_provenance(request, n_spectra, len(exp_peaks), library_info)
         lines.append("")
         lines.append("---")
-        lines.append(
-            f"*Provenance: {provenance.operation}, method "
-            f"`{scoring_method}`; query source "
-            f"`{request.spectrum_reference or request.experimental_file}`.  "
-            f"Library: synthetic ({n_spectra:,} spectra), not read from "
-            f"`{database_file}`.*"
-        )
+        if library_info is not None:
+            lines.append(
+                f"*Provenance: {provenance.operation}, method "
+                f"`{scoring_method}`; query source "
+                f"`{request.spectrum_reference or request.experimental_file}`.  "
+                f"Library: {library_info.format} read from disk "
+                f"({n_spectra:,} spectra), `{database_file}`.*"
+            )
+        else:
+            lines.append(
+                f"*Provenance: {provenance.operation}, method "
+                f"`{scoring_method}`; query source "
+                f"`{request.spectrum_reference or request.experimental_file}`.  "
+                f"Library: synthetic ({n_spectra:,} spectra), not read from "
+                f"`{database_file}`.*"
+            )
 
         logger.info(
             "_run_scan(db=%r, n=%d, mode=%s) -> %d hits (top %.4f)",
@@ -782,6 +840,8 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
         )
         summary = SearchSummary(
             library_size=n_spectra,
+            library_synthetic=library_info is None,
+            library_format=library_info.format if library_info is not None else None,
             query_peaks=len(exp_peaks),
             query_source=request.spectrum_reference
             or request.experimental_file
@@ -802,27 +862,46 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
         )
 
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def _report_banner(
     request: SearchRequest,
     database_file: str,
     n_spectra: int,
+    library_info: LibraryInfo | None,
 ) -> list[str]:
     """Return the mandatory truthfulness banner for a search report.
 
     The banner precedes the hit table so it survives a host that only forwards
-    the head of a tool result, and it is always phrased in terms of what is
-    actually synthetic: the library, never the query.
+    the head of a tool result, and it always names which library answered the
+    query: a real file read from disk, or the labelled synthetic fallback.  The
+    query is real in both cases and the banner never claims otherwise.
     """
+    if library_info is not None:
+        digest = library_info.digest or "not computed (file exceeds the digest limit)"
+        return [
+            "> ✅  **REAL LIBRARY — READ FROM DISK.**",
+            ">",
+            f"> The library below was read from disk as {library_info.format} "
+            f"({library_info.version or 'text'}) and searched for real.  Hits are "
+            f"candidate library matches ranked by the stated scorer and "
+            f"significance model, not validated compound identifications.",
+            ">",
+            f"> Library digest: `{digest}`",
+            "",
+            "## Spectral Library Search Results",
+            "",
+            f"Requested database: `{database_file}` — {library_info.format} "
+            f"library read from disk ({n_spectra:,} spectra)",
+        ]
     return [
         "> ⚠️  **SYNTHETIC LIBRARY — NOT A COMPOUND IDENTIFICATION.**",
         ">",
         "> The query spectrum is real data, but the spectral library it was "
-        "searched against is synthetic: MSMCP has no spectral-library reader "
-        "yet, so the database path below was not opened and the library was "
-        "generated in memory.",
+        "searched against is synthetic: no reader recognises this library path, "
+        "so it was not opened and the library was generated in memory.",
         ">",
         "> Treat this as a demonstration of the scanning, scoring and FDR "
         "machinery applied to a real query.  Do not report these compounds "
@@ -831,12 +910,16 @@ def _report_banner(
         "## Spectral Library Search Results",
         "",
         f"Requested database: `{database_file}` — not opened "
-        f"(substituted a synthetic library of {n_spectra:,} spectra)",
+        f"(unsupported library format; substituted a synthetic library of "
+        f"{n_spectra:,} spectra)",
     ]
 
 
 def _search_provenance(
-    request: SearchRequest, n_spectra: int, n_query_peaks: int
+    request: SearchRequest,
+    n_spectra: int,
+    n_query_peaks: int,
+    library_info: LibraryInfo | None,
 ) -> Provenance:
     """Build the provenance record for one search."""
     sources = []
@@ -848,17 +931,30 @@ def _search_provenance(
                 backend="msmcp.ingest",
             )
         )
+    parameters: dict[str, Any] = {
+        "scoring_method": request.scoring_method,
+        "chunk_size": request.chunk_size,
+        "library_spectra": n_spectra,
+        "query_peaks": n_query_peaks,
+        "query_is_real_data": True,
+    }
+    if library_info is None:
+        parameters["library_synthetic"] = True
+        parameters["database_file_not_opened"] = request.database_file
+    else:
+        parameters["library_synthetic"] = False
+        parameters["library_format"] = library_info.format
+        parameters["library_digest"] = library_info.digest
+        sources.append(
+            SourceRef.from_path(
+                library_info.path,
+                format=library_info.format,
+                backend="msmcp.library",
+            )
+        )
     return provenance_for(
         "search_library",
-        parameters={
-            "scoring_method": request.scoring_method,
-            "chunk_size": request.chunk_size,
-            "library_synthetic": True,
-            "library_spectra": n_spectra,
-            "query_peaks": n_query_peaks,
-            "query_is_real_data": True,
-            "database_file_not_opened": request.database_file,
-        },
+        parameters=parameters,
         sources=tuple(sources),
         parents=(request.spectrum_reference,) if request.spectrum_reference else (),
         model=_model_info(request.scoring_method),
@@ -904,6 +1000,16 @@ def _claim_report(job_id: str) -> bool:
     return True
 
 
+def _cell_formula(value: Any) -> str:
+    """Render a formula cell, using an em dash when the library had none."""
+    return str(value) if value else "—"
+
+
+def _cell_precursor(value: Any) -> str:
+    """Render a precursor m/z cell, or an em dash when it is unknown."""
+    return f"{value:.4f}" if isinstance(value, int | float) else "—"
+
+
 def _digest_lines(job_id: str, summary: SearchSummary) -> str:
     """Render the short repeat-poll answer for an already-delivered report.
 
@@ -924,13 +1030,28 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
     else:
         top = "none passed the threshold"
 
+    if summary.library_synthetic:
+        library_line = (
+            f"- Library: {summary.library_size:,} synthetic spectra (not read "
+            f"from disk)"
+        )
+        warning = "> ⚠️  **Synthetic library** — not compound identifications."
+    else:
+        library_line = (
+            f"- Library: {summary.library_size:,} "
+            f"{summary.library_format or 'library'} spectra (read from disk)"
+        )
+        warning = (
+            "> ✅  **Real library** — candidate matches, not validated "
+            "identifications."
+        )
+
     return "\n".join(
         [
             f"✅ **Completed** — search job `{job_id}` finished; its report was "
             f"already returned.",
             "",
-            f"- Library: {summary.library_size:,} synthetic spectra (not read "
-            f"from disk)",
+            library_line,
             f"- Query: {summary.query_peaks} real peaks from `{summary.query_source}`",
             f"- {summary.mode} threshold {summary.threshold}: {summary.n_hits} hit(s)",
             f"- Top hit: {top}",
@@ -938,7 +1059,7 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
             "Poll again with `full_report=True` to fetch the full report; other "
             "polls keep returning this digest.",
             "",
-            "> ⚠️  **Synthetic library** — not compound identifications.",
+            warning,
         ]
     )
 
@@ -989,8 +1110,10 @@ def register_tools(mcp: Any) -> None:
             str,
             Field(
                 min_length=1,
-                description="Path identifying the spectral library.  Not read "
-                "yet: the path only seeds the synthetic library.",
+                description="Path to the spectral library.  MSP/NIST-style "
+                "text (.msp, .msp.gz) is read from disk through the security "
+                "boundary; any other path falls back to a labelled synthetic "
+                "library.",
             ),
         ],
         experimental_file: Annotated[
@@ -1029,10 +1152,14 @@ def register_tools(mcp: Any) -> None:
     ) -> str:
         """Start a background spectral-library search and return a job ID.
 
-        IMPORTANT: the **library** is synthetic.  MSMCP has no spectral-library
-        reader, so `database_file` is not opened; a deterministic in-memory
-        library is generated from that string instead.  The report repeats this
-        warning - never treat its hits as compound identifications.
+        The **library** is read for real when `database_file` names a format
+        MSMCP can read (MSP/NIST-style text, `.msp` / `.msp.gz`).  The path is
+        resolved through the same security boundary as acquisitions — allowed
+        root, size limit, read-only — so a library outside the allowed root, a
+        missing file or an unsupported format is refused before a job is
+        dispatched.  A path with no reader falls back to a deterministic
+        synthetic library, and the report says which path was used; never treat
+        a synthetic-library hit as a compound identification.
 
         The **query** spectrum can be real: pass `spectrum_reference` from
         `load_spectrum` (peaks already server-side) or `experimental_file` to
@@ -1058,6 +1185,13 @@ def register_tools(mcp: Any) -> None:
             exp_peaks = tuple(_peaks_from_reference(validated.spectrum_reference))
         elif validated.experimental_file is not None:
             exp_peaks = tuple(_peaks_from_file(validated.experimental_file))
+
+        # Validate the library path *before* dispatch too.  A path in a
+        # readable library format is resolved through the security boundary
+        # here, so an out-of-root or missing library is an immediate tool error
+        # rather than a failed background job; a path with no reader returns
+        # None and the scan uses the labelled synthetic fallback.
+        library_provider = _library_provider_for(validated.database_file)
 
         request = SearchRequest(
             database_file=validated.database_file,
@@ -1088,14 +1222,26 @@ def register_tools(mcp: Any) -> None:
             len(exp_peaks),
         )
 
+        if library_provider is not None:
+            library_note = (
+                f"✅ Library `{validated.database_file}` will be read from disk "
+                f"({library_provider.format}) through the security boundary and "
+                f"searched for real."
+            )
+        else:
+            library_note = (
+                f"⚠️  `{validated.database_file}` is not a supported library "
+                f"format, so nothing is opened: a **synthetic** library is "
+                f"substituted.  The final report repeats this warning — do not "
+                f"treat its hits as compound identifications."
+            )
+
         return (
             f"## Search Dispatched\n\n"
             f"**Job ID:** `{handle.job_id}`\n\n"
             f"**Query:** {validated.spectrum_reference or validated.experimental_file}"
             f" ({len(exp_peaks)} real peaks)\n\n"
-            f"⚠️  The **library** is **synthetic** — `{validated.database_file}` "
-            f"is not read.  The final report repeats this warning — do not "
-            f"treat its hits as compound identifications.\n\n"
+            f"{library_note}\n\n"
             f"Poll for the report with:\n\n"
             f'    check_search_status(job_id="{handle.job_id}")\n'
             f'    cancel_search(job_id="{handle.job_id}")\n'
