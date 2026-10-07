@@ -136,7 +136,9 @@ class TestValidatePrecursorInstrumentClass:
             theoretical_mass=100.0, experimental_mass=100.04, instrument_class="generic"
         )
         da = sim_tools["validate_precursor"](
-            theoretical_mass=100.0, experimental_mass=100.04, instrument_class="ion_trap"
+            theoretical_mass=100.0,
+            experimental_mass=100.04,
+            instrument_class="ion_trap",
         )
         assert ppm.startswith("VALIDATION REJECTED")
         assert da.startswith("VALIDATION PASSED")
