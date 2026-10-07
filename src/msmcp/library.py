@@ -156,6 +156,23 @@ class LibraryProvider(ABC):
     def iter_spectra(self, chunk_size: int = 2000) -> Iterator[list[LibrarySpectrum]]:
         """Stream spectra in chunks; each provider may be iterated repeatedly."""
 
+    def validate(self) -> None:
+        """Prove the library opens and parses, using a bounded prefix.
+
+        Reads the first record through the same parser the scan uses, so a file
+        that is not the format its suffix claims — or whose first record is
+        corrupt — fails **before** a search is dispatched, exactly as a
+        malformed query spectrum does on the query path.  An empty library is
+        legal and passes: it is searched, finds nothing, and says so.
+
+        Only the first record is read, so corruption that begins further into
+        the file cannot be caught here without reading all of it; that case
+        surfaces as a failed job carrying the parser's traceback, which the
+        poller reports.
+        """
+        for _chunk in self.iter_spectra(1):
+            return
+
 
 # ---------------------------------------------------------------------------
 # MSP / NIST-style text
