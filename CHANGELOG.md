@@ -123,6 +123,12 @@ string rather than opening it, and every report says so.
   context again. `check_search_status(job_id=..., full_report=True)` re-requests
   the report for a client that no longer has it. The delivery record is bounded
   to the 1024 most recent jobs.
+- **The evaluation asserts a cumulative context budget.** Section 4.12 of the
+  notebook re-drives the audit's representative workflow through the real server
+  object (the same `call_tool` / `model_dump_json` path the measurement script
+  used), sums every result a host would receive, and requires the total to stay
+  within 1.5x the audit's 20,481-byte measurement. A doubling of what a workflow
+  costs in context now fails a check instead of going unnoticed.
 - **`compute_cosine` accepts a server-side reference on either side.** The tool
   previously required both peak lists inline, so an agent that had already
   loaded a spectrum with `load_spectrum` had to push the peaks back through the
