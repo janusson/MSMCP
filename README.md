@@ -164,6 +164,7 @@ git clone <repository-url> msmcp && cd msmcp
 uv sync --extra dev
 
 # 2. Lint, test, and launch the server
+uv run ruff format --check .   # CI runs this first; `make lint` does too
 uv run ruff check .
 uv run mypy
 uv run basedpyright
@@ -180,7 +181,7 @@ make all
 |---|---|
 | Sync environment | `uv sync --extra dev` |
 | Format | `uv run ruff format .` |
-| Lint | `uv run ruff check .` · `uv run mypy` · `uv run basedpyright` |
+| Lint | `uv run ruff format --check .` · `uv run ruff check .` · `uv run mypy` · `uv run basedpyright` |
 | Test | `uv run pytest` |
 | Evaluate end to end | `uv run pytest tests/test_eval_notebook.py -m eval -s -q` |
 | Run the server | `uv run msmcp` |

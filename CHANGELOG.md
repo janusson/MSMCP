@@ -69,6 +69,11 @@ accumulated on `main`.
   isotope substitution difference (`¹³C − ¹²C` = 1.003355 Da), placing M+1 about
   5.3 mDa (~18 ppm at m/z 300) too high. Glucose M+1 is now 181.0668, not
   181.0721.
+- **`make lint` did not run CI's format check**, so a tree that passed `make lint`
+  could still fail the `gate` job — CI runs `ruff format --check .` *first*, and
+  the Makefile had no target that checks formatting (`make format` applies it
+  rather than verifying it). `make lint` now runs it, so the local lint target
+  and CI agree on what "clean" means.
 
 ### Changed
 
