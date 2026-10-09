@@ -562,3 +562,198 @@ def test_report_builder_is_well_formed_for_every_scorer(method: str) -> None:
     report = _scan(scoring_method=method)
     assert report.startswith(">")
     assert "SYNTHETIC LIBRARY" in report
+
+
+# ---------------------------------------------------------------------------
+# Which spectrum is the query?
+# ---------------------------------------------------------------------------
+class TestQuerySpectrumSelection:
+    """The query spectrum must be nameable, and reported, never silently index 0.
+
+    A real LC-MS/MS file begins with an MS1 survey scan, and searching an MS1
+    against an MS2 library is meaningless by construction.  The old
+    ``experimental_file`` path took spectrum 0 and said nothing about it.
+    ``COE001_16ppm_5uL.mzML`` has 9,286 spectra, 5,330 of them usable MS2, and
+    spectrum 0 is an MS1 with 252 peaks.
+    """
+
+    @staticmethod
+    def _allow(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Confine the run to the fixture's directory, as a real run would.
+
+        ``ingest`` resolves its default policy from its own module namespace, so
+        patching ``security.DEFAULT_POLICY`` alone never reaches the reader —
+        the same reason the ``query_mzml`` fixture patches ``ingest``.
+        """
+        from msmcp import ingest, security
+
+        policy = security.SecurityPolicy(allowed_root=path.parent)
+        monkeypatch.setattr(ingest, "DEFAULT_POLICY", policy)
+        monkeypatch.setattr(security, "DEFAULT_POLICY", policy)
+
+    async def test_experimental_file_names_the_spectrum_it_used(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        valid_mzml: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The reply states which spectrum was searched, and its peak count."""
+        self._allow(valid_mzml, monkeypatch)
+        dispatched = await search_tools["search_library"](
+            experimental_file=str(valid_mzml),
+            database_file=DB_FILE,
+        )
+        assert "spectrum #0" in dispatched
+        assert "3 peaks" in dispatched
+
+    async def test_spectrum_index_selects_that_spectrum(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        valid_mzml: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``spectrum_index`` chooses the query instead of always taking 0.
+
+        ``valid_mzml``'s three spectra have 3, 2 and 4 peaks, so the reported
+        count identifies which one was scanned.
+        """
+        self._allow(valid_mzml, monkeypatch)
+        dispatched = await search_tools["search_library"](
+            experimental_file=str(valid_mzml),
+            spectrum_index=2,
+            database_file=DB_FILE,
+        )
+        assert "spectrum #2" in dispatched
+        assert "4 peaks" in dispatched
+
+    async def test_an_empty_query_spectrum_is_refused(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        mzml_with_empty_scan: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An empty scan has nothing to search and must not dispatch a job.
+
+        Empty scans are ordinary in real acquisitions (2,495 of COE001's 9,286
+        spectra), so pointing at one is a user error worth a clear message
+        rather than a meaningless scan.
+        """
+        from msmcp.errors import MsmcpError
+
+        self._allow(mzml_with_empty_scan, monkeypatch)
+        with pytest.raises(MsmcpError, match="no peaks"):
+            await search_tools["search_library"](
+                experimental_file=str(mzml_with_empty_scan),
+                spectrum_index=1,
+                database_file=DB_FILE,
+            )
+
+    async def test_spectrum_index_out_of_range_is_refused(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        valid_mzml: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An index past the end of the file fails before dispatch."""
+        from msmcp.errors import SpectrumIndexError
+
+        self._allow(valid_mzml, monkeypatch)
+        with pytest.raises(SpectrumIndexError, match="index"):
+            await search_tools["search_library"](
+                experimental_file=str(valid_mzml),
+                spectrum_index=99,
+                database_file=DB_FILE,
+            )
+
+    async def test_spectrum_index_without_a_file_is_rejected(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+    ) -> None:
+        """``spectrum_index`` only means something with ``experimental_file``."""
+        with pytest.raises(ValidationError, match="spectrum_index"):
+            await search_tools["search_library"](
+                spectrum_reference="ptr:spectrum:abc",
+                spectrum_index=3,
+                database_file=DB_FILE,
+            )
+
+    @staticmethod
+    async def _drain(check: Callable[..., Awaitable[str]], dispatched: str) -> None:
+        """Run a dispatched job to a terminal state.
+
+        ``search_library`` returns as soon as the job is *queued* — that is the
+        architecture, not an implementation detail — so a test that asserts on
+        what the scan received has to let the scan happen first.
+        """
+        job_id = dispatched.split("`")[1]
+        for _ in range(400):
+            out = await check(job_id=job_id)
+            if out.startswith(("❌", "⏹")) or "Search Results" in out:
+                return
+            await asyncio.sleep(0.05)
+        raise AssertionError(f"job {job_id} never reached a terminal state")
+
+    @staticmethod
+    def _capture_scan(monkeypatch: pytest.MonkeyPatch) -> list[SearchRequest]:
+        """Replace the scan with a recorder, so a test can inspect its request.
+
+        The job is asked to fail immediately: the request is what is under test,
+        and a scan that actually ran would only cost time to reach the same
+        place.
+        """
+        from msmcp.tools import search
+
+        seen: list[SearchRequest] = []
+
+        def capture(request: SearchRequest) -> None:
+            seen.append(request)
+            raise RuntimeError("captured before the scan ran")
+
+        monkeypatch.setattr(search, "_run_scan", capture)
+        return seen
+
+    async def test_the_effective_index_reaches_the_request(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        valid_mzml: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A *default* index is still an index, and must be recorded as one.
+
+        ``query_spectrum_index`` was written only when the caller supplied one,
+        so the common case — a file search that falls back to spectrum 0, which
+        is precisely the silent behaviour this parameter exists to expose —
+        left no record at all of which spectrum had been searched.  The
+        dispatch reply named it; the provenance did not.
+        """
+        self._allow(valid_mzml, monkeypatch)
+        seen = self._capture_scan(monkeypatch)
+
+        dispatched = await search_tools["search_library"](
+            experimental_file=str(valid_mzml),
+            database_file=DB_FILE,
+        )
+        await self._drain(search_tools["check_search_status"], dispatched)
+
+        assert seen, "the scan never ran, so no request was captured"
+        assert seen[0].query_spectrum_index == 0
+
+    async def test_an_explicit_index_reaches_the_request(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        valid_mzml: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The index the caller named is the one that is recorded."""
+        self._allow(valid_mzml, monkeypatch)
+        seen = self._capture_scan(monkeypatch)
+
+        dispatched = await search_tools["search_library"](
+            experimental_file=str(valid_mzml),
+            spectrum_index=2,
+            database_file=DB_FILE,
+        )
+        await self._drain(search_tools["check_search_status"], dispatched)
+
+        assert seen, "the scan never ran, so no request was captured"
+        assert seen[0].query_spectrum_index == 2

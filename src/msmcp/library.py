@@ -60,9 +60,6 @@ __all__ = [
 MSP_SUFFIXES: Final[tuple[str, ...]] = (".msp", ".msp.gz")
 """File suffixes read as MSP / NIST-style text libraries."""
 
-_COUNT_CHUNK: Final[int] = 10_000
-"""Chunk size used when counting spectra for :meth:`LibraryProvider.describe`."""
-
 # A header line is ``Key: value`` where the key starts with a letter and may
 # contain spaces (``Num Peaks``), underscores (``Precursor_mz``) or a hash
 # (``DB#``).  A peak line never matches: it begins with a digit, sign or dot.
@@ -117,7 +114,14 @@ class LibrarySpectrum:
 
 @dataclass(frozen=True, slots=True)
 class LibraryInfo:
-    """What a provider can say about a library without returning its spectra."""
+    """What a provider can say about a library without returning its spectra.
+
+    ``n_spectra`` is the number of spectra that will actually be searched, and
+    ``n_records_without_peaks`` counts the records the reader skipped because
+    they hold no peaks at all.  Both are reported: a reader that drops records
+    without saying how many is as untrustworthy as one that refuses to read the
+    file.
+    """
 
     path: str
     name: str
@@ -126,6 +130,15 @@ class LibraryInfo:
     n_spectra: int
     digest: str | None
     size_bytes: int | None
+    n_records_without_peaks: int = 0
+
+
+@dataclass(slots=True)
+class MSPParseStats:
+    """Counters the MSP reader fills in while it streams a library."""
+
+    spectra: int = 0
+    records_without_peaks: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -254,13 +267,25 @@ def _build_spectrum(
     line_number: int,
     fields: dict[str, str],
     peaks: list[tuple[float, float]],
-) -> LibrarySpectrum:
-    """Turn one accumulated MSP block into a :class:`LibrarySpectrum`."""
+) -> LibrarySpectrum | None:
+    """Turn one accumulated MSP block into a :class:`LibrarySpectrum`.
+
+    Returns ``None`` for a record that holds no peaks — a metadata-only
+    deposition, or one whose ``Num Peaks: 0`` says outright that it has none.
+    These are ordinary in the public GNPS/MoNA libraries: ``GNPS-LIBRARY.msp``
+    has one at record 1,242, ``GNPS-NIST14-MATCHES.msp`` at 20 and
+    ``DEREPLICATOR_IDENTIFIED_LIBRARY.msp`` at 57.  An entry with a structure and
+    no spectrum has nothing to match against, so it is skipped — and counted by
+    the caller, because a reader that drops records silently is no better than
+    one that fails outright.
+
+    The declaration is checked *before* that decision either way, so the
+    strictness that earns its keep is untouched: a ``Num Peaks`` header that
+    disagrees with the peak lines read is still a
+    :class:`~msmcp.errors.MalformedFileError`, including the case where it
+    declares peaks and none follow.
+    """
     name = _first(fields, _NAME_KEYS) or ""
-    if not peaks:
-        raise MalformedFileError(
-            f"MSP spectrum #{index} ({name or '<unnamed>'}) contains no peak lines."
-        )
 
     declared_raw = _first(fields, _NUM_PEAKS_KEYS)
     if declared_raw is not None:
@@ -277,6 +302,9 @@ def _build_spectrum(
                 f"Num Peaks: {declared} but {len(peaks)} peak lines were read "
                 f"(ended at line {line_number})."
             )
+
+    if not peaks:
+        return None
 
     return LibrarySpectrum(
         index=index,
@@ -296,13 +324,16 @@ def _first(fields: dict[str, str], keys: frozenset[str]) -> str | None:
     return None
 
 
-def iter_msp_spectra(path: Path) -> Iterator[LibrarySpectrum]:
+def iter_msp_spectra(
+    path: Path, stats: MSPParseStats | None = None
+) -> Iterator[LibrarySpectrum]:
     """Stream :class:`LibrarySpectrum` objects from an MSP file.
 
     Records are separated by a blank line or by the next ``Name:`` line.  The
-    reader raises on any malformed peak line, mismatched ``Num Peaks`` header or
-    a record with no peaks — it never returns a partially-parsed library as if
-    it were complete.
+    reader raises on any malformed peak line or mismatched ``Num Peaks`` header,
+    so a corrupt record is never silently repaired; a record that holds no peaks
+    at all is skipped, and counted in *stats* when one is supplied, rather than
+    invented or treated as fatal.
     """
     handle = _open_text(path)
     fields: dict[str, str] = {}
@@ -310,13 +341,25 @@ def iter_msp_spectra(path: Path) -> Iterator[LibrarySpectrum]:
     have_content = False
     index = 0
     line_number = 0
+
+    def _emit() -> Iterator[LibrarySpectrum]:
+        """Build the accumulated record, yielding it only if it holds peaks."""
+        spectrum = _build_spectrum(index, line_number, fields, peaks)
+        if spectrum is None:
+            if stats is not None:
+                stats.records_without_peaks += 1
+            return
+        if stats is not None:
+            stats.spectra += 1
+        yield spectrum
+
     try:
         for raw_line in handle:
             line_number += 1
             line = raw_line.strip()
             if not line:
                 if have_content:
-                    yield _build_spectrum(index, line_number, fields, peaks)
+                    yield from _emit()
                     index += 1
                     fields, peaks, have_content = {}, [], False
                 continue
@@ -332,14 +375,14 @@ def iter_msp_spectra(path: Path) -> Iterator[LibrarySpectrum]:
             key = _normalise_key(match.group(1))
             if key in _NAME_KEYS and have_content:
                 # A new record without a separating blank line.
-                yield _build_spectrum(index, line_number, fields, peaks)
+                yield from _emit()
                 index += 1
                 fields, peaks = {}, []
             fields[key] = match.group(2).strip()
             have_content = True
 
         if have_content:
-            yield _build_spectrum(index, line_number, fields, peaks)
+            yield from _emit()
     finally:
         handle.close()
 
@@ -350,8 +393,16 @@ class MSPLibraryProvider(LibraryProvider):
     format = "MSP"
 
     def describe(self) -> LibraryInfo:
-        """Count the library's spectra and digest the file it came from."""
-        n_spectra = sum(len(chunk) for chunk in self.iter_spectra(_COUNT_CHUNK))
+        """Count the library's spectra and digest the file it came from.
+
+        The count is taken with the same reader the scan uses, so the number
+        reported is the number that will actually be searched — and the records
+        the reader skipped for holding no peaks are reported beside it rather
+        than left unmentioned.
+        """
+        stats = MSPParseStats()
+        for _spectrum in iter_msp_spectra(self._path, stats):
+            pass
         try:
             size = self._path.stat().st_size
         except OSError:
@@ -361,9 +412,10 @@ class MSPLibraryProvider(LibraryProvider):
             name=self._path.name,
             format=self.format,
             version="NIST/MSP text",
-            n_spectra=n_spectra,
+            n_spectra=stats.spectra,
             digest=file_digest(self._path),
             size_bytes=size,
+            n_records_without_peaks=stats.records_without_peaks,
         )
 
     def iter_spectra(self, chunk_size: int = 2000) -> Iterator[list[LibrarySpectrum]]:
