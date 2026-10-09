@@ -21,8 +21,12 @@ from __future__ import annotations
 import gzip
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:  # the reader module stays un-imported at runtime on purpose
+    from msmcp.library import LibraryProvider
 
 from msmcp.security import PathEscapeError, SecurityPolicy
 from msmcp.tools.search import SearchRequest, _run_scan
@@ -576,3 +580,131 @@ class TestMSPReader:
         assert provider is not None
         with pytest.raises(MalformedFileError, match="non-numeric"):
             list(provider.iter_spectra(10))
+
+
+# ---------------------------------------------------------------------------
+# Metadata-only records: a deposition without a spectrum is data, not corruption
+# ---------------------------------------------------------------------------
+# Verbatim from GNPS-LIBRARY.msp: fourteen header lines, no "Num Peaks" header,
+# no peak lines.  GNPS-NIST14-MATCHES.msp (Nalidixic acid) and
+# DEREPLICATOR_IDENTIFIED_LIBRARY.msp (Puwainaphycin C) each carry an identical
+# shape.  One such record used to make the entire library unreadable, so a
+# 139 MB library could not be searched at all.
+METADATA_ONLY_MSP = """\
+Name: Caffeine
+Formula: C8H10N4O2
+PrecursorMZ: 195.0877
+Num Peaks: 5
+110.0713 40.0
+120.0808 100.0
+136.0757 60.0
+138.0662 420.0
+500.1 55.0
+
+NAME: Ferrichrome
+PRECURSORMZ: 763.0
+PRECURSORTYPE: M+Na
+FORMULA: C27H42FeN9NaO12+
+Ontology:
+INCHIKEY: QNVPQTXXHKIFLL-UHFFFAOYSA-N
+INCHI:
+SMILES: CC(=O)N(CCCC1C(=O)NC(C(=O)NC(C(=O)NCC(=O)NCC(=O)NCC(=O)N1)CCCN(C(=O)C)[O-])CCCN(C(=O)C)[O-])[O-].[Fe+3][Na+]
+RETENTIONTIME: CCS:
+IONMODE: Positive
+INSTRUMENTTYPE: DI-ESI-Hybrid FT
+INSTRUMENT: Hybrid FT
+COLLISIONENERGY:
+Comment: DB#=CCMSLIB00000078897; origin=GNPS
+
+Name: Theobromine
+Formula: C7H8N4O2
+PrecursorMZ: 181.0720
+Num Peaks: 3
+110.0713 12.0
+163.0601 510.0
+181.0720 8.0
+"""
+
+
+class TestMetadataOnlyRecords:
+    """A record with no peaks is skipped, counted, and hides nothing."""
+
+    def _provider(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        text: str = METADATA_ONLY_MSP,
+    ) -> tuple[LibraryProvider, Path]:
+        from msmcp import security
+        from msmcp.library import get_library_provider
+
+        path = tmp_path / "with_metadata_only.msp"
+        path.write_text(text, encoding="utf-8")
+        monkeypatch.setattr(
+            security, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path)
+        )
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+        return provider, path
+
+    def test_the_records_around_it_are_still_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A peak-less record must not truncate the records that follow it."""
+        provider, _ = self._provider(tmp_path, monkeypatch)
+        names = [
+            spectrum.compound_name
+            for chunk in provider.iter_spectra(10)
+            for spectrum in chunk
+        ]
+        assert names == ["Caffeine", "Theobromine"]
+
+    def test_the_skipped_record_is_counted_not_hidden(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Dropping a record silently would be its own kind of lie."""
+        provider, _ = self._provider(tmp_path, monkeypatch)
+        info = provider.describe()
+
+        assert info.n_spectra == 2
+        assert info.n_records_without_peaks == 1
+
+    def test_a_declared_zero_peak_record_is_also_skipped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``Num Peaks: 0`` agrees with the peak lines: still nothing to match."""
+        text = (
+            "Name: Declared-Empty\nPrecursorMZ: 300.0\nNum Peaks: 0\n\n"
+            "Name: Real\nPrecursorMZ: 301.0\nNum Peaks: 2\n200.0 1.0\n201.0 2.0\n"
+        )
+        provider, _ = self._provider(tmp_path, monkeypatch, text)
+        names = [
+            spectrum.compound_name
+            for chunk in provider.iter_spectra(10)
+            for spectrum in chunk
+        ]
+        assert names == ["Real"]
+        assert provider.describe().n_records_without_peaks == 1
+
+    def test_a_num_peaks_mismatch_is_still_malformed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Corruption is still corruption; the strictness is not weakened."""
+        from msmcp.errors import MalformedFileError
+
+        text = "Name: Broken\nPrecursorMZ: 300.0\nNum Peaks: 5\n200.0 1.0\n201.0 2.0\n"
+        provider, _ = self._provider(tmp_path, monkeypatch, text)
+        with pytest.raises(MalformedFileError, match="declares"):
+            list(provider.iter_spectra(10))
+
+    def test_peaks_without_a_num_peaks_header_are_still_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only *empty* records are skipped; the header is not required."""
+        text = "Name: NoHeader\nPrecursorMZ: 300.0\n200.0 1.0\n201.0 2.0\n"
+        provider, _ = self._provider(tmp_path, monkeypatch, text)
+        spectra = [s for chunk in provider.iter_spectra(10) for s in chunk]
+        assert len(spectra) == 1
+        assert spectra[0].peaks == ((200.0, 1.0), (201.0, 2.0))
+        assert provider.describe().n_records_without_peaks == 0
