@@ -42,7 +42,7 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, model_validator
 
 from msmcp import ingest, library, security
-from msmcp.errors import MsmcpError
+from msmcp.errors import MsmcpError, SpectrumIndexError
 from msmcp.execution import (
     JobStatusSnapshot,
     LocalAsyncExecutor,
@@ -59,6 +59,7 @@ from msmcp.library import LibraryInfo, LibraryProvider
 from msmcp.models import get_embedder
 from msmcp.models.backends import LSM_MS2_CKPT_ENV
 from msmcp.models.scoring import ClassicalScorer, SpectrumScorer, get_scorer
+from msmcp.mzml import Spectrum
 from msmcp.provenance import ModelInfo, Provenance, SourceRef, provenance_for
 from msmcp.state import store as reference_store
 
@@ -79,6 +80,8 @@ class SearchInput(BaseModel):
 
     The experimental spectrum comes from exactly one of ``experimental_file``
     (read from disk) or ``spectrum_reference`` (already registered server-side).
+    A file may hold thousands of spectra, so ``spectrum_index`` names the one to
+    search; it is meaningless with a reference, which already names one spectrum.
     """
 
     experimental_file: str | None = None
@@ -87,6 +90,7 @@ class SearchInput(BaseModel):
     scoring_method: ScoringMethod = "classical"
     chunk_size: int = Field(default=2000, ge=100, le=10000)
     instrument_class: InstrumentClass | None = None
+    spectrum_index: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def _exactly_one_query_source(self) -> SearchInput:
@@ -103,6 +107,12 @@ class SearchInput(BaseModel):
                 "provide exactly one of experimental_file (read from disk) or "
                 "spectrum_reference (already loaded server-side); got "
                 f"{sorted(supplied) or 'neither'}"
+            )
+        if self.spectrum_index is not None and self.spectrum_reference is not None:
+            raise ValueError(
+                "spectrum_index selects a spectrum inside experimental_file, so "
+                "it cannot be combined with spectrum_reference, which already "
+                "names exactly one spectrum"
             )
         return self
 
@@ -493,20 +503,65 @@ def _peaks_from_reference(reference: str) -> list[tuple[float, float]]:
     return [(float(mz), float(intensity)) for mz, intensity in peaks]
 
 
-def _peaks_from_file(file_path: str) -> list[tuple[float, float]]:
-    """Read the first spectrum of *file_path* as a real experimental peak list.
+def _spectrum_label(spectrum: Spectrum, spectrum_index: int) -> str:
+    """Name one spectrum the way the dispatch reply reports it."""
+    if spectrum.ms_level == 1:
+        level = "MS1"
+    elif spectrum.ms_level == 2:
+        level = "MS2"
+    elif spectrum.ms_level is None:
+        level = "MS level not declared"
+    else:
+        level = f"MS{spectrum.ms_level}"
 
-        The file is opened through the ingestion layer, so the query of a search is
-    always genuine data and a missing or malformed file fails loudly instead of
-    quietly producing a synthetic stand-in.
+    parts = [f"spectrum #{spectrum_index}", level]
+    if spectrum.retention_time is not None:
+        parts.append(f"RT {spectrum.retention_time:.3f} min")
+    if spectrum.precursor_mz is not None:
+        parts.append(f"precursor m/z {spectrum.precursor_mz:.4f}")
+    parts.append(f"{spectrum.mz.size} peaks")
+    return "(" + ", ".join(parts) + ")"
+
+
+def _peaks_from_file(
+    file_path: str, spectrum_index: int
+) -> tuple[list[tuple[float, float]], str]:
+    """Read one spectrum of *file_path* as a real experimental peak list.
+
+    Returns the peaks and a label naming the spectrum they came from.  The file
+    is opened through the ingestion layer, so the query of a search is always
+    genuine data and a missing or malformed file fails loudly instead of quietly
+    producing a synthetic stand-in.
+
+    The spectrum is selected by index **and reported**, because the first
+    spectrum of a real LC-MS/MS file is normally an MS1 survey scan: a search
+    that silently used it would compare an MS1 against an MS2 library and
+    present the result as though it meant something.  An empty scan — ordinary
+    in real acquisitions — is refused rather than dispatched, since a search
+    with no query peaks cannot return anything meaningful.
     """
     source = ingest.resolve_source(file_path)
-    for spectrum in source.iter_spectra():
-        return [
+    for current, candidate in enumerate(source.iter_spectra()):
+        if current != spectrum_index:
+            continue
+        peaks = [
             (float(mz), float(intensity))
-            for mz, intensity in zip(spectrum.mz, spectrum.intensity, strict=True)
+            for mz, intensity in zip(candidate.mz, candidate.intensity, strict=True)
         ]
-    raise MsmcpError(f"'{file_path}' contains no spectra to use as a query.")
+        if not peaks:
+            raise MsmcpError(
+                f"Spectrum #{spectrum_index} of '{file_path}' contains no peaks, "
+                f"so there is nothing to search.  Empty scans are ordinary in "
+                f"real acquisitions; call `load_mzml_summary` to find a "
+                f"populated one and pass its index."
+            )
+        return peaks, _spectrum_label(candidate, spectrum_index)
+
+    raise SpectrumIndexError(
+        f"'{file_path}' contains no spectrum at index {spectrum_index}.  The "
+        f"file was read successfully, so the index is out of range; check the "
+        f"file's spectrum count."
+    )
 
 
 # ======================================================================
@@ -528,6 +583,7 @@ class SearchRequest:
     experimental_file: str | None = None
     spectrum_reference: str | None = None
     instrument_class: str | None = None
+    query_spectrum_index: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -991,6 +1047,8 @@ def _search_provenance(
         "small_library_threshold": profile.small_library_threshold,
         "instrument_defaults_provenance": profile.provenance,
     }
+    if request.query_spectrum_index is not None:
+        parameters["query_spectrum_index"] = request.query_spectrum_index
     if library_info is None:
         parameters["library_synthetic"] = True
         parameters["database_file_not_opened"] = request.database_file
@@ -998,6 +1056,9 @@ def _search_provenance(
         parameters["library_synthetic"] = False
         parameters["library_format"] = library_info.format
         parameters["library_digest"] = library_info.digest
+        parameters["library_records_without_peaks"] = (
+            library_info.n_records_without_peaks
+        )
         sources.append(
             SourceRef.from_path(
                 library_info.path,
@@ -1176,6 +1237,17 @@ def register_tools(mcp: Any) -> None:
                 "spectrum_reference, not both.",
             ),
         ] = None,
+        spectrum_index: Annotated[
+            int | None,
+            Field(
+                ge=0,
+                description="Zero-based index of the spectrum to search inside "
+                "experimental_file (default 0).  A real LC-MS/MS file starts "
+                "with an MS1 survey scan, so check which spectrum you want with "
+                "load_mzml_summary or load_spectrum first — the reply always "
+                "names the spectrum that was used.",
+            ),
+        ] = None,
         spectrum_reference: Annotated[
             str | None,
             Field(
@@ -1229,9 +1301,13 @@ def register_tools(mcp: Any) -> None:
         a synthetic-library hit as a compound identification.
 
         The **query** spectrum can be real: pass `spectrum_reference` from
-        `load_spectrum` (peaks already server-side) or `experimental_file` to
-        read one from disk.  The chunked scan, scoring and FDR estimation are
-        real in every case.
+        `load_spectrum` (peaks already server-side), or `experimental_file` with
+        `spectrum_index` to read one from disk.  The reply names the spectrum it
+        used — index, MS level, retention time, precursor m/z and peak count —
+        because the first spectrum of a real LC/MS run is normally an MS1 survey
+        scan, and searching that against an MS2 library means nothing.  A
+        spectrum with no peaks is refused rather than dispatched.  The chunked
+        scan, scoring and FDR estimation are real in every case.
 
         The experimental thresholds the scan applies — the MS2 m/z window, the
         significance threshold and the small-library FDR floor — come from the
@@ -1250,15 +1326,34 @@ def register_tools(mcp: Any) -> None:
             scoring_method=scoring_method,
             chunk_size=chunk_size,
             instrument_class=instrument_class,
+            spectrum_index=spectrum_index,
         )
 
         # Resolve real query data *before* dispatch, so a bad reference or an
         # unreadable file fails here and now rather than inside a job.
         exp_peaks: tuple[tuple[float, float], ...] = ()
+        query_label = ""
+        query_spectrum_index: int | None = None
         if validated.spectrum_reference is not None:
             exp_peaks = tuple(_peaks_from_reference(validated.spectrum_reference))
+            query_label = (
+                f"`{validated.spectrum_reference}` ({len(exp_peaks)} real peaks, "
+                f"read from the server-side store)"
+            )
         elif validated.experimental_file is not None:
-            exp_peaks = tuple(_peaks_from_file(validated.experimental_file))
+            # Resolve the default here rather than at the call site, so the
+            # *effective* index is what travels into the request and the
+            # provenance.  A file search that falls back to spectrum 0 is still
+            # searching a spectrum, and the record has to say which one — the
+            # silent default is the very bug this parameter exists to expose.
+            query_spectrum_index = (
+                0 if validated.spectrum_index is None else validated.spectrum_index
+            )
+            placed_peaks, description = _peaks_from_file(
+                validated.experimental_file, query_spectrum_index
+            )
+            exp_peaks = tuple(placed_peaks)
+            query_label = f"`{validated.experimental_file}` {description}"
 
         # Validate the library before dispatch — not just its path.  Resolving
         # it (allowed root, size, readability) makes an out-of-root or missing
@@ -1279,6 +1374,7 @@ def register_tools(mcp: Any) -> None:
             experimental_file=validated.experimental_file,
             spectrum_reference=validated.spectrum_reference,
             instrument_class=validated.instrument_class,
+            query_spectrum_index=query_spectrum_index,
         )
 
         handle = _EXECUTOR.submit(
@@ -1291,6 +1387,7 @@ def register_tools(mcp: Any) -> None:
                 "spectrum_reference": validated.spectrum_reference,
                 "experimental_file": validated.experimental_file,
                 "instrument_class": validated.instrument_class,
+                "spectrum_index": validated.spectrum_index,
             },
         )
 
@@ -1319,8 +1416,7 @@ def register_tools(mcp: Any) -> None:
         return (
             f"## Search Dispatched\n\n"
             f"**Job ID:** `{handle.job_id}`\n\n"
-            f"**Query:** {validated.spectrum_reference or validated.experimental_file}"
-            f" ({len(exp_peaks)} real peaks)\n\n"
+            f"**Query:** {query_label}\n\n"
             f"{library_note}\n\n"
             f"Poll for the report with:\n\n"
             f'    check_search_status(job_id="{handle.job_id}")\n'
