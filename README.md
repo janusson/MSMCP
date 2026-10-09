@@ -200,14 +200,15 @@ Example configuration for **Zed** (`.zed/settings.json`):
 {
   "context_servers": {
     "msmcp": {
-      "command": {
-        "path": "uv",
-        "args": ["run", "msmcp"]
-      }
+      "command": "uv",
+      "args": ["run", "msmcp"],
+      "env": {}
     }
   }
 }
 ```
+
+`command`/`args` is the current Zed schema; the older nested `command: {path, args}` object is rewritten on load by Zed's 2025-11-25 settings migration.
 
 ## An agent working through MSMCP
 
