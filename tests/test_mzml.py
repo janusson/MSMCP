@@ -180,3 +180,59 @@ class TestLoadMzMLSummary:
         )
         with pytest.raises(MalformedFileError):
             io_tools["load_mzml_summary"](str(truncated_mzml))
+
+
+# ---------------------------------------------------------------------------
+# Zero-length arrays: real acquisitions contain legally empty scans
+# ---------------------------------------------------------------------------
+class TestEmptyBinaryArrays:
+    """An empty array is data (no peaks), not a missing payload.
+
+    ``COE001_16ppm_5uL.mzML`` (Bruker maXis QTOF) carries 4,990 zero-length
+    arrays across 2,495 of its 9,286 spectra, written as ``encodedLength="0"``
+    with a self-closing ``<binary/>``.  The reader treated every one of them as
+    corruption and aborted the whole file at its third spectrum, so a real
+    acquisition could not be read at all.
+    """
+
+    def test_zero_length_array_yields_an_empty_spectrum(
+        self, mzml_with_empty_scan: Path
+    ) -> None:
+        """An empty scan parses, and does not stop the spectra after it."""
+        spectra = list(iter_spectra(mzml_with_empty_scan))
+
+        assert len(spectra) == 3
+        empty = spectra[1]
+        assert empty.ms_level == 2
+        assert empty.mz.size == 0
+        assert empty.intensity.size == 0
+        assert empty.precursor_mz == pytest.approx(89.50771332)
+        # The reader keeps going: the scan after the empty one still arrives.
+        assert spectra[2].mz.size == 2
+        assert spectra[2].precursor_mz == pytest.approx(200.0)
+
+    def test_empty_arrays_are_read_only(self, mzml_with_empty_scan: Path) -> None:
+        """Empty arrays share the immutability of every other decoded array."""
+        empty = list(iter_spectra(mzml_with_empty_scan))[1]
+        assert not empty.mz.flags.writeable
+        assert not empty.intensity.flags.writeable
+
+    def test_absent_binary_element_is_an_empty_array(
+        self, mzml_with_absent_binary: Path
+    ) -> None:
+        """``<binary>`` has ``minOccurs="0"``: omitting it still means no peaks."""
+        spectra = list(iter_spectra(mzml_with_absent_binary))
+        assert spectra[0].mz.size == 0
+        assert spectra[0].intensity.size == 0
+
+    def test_declared_peaks_with_an_empty_payload_is_malformed(
+        self, mzml_declares_peaks_with_empty_payload: Path
+    ) -> None:
+        """Emptiness is legal; a declaration that contradicts it is not.
+
+        Strictness is kept where it earns its keep: a file that says it has
+        three peaks and carries none is corruption, exactly as a ``Num Peaks``
+        header that disagrees with the peak lines is in the MSP reader.
+        """
+        with pytest.raises(MalformedFileError, match="declares"):
+            list(iter_spectra(mzml_declares_peaks_with_empty_payload))

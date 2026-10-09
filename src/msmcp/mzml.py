@@ -267,7 +267,37 @@ def _binary_array_cv_accessions(elem: ET.Element) -> set[str]:
     }
 
 
-def _parse_binary_data_array(elem: ET.Element) -> tuple[np.ndarray, str]:
+def _empty_array() -> np.ndarray:
+    """A zero-length, read-only float64 array — a spectrum with no peaks."""
+    array = np.empty(0, dtype=np.float64)
+    array.setflags(write=False)
+    return array
+
+
+def _parse_binary_data_array(
+    elem: ET.Element, *, declared_length: int | None
+) -> tuple[np.ndarray, str]:
+    """Decode one binary array, treating an empty payload as "no peaks".
+
+    A zero-length ``binaryDataArray`` is legal mzML and means exactly that: the
+    spectrum has no peaks.  Real acquisitions are full of them — an MS1 with
+    nothing above threshold, an MS2 whose fragments were all below it.  A
+    producer writes one either as a self-closing ``<binary/>``, which
+    ElementTree reports as ``text is None``, or by omitting ``<binary>``
+    entirely, which the schema permits (``minOccurs="0"``).
+
+    Emptiness and corruption are told apart by the spectrum's declared
+    ``defaultArrayLength``: an *empty* payload in a spectrum that declares peaks
+    is still an error, on the same principle as an MSP ``Num Peaks`` header that
+    disagrees with the peak lines beneath it.
+
+    The limit of that check is worth stating, because it is narrower than it
+    sounds: it compares *emptiness* against the declaration, never the decoded
+    length.  A payload that decodes to fewer values than the spectrum declares
+    passes here — that comparison belongs with the array length and is not made
+    (it is not made anywhere else either; this is pre-existing behaviour, not a
+    gap this change introduces).
+    """
     accessions = _binary_array_cv_accessions(elem)
 
     is_mz = _ACC_MZ_ARRAY in accessions
@@ -293,12 +323,16 @@ def _parse_binary_data_array(elem: ET.Element) -> tuple[np.ndarray, str]:
         compression = "none"
 
     binary = _child(elem, "binary")
-    if binary is None or binary.text is None:
-        raise MalformedFileError("A binaryDataArray is missing its <binary> payload.")
+    payload = None if binary is None else binary.text
+    if payload is None or not payload.strip():
+        if declared_length:
+            raise MalformedFileError(
+                f"A spectrum declares {declared_length} peaks but its {kind} "
+                f"array carries no <binary> payload."
+            )
+        return _empty_array(), kind
 
-    return _decode_binary(
-        binary.text, compression=compression, precision=precision
-    ), kind
+    return _decode_binary(payload, compression=compression, precision=precision), kind
 
 
 def _extract_scan_start_time(elem: ET.Element) -> float | None:
@@ -357,12 +391,15 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
     if binary_data_array_list is None:
         raise MalformedFileError("A spectrum is missing its binaryDataArrayList.")
 
+    declared_length = _to_int_or_none(elem.get("defaultArrayLength"))
     mz: np.ndarray | None = None
     intensity: np.ndarray | None = None
     for binary_data_array in binary_data_array_list:
         if _local(binary_data_array.tag) != "binaryDataArray":
             continue
-        arr, kind = _parse_binary_data_array(binary_data_array)
+        arr, kind = _parse_binary_data_array(
+            binary_data_array, declared_length=declared_length
+        )
         if kind == "mz":
             mz = arr
         elif kind == "intensity":

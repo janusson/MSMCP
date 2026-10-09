@@ -104,18 +104,41 @@ def _b64_floats(values: list[float], *, compress: bool = False) -> str:
     return base64.b64encode(raw).decode()
 
 
-def _binary_array(kind: str, values: list[float]) -> str:
+def _binary_array(kind: str, values: list[float], *, payload: str = "data") -> str:
+    """Render one ``binaryDataArray``.
+
+    ``payload`` selects how a zero-length array is written, because real
+    producers spell "no peaks" in more than one legal way:
+
+    * ``"data"`` - a base64 payload (the normal case);
+    * ``"empty"`` - ``encodedLength="0"`` with a self-closing ``<binary/>``,
+      which is what Bruker's mzML export writes for an empty scan and what
+      ElementTree reports as ``text is None``;
+    * ``"absent"`` - the ``<binary>`` element omitted entirely, which mzML
+      1.1.0 permits (``binary`` is ``minOccurs="0"``).
+    """
     if kind == "mz":
         acc, name = "MS:1000514", "m/z array"
     else:
         acc, name = "MS:1000515", "intensity array"
-    payload = _b64_floats(values)
+    if payload == "data":
+        encoded = _b64_floats(values)
+        body = f"<binary>{encoded}</binary>"
+        length = len(encoded)
+    elif payload == "empty":
+        body = "<binary/>"
+        length = 0
+    elif payload == "absent":
+        body = ""
+        length = 0
+    else:
+        raise ValueError(f"unknown payload mode {payload!r}")
     return (
-        f'<binaryDataArray encodedLength="{len(payload)}">'
+        f'<binaryDataArray encodedLength="{length}">'
         f'<cvParam cvRef="MS" accession="{acc}" name="{name}" value=""/>'
         f'<cvParam cvRef="MS" accession="MS:1000523" name="64-bit float" value=""/>'
         f'<cvParam cvRef="MS" accession="MS:1000576" name="no compression" value=""/>'
-        f"<binary>{payload}</binary>"
+        f"{body}"
         f"</binaryDataArray>"
     )
 
@@ -128,6 +151,7 @@ def _mzml_xml(spectra: list[dict[str, Any]]) -> str:
         ms_level = int(spec.get("ms_level", 1))
         rt = float(spec.get("rt_seconds", i))
         precursor = spec.get("precursor_mz")
+        payload_mode = str(spec.get("payload", "data"))
 
         precursor_xml = ""
         if precursor is not None:
@@ -150,8 +174,8 @@ def _mzml_xml(spectra: list[dict[str, Any]]) -> str:
             f"</scan></scanList>"
             f"{precursor_xml}"
             f'<binaryDataArrayList count="2">'
-            f"{_binary_array('mz', list(spec['mz']))}"
-            f"{_binary_array('intensity', list(spec['intensity']))}"
+            f"{_binary_array('mz', list(spec['mz']), payload=payload_mode)}"
+            f"{_binary_array('intensity', list(spec['intensity']), payload=payload_mode)}"
             f"</binaryDataArrayList>"
             f"</spectrum>"
         )
@@ -190,6 +214,67 @@ def truncated_mzml(tmp_path: Path) -> Path:
     path = tmp_path / "truncated.mzML"
     full = _mzml_xml([{"mz": [100.0, 200.0], "intensity": [10.0, 20.0]}])
     path.write_text(full[: len(full) // 2], encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def mzml_with_empty_scan(tmp_path: Path) -> Path:
+    """A populated scan, then a legitimately empty one, then another.
+
+    Modelled on ``COE001_16ppm_5uL.mzML`` (Bruker maXis QTOF), where 2,495 of
+    9,286 spectra are empty and the reader used to abort on the third one.
+    """
+    path = tmp_path / "empty_scan.mzML"
+    spectra: list[dict[str, Any]] = [
+        {
+            "mz": [100.0, 200.0],
+            "intensity": [10.0, 20.0],
+            "ms_level": 1,
+            "rt_seconds": 1.0,
+        },
+        {
+            "mz": [],
+            "intensity": [],
+            "ms_level": 2,
+            "rt_seconds": 2.0,
+            "precursor_mz": 89.50771332,
+            "payload": "empty",
+        },
+        {
+            "mz": [150.0, 250.0],
+            "intensity": [5.0, 15.0],
+            "ms_level": 2,
+            "rt_seconds": 3.0,
+            "precursor_mz": 200.0,
+        },
+    ]
+    path.write_text(_mzml_xml(spectra), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def mzml_with_absent_binary(tmp_path: Path) -> Path:
+    """An array that omits ``<binary>`` entirely: schema-legal, zero peaks."""
+    path = tmp_path / "absent_binary.mzML"
+    spectra: list[dict[str, Any]] = [
+        {"mz": [], "intensity": [], "payload": "absent"},
+    ]
+    path.write_text(_mzml_xml(spectra), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def mzml_declares_peaks_with_empty_payload(tmp_path: Path) -> Path:
+    """A file declaring peaks and carrying none: corruption, not emptiness."""
+    path = tmp_path / "declared_but_empty.mzML"
+    spectra: list[dict[str, Any]] = [
+        {
+            "mz": [100.0, 200.0, 300.0],
+            "intensity": [10.0, 20.0, 30.0],
+            "payload": "empty",
+        },
+    ]
+    path.write_text(_mzml_xml(spectra), encoding="utf-8")
     return path
 
 
