@@ -4,7 +4,25 @@ All notable changes to MSMCP are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## [Unreleased]
+
+### Changed
+
+- **The stale root artefacts are resolved** (audit F9). `MCP server
+  configuration.md` is now `docs/mcp-server-configuration.md`, behind a
+  provenance header stating that it is a frozen record of the reasoning rather
+  than maintained documentation, and the two rendered HTML artefacts are
+  relocated to `examples/` and labelled illustrative in the README. The
+  `pyproject.toml` `extend-exclude` comment now describes the transcript
+  accurately instead of calling it a design log.
+
+  The HTML artefacts are **kept rather than deleted**: the criterion asked for
+  their removal on the grounds that they are reproducible outputs, but no
+  generator for either file exists in the repository or in the gitignored
+  scratch directory, so that premise does not hold. They are one-shot session
+  outputs, and relocation out of the repository root — the other option the
+  issue offered — is what was done.
 
 ## [1.0.0] - 2026-10-08
 
