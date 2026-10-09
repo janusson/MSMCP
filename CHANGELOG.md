@@ -4,8 +4,53 @@ All notable changes to MSMCP are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
 ## [Unreleased]
+
+### Added
+
+- **Instrument-class defaults** — `msmcp.instruments` is the single home for the
+  experimental thresholds (precursor tolerance, MS2 and diagnostic-ion windows,
+  SNR bands, FDR threshold and small-library floor). Each instrument class
+  (generic, orbitrap, tof, ion_trap, triple_quad) documents its own defaults and
+  the basis for them, and every tool that applies one takes an `instrument_class`
+  argument. Accurate-mass classes express the precursor gate in ppm; unit-
+  resolution classes use a dalton window, where a ppm gate would be meaningless.
+
+- **Real spectral-library reader (MSP/NIST text)** — `msmcp.library` reads an
+  MSP/NIST-style library (`.msp`, `.msp.gz`) behind a `LibraryProvider`
+  interface, and `search_library` searches it for real. `database_file` is
+  resolved through the same `SecurityPolicy` as acquisitions (allowed root,
+  size limit, read-only) before any open, so a library outside the allowed root
+  is refused rather than read. The library is also *probed* before dispatch, so
+  a file that is not the format its suffix claims raises `MalformedFileError`
+  from the tool call instead of failing a background job — matching the query
+  path, which is read before dispatch too. A ground-truth benchmark
+  (`tests/test_library_benchmark.py`) reports per-perturbation recovery — m/z
+  shift, intensity noise, dropped and added peaks — including a shift beyond
+  the matching window that must fail to recover.
+
+- **The evaluation asserts a cumulative context budget.** Section 4.12 of the
+  notebook re-drives the audit's representative workflow through the real server
+  object (the same `call_tool` / `model_dump_json` path the measurement script
+  used), sums every result a host would receive, and requires the total to stay
+  within 1.5x the audit's 20,481-byte measurement. A doubling of what a workflow
+  costs in context now fails a check instead of going unnoticed.
+
+### Fixed
+
+- **A metadata-only MSP record no longer makes an entire library
+  unsearchable.** A record with header lines but no peaks raised, so
+  `GNPS-LIBRARY.msp` died 1,242 records into 15,749, and two other public
+  libraries the same way (68 such records in that library alone). They are now
+  skipped and counted, and the count reaches `LibraryInfo` and the search
+  provenance, because a reader that drops records silently is no better than one
+  that fails. The `Num Peaks` mismatch check is unchanged.
+
+- **`search_library` no longer silently searches spectrum 0.** On a real
+  LC-MS/MS file that is an MS1 survey scan — a meaningless query against an MS2
+  library. `spectrum_index` selects the spectrum, the dispatch reply names what
+  it will search (index, MS level, retention time, precursor m/z, peak count),
+  and a spectrum with no peaks is refused before a job is dispatched.
 
 ### Changed
 
@@ -23,6 +68,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   scratch directory, so that premise does not hold. They are one-shot session
   outputs, and relocation out of the repository root — the other option the
   issue offered — is what was done.
+
+- Reports and provenance name the library that actually answered a search. A
+  readable library (MSP/NIST text) is labelled as read from disk with its
+  format, spectrum count and SHA-256 digest; a path with no reader keeps the
+  synthetic fallback and is labelled as synthetic. The banner is no longer a
+  fixed warning.
+
+- **The experimental thresholds are parameters, not literals.** The precursor
+  acceptance gate, the classical peak-match tolerance, the diagnostic-ion
+  window, the SNR bands and the FDR / small-library thresholds now come from the
+  named `instrument_class` (default `generic`, which reproduces MSMCP's v1.0
+  values exactly). The class and the values actually applied are stated in the
+  result — the report body for `validate_precursor`, `compute_cosine` and
+  `generate_qc_summary`, and `Provenance.parameters` for `search_library` — so an
+  analysis can be re-run under another instrument's assumptions and the
+  assumption behind any result is readable from the result itself.
 
 ## [1.0.0] - 2026-10-08
 
@@ -59,13 +120,6 @@ string rather than opening it, and every report says so.
 - **Spectral foundation-model adapters** — `SpectralEmbedder` contract with a
   real DreaMS inference backend, an LSM-MS2 adapter gated on a checkpoint, and
   deterministic mocks reachable only under `MSMCP_EMBEDDING_BACKEND=mock`.
-- **Instrument-class defaults** — `msmcp.instruments` is the single home for the
-  experimental thresholds (precursor tolerance, MS2 and diagnostic-ion windows,
-  SNR bands, FDR threshold and small-library floor). Each instrument class
-  (generic, orbitrap, tof, ion_trap, triple_quad) documents its own defaults and
-  the basis for them, and every tool that applies one takes an `instrument_class`
-  argument. Accurate-mass classes express the precursor gate in ppm; unit-
-  resolution classes use a dalton window, where a ppm gate would be meaningless.
 - **Security boundary** — every file-reading tool is confined to one allowed root
   (`MSMCP_ALLOWED_ROOT`), with size, reference-count and spectrum-count ceilings;
   escapes, including symlinks pointing outside the root, are rejected.
@@ -75,18 +129,6 @@ string rather than opening it, and every report says so.
 - **Evaluation notebook** — `notebooks/eval_msmcp.ipynb` (`make eval`) runs every
   tool end to end and writes a machine-readable report; the default test run
   stays fast by excluding it.
-- **Real spectral-library reader (MSP/NIST text)** — `msmcp.library` reads an
-  MSP/NIST-style library (`.msp`, `.msp.gz`) behind a `LibraryProvider`
-  interface, and `search_library` searches it for real. `database_file` is
-  resolved through the same `SecurityPolicy` as acquisitions (allowed root,
-  size limit, read-only) before any open, so a library outside the allowed root
-  is refused rather than read. The library is also *probed* before dispatch, so
-  a file that is not the format its suffix claims raises `MalformedFileError`
-  from the tool call instead of failing a background job — matching the query
-  path, which is read before dispatch too. A ground-truth benchmark
-  (`tests/test_library_benchmark.py`) reports per-perturbation recovery — m/z
-  shift, intensity noise, dropped and added peaks — including a shift beyond
-  the matching window that must fail to recover.
 
 ### Fixed
 
@@ -120,20 +162,9 @@ string rather than opening it, and every report says so.
 
 ### Changed
 
-- Reports and provenance name the library that actually answered a search. A
-  readable library (MSP/NIST text) is labelled as read from disk with its
-  format, spectrum count and SHA-256 digest; a path with no reader keeps the
-  synthetic fallback and is labelled as synthetic. The banner is no longer a
-  fixed warning.
-- **The experimental thresholds are parameters, not literals.** The precursor
-  acceptance gate, the classical peak-match tolerance, the diagnostic-ion
-  window, the SNR bands and the FDR / small-library thresholds now come from the
-  named `instrument_class` (default `generic`, which reproduces MSMCP's v1.0
-  values exactly). The class and the values actually applied are stated in the
-  result — the report body for `validate_precursor`, `compute_cosine` and
-  `generate_qc_summary`, and `Provenance.parameters` for `search_library` — so an
-  analysis can be re-run under another instrument's assumptions and the
-  assumption behind any result is readable from the result itself.
+- Reports state which half of a search is real: the query spectrum is read from
+  disk, while the library is synthetic and says so in a banner ahead of any hit
+  table.
 - A completed search reports its result **once**. The first poll after the job
   finishes returns the full report; every later poll returns a short digest
   (library size, hit count, top hit) that keeps the synthetic-library warning,
@@ -141,12 +172,6 @@ string rather than opening it, and every report says so.
   context again. `check_search_status(job_id=..., full_report=True)` re-requests
   the report for a client that no longer has it. The delivery record is bounded
   to the 1024 most recent jobs.
-- **The evaluation asserts a cumulative context budget.** Section 4.12 of the
-  notebook re-drives the audit's representative workflow through the real server
-  object (the same `call_tool` / `model_dump_json` path the measurement script
-  used), sums every result a host would receive, and requires the total to stay
-  within 1.5x the audit's 20,481-byte measurement. A doubling of what a workflow
-  costs in context now fails a check instead of going unnoticed.
 - **`compute_cosine` accepts a server-side reference on either side.** The tool
   previously required both peak lists inline, so an agent that had already
   loaded a spectrum with `load_spectrum` had to push the peaks back through the
