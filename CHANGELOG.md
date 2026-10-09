@@ -4,9 +4,17 @@ All notable changes to MSMCP are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## [Unreleased]
 
 ### Added
+
+- **A maintained roadmap** (`docs/roadmap.md`) — where the repository is, the v1.1 acceptance
+  criteria, and what is explicitly not being done. It replaces issue #11, which held the same
+  content somewhere with no history, no diff and no review. The board's `Plan` field stays the live
+  queue; the document is the narrative and the criteria. The v1.1 criteria are deliberately **not**
+  yet promoted into `ARCHITECTURE.md`, so that document still describes v1.0 only, and the version
+  stays `1.0.0` until a release includes the library reader.
 
 - **Instrument-class defaults** — `msmcp.instruments` is the single home for the
   experimental thresholds (precursor tolerance, MS2 and diagnostic-ion windows,
