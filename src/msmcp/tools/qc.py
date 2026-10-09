@@ -11,6 +11,12 @@ from pydantic import BaseModel, Field
 
 from msmcp import ingest
 from msmcp.errors import MalformedFileError
+from msmcp.instruments import (
+    DEFAULT_INSTRUMENT_CLASS,
+    INSTRUMENT_CLASS_NAMES,
+    InstrumentClass,
+    get_profile,
+)
 from msmcp.security import DEFAULT_POLICY
 
 logger = logging.getLogger("msmcp.tools.qc")
@@ -27,6 +33,7 @@ class QCInput(BaseModel):
     """
 
     file_path: str = Field(..., min_length=1)
+    instrument_class: InstrumentClass | None = None
 
 
 # ======================================================================
@@ -50,7 +57,10 @@ _DIAGNOSTIC_IONS: list[tuple[str, float, int]] = [
     ("Oxonium (HexNAc)", 204.0867, 15),
 ]
 
-_TOL = 0.02  # Da tolerance for diagnostic-ion matching
+# The diagnostic-ion matching window is the instrument class's
+# ``diagnostic_ion_tolerance_da`` (see :mod:`msmcp.instruments`); it is threaded
+# through as an argument rather than pinned here, so the value a report used is
+# the value the report states.
 
 
 # ======================================================================
@@ -74,11 +84,11 @@ def _estimate_snr(intensity: np.ndarray) -> float:
     return signal / noise
 
 
-def _diagnostic_mask(mz: np.ndarray) -> int:
-    """Return the bitmask of diagnostic ions present within ±0.02 Da."""
+def _diagnostic_mask(mz: np.ndarray, tolerance: float) -> int:
+    """Return the bitmask of diagnostic ions present within *tolerance* Da."""
     mask = 0
     for _, mass, bit in _DIAGNOSTIC_IONS:
-        if np.any(np.abs(mz - mass) <= _TOL):
+        if np.any(np.abs(mz - mass) <= tolerance):
             mask |= 1 << bit
     return mask
 
@@ -86,7 +96,7 @@ def _diagnostic_mask(mz: np.ndarray) -> int:
 # ======================================================================
 # Report sections
 # ======================================================================
-def _snr_report(snr_values: list[float]) -> str:
+def _snr_report(snr_values: list[float], low: float, high: float) -> str:
     arr = np.asarray(snr_values, dtype=np.float64)
     if arr.size == 0:
         return "### Signal-to-Noise Ratio\n\nNo spectra were available."
@@ -95,8 +105,8 @@ def _snr_report(snr_values: list[float]) -> str:
     median_snr = float(np.median(arr))
     min_snr = float(np.min(arr))
     max_snr = float(np.max(arr)) if np.isfinite(arr).all() else float("inf")
-    pct_low = float(np.sum(arr < 5.0) / arr.size * 100)
-    pct_high = float(np.sum(arr > 20.0) / arr.size * 100)
+    pct_low = float(np.sum(arr < low) / arr.size * 100)
+    pct_high = float(np.sum(arr > high) / arr.size * 100)
 
     return (
         "### Signal-to-Noise Ratio (estimated)\n\n"
@@ -106,8 +116,8 @@ def _snr_report(snr_values: list[float]) -> str:
         f"| Median SNR          | {median_snr:>8.1f} |\n"
         f"| Min SNR             | {min_snr:>8.1f} |\n"
         f"| Max SNR             | {max_snr:>8.1f} |\n"
-        f"| Spectra < 5 SNR     | {pct_low:>7.1f}% |\n"
-        f"| Spectra > 20 SNR    | {pct_high:>7.1f}% |\n\n"
+        f"| Spectra < {low:g} SNR     | {pct_low:>7.1f}% |\n"
+        f"| Spectra > {high:g} SNR    | {pct_high:>7.1f}% |\n\n"
         "Estimator: base-peak intensity ÷ median positive intensity.  This is "
         "a transparent proxy, not a calibrated instrument SNR."
     )
@@ -136,11 +146,14 @@ def _peak_density_report(n_peaks_list: list[int]) -> str:
     )
 
 
-def _diagnostic_fragment_report(masks: list[int], n_total: int) -> str:
+def _diagnostic_fragment_report(
+    masks: list[int], n_total: int, tolerance: float
+) -> str:
     lines = [
         "### Diagnostic Fragment Analysis",
         "",
-        "Presence is defined as a peak within ±0.02 Da of the theoretical m/z.",
+        f"Presence is defined as a peak within ±{tolerance:g} Da of the "
+        "theoretical m/z.",
         "",
         "| Bit | Diagnostic Ion            | Theoretical m/z | Spectra  | Prevalence |",
         "|-----|---------------------------|-----------------|----------|------------|",
@@ -176,6 +189,17 @@ def register_tools(mcp: Any) -> None:
                 "directory.",
             ),
         ],
+        instrument_class: Annotated[
+            InstrumentClass | None,
+            Field(
+                description=(
+                    "Instrument class whose documented defaults set the "
+                    "diagnostic-ion matching window and the SNR reporting "
+                    f"bands (default '{DEFAULT_INSTRUMENT_CLASS}': ±0.02 Da, "
+                    "5/20 SNR).  One of: " + ", ".join(INSTRUMENT_CLASS_NAMES) + "."
+                ),
+            ),
+        ] = None,
     ) -> str:
         """Report quality-control metrics for a local MS acquisition.
 
@@ -185,13 +209,22 @@ def register_tools(mcp: Any) -> None:
         *estimated* signal-to-noise ratio (base peak / median positive
         intensity, a transparent proxy rather than a calibrated instrument
         SNR), and the prevalence of ten diagnostic immonium and oxonium
-        fragment ions matched within +/-0.02 Da.
+        fragment ions.
+
+        The two experimental thresholds — the diagnostic-ion matching window
+        and the SNR bands used for the low/high prevalence rows — come from the
+        named `instrument_class` (default 'generic': +/-0.02 Da and 5/20 SNR,
+        MSMCP's v1.0 values), and the values actually applied are stated in the
+        report, so a QC verdict is never separated from the assumption behind
+        it.
 
         Use it to judge whether an acquisition is worth searching.  Unlike
         `load_mzml_summary`, this reads the whole file rather than the first
         few spectra, so it is slower on large runs.
         """
-        _ = QCInput(file_path=file_path)
+        _ = QCInput(file_path=file_path, instrument_class=instrument_class)
+        profile = get_profile(instrument_class)
+        diagnostic_tolerance = profile.diagnostic_ion_tolerance_da
 
         source = ingest.resolve_source(file_path, DEFAULT_POLICY)
 
@@ -207,7 +240,7 @@ def register_tools(mcp: Any) -> None:
             total_tic += tic
             snr_values.append(_estimate_snr(spectrum.intensity))
             n_peaks_list.append(spectrum.n_peaks)
-            diag_masks.append(_diagnostic_mask(spectrum.mz))
+            diag_masks.append(_diagnostic_mask(spectrum.mz, diagnostic_tolerance))
 
         if n_total == 0:
             raise MalformedFileError(f"'{file_path}' contains no spectra to analyse.")
@@ -221,6 +254,9 @@ def register_tools(mcp: Any) -> None:
             f"**Spectra analysed:** {n_total:,}",
             f"**Total ion current:** {total_tic:.6e}",
             f"**Mean TIC / spectrum:** {mean_tic:.6e}",
+            f"**Instrument class:** {profile.instrument_class} "
+            f"(diagnostic-ion window ±{diagnostic_tolerance:g} Da, "
+            f"SNR bands {profile.snr_low:g}/{profile.snr_high:g})",
             "",
             "---",
             "",
@@ -229,17 +265,18 @@ def register_tools(mcp: Any) -> None:
         report = "\n".join(
             [
                 *header,
-                _snr_report(snr_values),
+                _snr_report(snr_values, profile.snr_low, profile.snr_high),
                 "",
                 _peak_density_report(n_peaks_list),
                 "",
-                _diagnostic_fragment_report(diag_masks, n_total),
+                _diagnostic_fragment_report(diag_masks, n_total, diagnostic_tolerance),
             ]
         )
 
         logger.info(
-            "generate_qc_summary(%r) → %d spectra, TIC=%.3e, report %d chars",
+            "generate_qc_summary(%r, class=%s) → %d spectra, TIC=%.3e, report %d chars",
             file_path,
+            profile.instrument_class,
             n_total,
             total_tic,
             len(report),

@@ -41,13 +41,21 @@ from typing import NamedTuple
 
 import numpy as np
 
+from msmcp.instruments import get_profile
 from msmcp.models.backends import get_embedder
 
 PeakList = Sequence[tuple[float, float]]
 """Peaks as ``(m/z, intensity)`` pairs.  Order is not significant."""
 
-DEFAULT_TOLERANCE: float = 0.02
-"""Default m/z matching window (Da): ±20 mDa, a unit-resolution MS2 tolerance."""
+DEFAULT_TOLERANCE: float = get_profile(None).ms2_tolerance_da
+"""Default m/z matching window (Da) for the classical scorer.
+
+The value is not a literal here: it is the generic instrument class's documented
+default from :mod:`msmcp.instruments` (±20 mDa, MSMCP's unit-resolution MS2
+window), so the one place a tolerance default lives is the instrument-class
+table.  ``get_scorer``/``ClassicalScorer`` accept an explicit window from that
+table (or from a caller) when one is known.
+"""
 
 
 class SpectrumScorer(ABC):

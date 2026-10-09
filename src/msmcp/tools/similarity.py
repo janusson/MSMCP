@@ -22,6 +22,12 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, model_validator
 
 from msmcp.errors import MsmcpError
+from msmcp.instruments import (
+    DEFAULT_INSTRUMENT_CLASS,
+    INSTRUMENT_CLASS_NAMES,
+    InstrumentClass,
+    get_profile,
+)
 from msmcp.models import EmbeddingBackendUnavailable, get_embedder
 from msmcp.state import store as reference_store
 
@@ -36,6 +42,7 @@ class ValidatePrecursorInput(BaseModel):
 
     theoretical_mass: float = Field(..., gt=0.0)
     experimental_mass: float = Field(..., gt=0.0)
+    instrument_class: InstrumentClass | None = None
 
 
 class ComputeCosineInput(BaseModel):
@@ -52,8 +59,9 @@ class ComputeCosineInput(BaseModel):
     query_reference: str | None = None
     reference_peaks: list[list[float]] | None = Field(default=None, min_length=1)
     reference_reference: str | None = None
-    ms2_tolerance: float = Field(default=0.02, gt=0.0, le=1.0)
+    ms2_tolerance: float | None = Field(default=None, gt=0.0, le=1.0)
     scoring_method: Literal["classical", "dreams", "lsm-ms2"] = "classical"
+    instrument_class: InstrumentClass | None = None
 
     @model_validator(mode="after")
     def _exactly_one_source_per_side(self) -> ComputeCosineInput:
@@ -334,6 +342,20 @@ def register_tools(mcp: Any) -> None:
                 description="Experimentally observed precursor m/z (Da).",
             ),
         ],
+        instrument_class: Annotated[
+            InstrumentClass | None,
+            Field(
+                description=(
+                    "Instrument class whose documented default precursor "
+                    f"tolerance is applied (default '{DEFAULT_INSTRUMENT_CLASS}' "
+                    "— MSMCP's v1.0 5.0 ppm gate).  Accurate-mass classes "
+                    "tolerate ppm; unit-resolution classes (ion_trap, "
+                    "triple_quad) use a Da window.  One of: "
+                    + ", ".join(INSTRUMENT_CLASS_NAMES)
+                    + "."
+                ),
+            ),
+        ] = None,
     ) -> str:
         """Check whether an observed precursor mass matches a theoretical mass.
 
@@ -347,46 +369,68 @@ def register_tools(mcp: Any) -> None:
         already ionised) species being compared, and the experimental mass is
         the observed precursor m/z.
 
-        Returns the parts-per-million (ppm) mass error together with a PASSED
-        or REJECTED verdict.  The match passes only when the absolute error is
-        5.0 ppm or less; a rejection means the observation is inconsistent
-        with the hypothesis and the formula, adduct assignment or instrument
-        calibration should be reconsidered.
+        Returns the mass error together with a PASSED or REJECTED verdict.  The
+        acceptance window is not a fixed number: it comes from the instrument
+        class named by `instrument_class` (default 'generic', the 5.0 ppm gate
+        MSMCP has used since v1.0).  Accurate-mass classes express the window in
+        ppm; unit-resolution classes (ion_trap, triple_quad) use a dalton
+        window, because a ppm gate is meaningless on an instrument that cannot
+        resolve fractions of a nominal mass.  The class and the window actually
+        applied are stated in the result, so a verdict is never separated from
+        the assumption behind it.  A rejection means the observation is
+        inconsistent with the hypothesis under that assumption, and the formula,
+        adduct assignment or instrument calibration should be reconsidered.
         """
         _ = ValidatePrecursorInput(
             theoretical_mass=theoretical_mass,
             experimental_mass=experimental_mass,
+            instrument_class=instrument_class,
         )
+        profile = get_profile(instrument_class)
+        tolerance = profile.precursor_tolerance
 
-        delta_ppm = abs(theoretical_mass - experimental_mass) / theoretical_mass * 1e6
-        passed = delta_ppm <= 5.0
+        if tolerance.unit == "ppm":
+            error = abs(theoretical_mass - experimental_mass) / theoretical_mass * 1e6
+        else:
+            error = abs(theoretical_mass - experimental_mass)
+        passed = error <= tolerance.value
 
         logger.info(
-            "validate_precursor(theo=%.4f, exp=%.4f) → %.2f ppm (%s)",
+            "validate_precursor(theo=%.4f, exp=%.4f, class=%s) → %.2f %s (%s)",
             theoretical_mass,
             experimental_mass,
-            delta_ppm,
+            profile.instrument_class,
+            error,
+            tolerance.unit,
             "PASS" if passed else "REJECT",
         )
 
+        class_line = (
+            f"Instrument class:  {profile.instrument_class} "
+            f"(precursor tolerance {tolerance.describe()})"
+        )
         if passed:
             return (
                 f"VALIDATION PASSED\n"
                 f"Theoretical mass:  {theoretical_mass:.6f} Da\n"
                 f"Experimental mass:  {experimental_mass:.6f} Da\n"
-                f"Mass error:         {delta_ppm:.2f} ppm\n\n"
+                f"Mass error:         {error:.2f} {tolerance.unit}\n"
+                f"{class_line}\n\n"
                 f"The observed precursor is consistent with the hypothesised "
-                f"compound (≤ 5.0 ppm threshold)."
+                f"compound (≤ {tolerance.describe()} threshold)."
             )
         else:
             return (
                 f"VALIDATION REJECTED\n"
                 f"Theoretical mass:  {theoretical_mass:.6f} Da\n"
                 f"Experimental mass:  {experimental_mass:.6f} Da\n"
-                f"Mass error:         {delta_ppm:.2f} ppm\n\n"
-                f"The mass error exceeds the 5.0 ppm acceptance threshold. "
+                f"Mass error:         {error:.2f} {tolerance.unit}\n"
+                f"{class_line}\n\n"
+                f"The mass error exceeds the {tolerance.describe()} "
+                f"acceptance threshold. "
                 f"The observed spectrum is **physically invalid** for the "
-                f"hypothesised compound.  Reconsider the molecular formula, "
+                f"hypothesised compound under the {profile.instrument_class} "
+                f"class assumption.  Reconsider the molecular formula, "
                 f"adduct assignment, or instrument calibration."
             )
 
@@ -441,16 +485,29 @@ def register_tools(mcp: Any) -> None:
             ),
         ] = None,
         ms2_tolerance: Annotated[
-            float,
+            float | None,
             Field(
                 gt=0.0,
                 le=1.0,
                 description=(
-                    "m/z matching tolerance in Da (default 0.02); must be "
-                    "greater than 0 and at most 1.0."
+                    "m/z matching tolerance in Da; must be greater than 0 and "
+                    "at most 1.0.  Leave unset to use the default for the "
+                    "instrument class (0.02 Da for 'generic')."
                 ),
             ),
-        ] = 0.02,
+        ] = None,
+        instrument_class: Annotated[
+            InstrumentClass | None,
+            Field(
+                description=(
+                    "Instrument class whose documented default m/z window is "
+                    "used when ms2_tolerance is not given (default "
+                    f"'{DEFAULT_INSTRUMENT_CLASS}').  One of: "
+                    + ", ".join(INSTRUMENT_CLASS_NAMES)
+                    + "."
+                ),
+            ),
+        ] = None,
         scoring_method: Annotated[
             Literal["classical", "dreams", "lsm-ms2"],
             Field(
@@ -491,6 +548,9 @@ def register_tools(mcp: Any) -> None:
         With scoring_method='classical' (the default) query peaks are matched
         to the closest unused reference peak within ms2_tolerance Da (greedy,
         one-to-one), so the tolerance must be greater than 0 and at most 1.0.
+        When ms2_tolerance is left unset it is the documented default for the
+        named `instrument_class` (0.02 Da for 'generic'); the response states
+        the window applied and where it came from.
         With 'dreams' or 'lsm-ms2' the comparison happens in whole-spectrum
         embedding space instead and no peak-matching counts are reported;
         those methods need the corresponding foundation model to be installed,
@@ -503,6 +563,21 @@ def register_tools(mcp: Any) -> None:
             reference_reference=reference_reference,
             ms2_tolerance=ms2_tolerance,
             scoring_method=scoring_method,
+            instrument_class=instrument_class,
+        )
+
+        # The tolerance is a parameter, not a literal: an explicit ms2_tolerance
+        # wins, otherwise it is the default documented for the instrument class.
+        profile = get_profile(validated.instrument_class)
+        tolerance = (
+            validated.ms2_tolerance
+            if validated.ms2_tolerance is not None
+            else profile.ms2_tolerance_da
+        )
+        tolerance_source = (
+            "explicit ms2_tolerance"
+            if validated.ms2_tolerance is not None
+            else f"instrument class '{profile.instrument_class}'"
         )
 
         # --- resolve server-side references ---------------------------------
@@ -552,7 +627,7 @@ def register_tools(mcp: Any) -> None:
         q_matched, r_matched, unmatched_q_idx = _match_peaks(
             q_arr,
             r_arr,
-            ms2_tolerance,
+            tolerance,
         )
 
         # --- cosine ---------------------------------------------------------
@@ -594,7 +669,7 @@ def register_tools(mcp: Any) -> None:
             *source_lines,
             f"Matched: {n_matched} / {n_query} query peaks ({pct_matched:.1f}%)",
             f"Reference peaks utilised: {n_ref_used} / {n_ref} ({pct_ref_used:.1f}%)",
-            f"MS/MS tolerance: ±{ms2_tolerance:.3f} Da",
+            f"MS/MS tolerance: ±{tolerance:.3f} Da ({tolerance_source})",
             "",
         ]
 
@@ -604,10 +679,12 @@ def register_tools(mcp: Any) -> None:
             lines.append("All query peaks were matched to the reference spectrum.")
 
         logger.info(
-            "compute_cosine(query=%d, ref=%d, tol=%.3f) → %.4f (%d matched, %d unmatched)",
+            "compute_cosine(query=%d, ref=%d, tol=%.3f, class=%s) → %.4f "
+            "(%d matched, %d unmatched)",
             n_query,
             n_ref,
-            ms2_tolerance,
+            tolerance,
+            profile.instrument_class,
             score,
             n_matched,
             len(unmatched_q_idx),
