@@ -58,9 +58,10 @@ markers = [
 target-version = "py313"
 line-length = 88
 src = ["src"]
-# Not source code, so not in the gate: the design-log markdown (it embeds
-# Python snippets) and the gitignored `drafts/` scratch directory, which holds
-# audit probes and one-off scripts from concurrent work.
+# Not source code, so not in the gate: `docs/mcp-server-configuration.md` is a
+# frozen historical session transcript (its own provenance header says it is a
+# record of the reasoning, not maintained documentation) and `drafts/` is
+# gitignored scratch holding audit probes and one-off scripts.
 extend-exclude = ["docs/mcp-server-configuration.md", "drafts/"]
 
 [tool.ruff.lint]
