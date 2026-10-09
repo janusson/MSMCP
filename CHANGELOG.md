@@ -68,6 +68,18 @@ string rather than opening it, and every report says so.
 - **Evaluation notebook** — `notebooks/eval_msmcp.ipynb` (`make eval`) runs every
   tool end to end and writes a machine-readable report; the default test run
   stays fast by excluding it.
+- **Real spectral-library reader (MSP/NIST text)** — `msmcp.library` reads an
+  MSP/NIST-style library (`.msp`, `.msp.gz`) behind a `LibraryProvider`
+  interface, and `search_library` searches it for real. `database_file` is
+  resolved through the same `SecurityPolicy` as acquisitions (allowed root,
+  size limit, read-only) before any open, so a library outside the allowed root
+  is refused rather than read. The library is also *probed* before dispatch, so
+  a file that is not the format its suffix claims raises `MalformedFileError`
+  from the tool call instead of failing a background job — matching the query
+  path, which is read before dispatch too. A ground-truth benchmark
+  (`tests/test_library_benchmark.py`) reports per-perturbation recovery — m/z
+  shift, intensity noise, dropped and added peaks — including a shift beyond
+  the matching window that must fail to recover.
 
 ### Fixed
 
@@ -101,9 +113,11 @@ string rather than opening it, and every report says so.
 
 ### Changed
 
-- Reports state which half of a search is real: the query spectrum is read from
-  disk, while the library is synthetic and says so in a banner ahead of any hit
-  table.
+- Reports and provenance name the library that actually answered a search. A
+  readable library (MSP/NIST text) is labelled as read from disk with its
+  format, spectrum count and SHA-256 digest; a path with no reader keeps the
+  synthetic fallback and is labelled as synthetic. The banner is no longer a
+  fixed warning.
 - A completed search reports its result **once**. The first poll after the job
   finishes returns the full report; every later poll returns a short digest
   (library size, hit count, top hit) that keeps the synthetic-library warning,
