@@ -23,6 +23,7 @@ import base64
 import binascii
 import gzip
 import importlib
+import logging
 import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Iterator
@@ -44,6 +45,8 @@ from msmcp.security import (
     resolve_path,
     validate_file_size,
 )
+
+logger = logging.getLogger("msmcp.mzml")
 
 __all__ = [
     "Spectrum",
@@ -291,12 +294,9 @@ def _parse_binary_data_array(
     is still an error, on the same principle as an MSP ``Num Peaks`` header that
     disagrees with the peak lines beneath it.
 
-    The limit of that check is worth stating, because it is narrower than it
-    sounds: it compares *emptiness* against the declaration, never the decoded
-    length.  A payload that decodes to fewer values than the spectrum declares
-    passes here — that comparison belongs with the array length and is not made
-    (it is not made anywhere else either; this is pre-existing behaviour, not a
-    gap this change introduces).
+    The decoded length *is* compared against the declaration, by
+    :func:`iter_spectra` rather than here, and it is **reported rather than
+    raised** — see that function for why the two cases are treated differently.
     """
     accessions = _binary_array_cv_accessions(elem)
 
@@ -424,16 +424,44 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
 # Public iteration / counting
 # ---------------------------------------------------------------------------
 def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
-    """Stream spectra from *path*, one at a time."""
+    """Stream spectra from *path*, one at a time.
+
+    A spectrum whose binary arrays do not supply the ``defaultArrayLength`` it
+    declares is **reported, not refused**: the decoded spectrum is yielded as it
+    is, and one warning names the count once the file has been read through.
+    Refusing the file would make a released server reject data it accepts today
+    on the strength of a writer's bookkeeping, while the decoded arrays are what
+    every downstream tool actually uses.  The warning is what makes the
+    inconsistency visible without the breakage.
+
+    The warning is aggregated deliberately.  A writer whose lengths are off is
+    off for every spectrum it writes, and a per-spectrum line would bury the
+    signal under thousands of copies of itself.
+    """
     resolved = Path(path)
     handle = _open_binary(resolved)
+    mismatched_spectra = 0
     try:
         for event, elem in ET.iterparse(handle, events=("end",)):
             if event == "end" and _local(elem.tag) == "spectrum":
                 try:
-                    yield _parse_spectrum(elem)
+                    declared = _to_int_or_none(elem.get("defaultArrayLength"))
+                    spectrum = _parse_spectrum(elem)
+                    if declared is not None and (
+                        spectrum.mz.size != declared
+                        or spectrum.intensity.size != declared
+                    ):
+                        mismatched_spectra += 1
+                    yield spectrum
                 finally:
                     elem.clear()
+        if mismatched_spectra:
+            logger.warning(
+                "%s: %d spectrum/spectra declare a peak count their binary arrays "
+                "do not supply; they were read as decoded and nothing was refused.",
+                resolved,
+                mismatched_spectra,
+            )
     except ET.ParseError as exc:
         raise MalformedFileError(f"Malformed mzML: {exc}") from exc
     finally:

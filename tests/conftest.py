@@ -165,7 +165,7 @@ def _mzml_xml(spectra: list[dict[str, Any]]) -> str:
 
         spectrum_xml.append(
             f'<spectrum index="{index}" id="scan={index}" '
-            f'defaultArrayLength="{len(spec["mz"])}">'
+            f'defaultArrayLength="{spec.get("declared_length", len(spec["mz"]))}">'
             f'<cvParam cvRef="MS" accession="MS:1000511" name="ms level" '
             f'value="{ms_level}"/>'
             f'<scanList count="1"><scan>'
@@ -273,6 +273,33 @@ def mzml_declares_peaks_with_empty_payload(tmp_path: Path) -> Path:
             "intensity": [10.0, 20.0, 30.0],
             "payload": "empty",
         },
+    ]
+    path.write_text(_mzml_xml(spectra), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def mzml_declares_more_than_it_supplies(tmp_path: Path) -> Path:
+    """One spectrum declaring 3 peaks while its arrays carry 2: short, not empty."""
+    path = tmp_path / "short_payload.mzML"
+    spectra: list[dict[str, Any]] = [
+        {
+            "mz": [100.0, 200.0],
+            "intensity": [10.0, 20.0],
+            "declared_length": 3,
+        },
+    ]
+    path.write_text(_mzml_xml(spectra), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def mzml_two_short_payloads(tmp_path: Path) -> Path:
+    """Two short spectra, to pin that the report is one line, not two."""
+    path = tmp_path / "two_short_payloads.mzML"
+    spectra: list[dict[str, Any]] = [
+        {"mz": [100.0, 200.0], "intensity": [10.0, 20.0], "declared_length": 4},
+        {"mz": [150.0], "intensity": [5.0], "declared_length": 9},
     ]
     path.write_text(_mzml_xml(spectra), encoding="utf-8")
     return path
