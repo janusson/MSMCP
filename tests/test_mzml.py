@@ -236,3 +236,57 @@ class TestEmptyBinaryArrays:
         """
         with pytest.raises(MalformedFileError, match="declares"):
             list(iter_spectra(mzml_declares_peaks_with_empty_payload))
+
+
+# ---------------------------------------------------------------------------
+# A declaration the arrays cannot supply: reported, not refused
+# ---------------------------------------------------------------------------
+class TestDeclaredLengthMismatch:
+    """A declaration the arrays cannot supply is reported, not refused.
+
+    Emptiness in a spectrum that declares peaks is unambiguous corruption and
+    still raises.  A payload that decodes to *fewer* values than the spectrum
+    claims is a different case: it may be a writer's bookkeeping rather than
+    corruption, and refusing the file would make a released server reject data it
+    accepts today.  It is reported once per file instead — visible without the
+    breakage — and the decoded arrays, which are what every downstream tool
+    actually uses, are yielded as they are.
+    """
+
+    def test_a_short_payload_is_read_and_reported(
+        self,
+        mzml_declares_more_than_it_supplies: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The file is read; the inconsistency is named once, at WARNING."""
+        with caplog.at_level("WARNING", logger="msmcp.mzml"):
+            spectra = list(iter_spectra(mzml_declares_more_than_it_supplies))
+
+        assert len(spectra) == 1
+        assert spectra[0].mz.size == 2  # read as decoded, not padded or refused
+        assert spectra[0].intensity.size == 2
+
+        assert "declare a peak count" in caplog.text
+        assert "1 spectrum" in caplog.text
+
+    def test_a_consistent_file_is_not_reported(
+        self, valid_mzml: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No warning when the declaration and the arrays agree."""
+        with caplog.at_level("WARNING", logger="msmcp.mzml"):
+            list(iter_spectra(valid_mzml))
+
+        assert caplog.text == ""
+
+    def test_the_report_is_one_line_per_file_not_per_spectrum(
+        self,
+        mzml_two_short_payloads: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Aggregated on purpose: a systematically off writer must not spam."""
+        with caplog.at_level("WARNING", logger="msmcp.mzml"):
+            list(iter_spectra(mzml_two_short_payloads))
+
+        warnings = [r for r in caplog.records if r.levelno >= 30]
+        assert len(warnings) == 1
+        assert "2 spectrum" in warnings[0].getMessage()
