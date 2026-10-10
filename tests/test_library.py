@@ -454,3 +454,125 @@ class TestMSPReader:
         assert provider is not None
         spectrum = next(s for chunk in provider.iter_spectra(10) for s in chunk)
         assert spectrum.peaks == ((100.0, 1.0), (150.0, 2.0), (200.0, 3.0))
+
+    def test_colon_separated_peaks_are_split(self, tmp_path: Path) -> None:
+        """The ``m/z:intensity`` spelling is read, not refused.
+
+        Real files in the Fiehn/Golm collection (``GMD_20111121_*_MSP.msp``)
+        write several ``mz:intensity`` pairs per line.  Before this they were
+        rejected outright as a non-numeric peak line, so five on-disk libraries
+        were unusable.
+        """
+        from msmcp.library import get_library_provider
+
+        path = tmp_path / "colon.msp"
+        path.write_text(
+            "Name: ColonStyle\nPrecursorMZ: 200.0\nNum Peaks: 4\n"
+            "70:10 76:35 77:1000 78:110\n",
+            encoding="utf-8",
+        )
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+        assert provider is not None
+        spectrum = next(s for chunk in provider.iter_spectra(10) for s in chunk)
+        assert spectrum.peaks == (
+            (70.0, 10.0),
+            (76.0, 35.0),
+            (77.0, 1000.0),
+            (78.0, 110.0),
+        )
+
+    def test_colon_and_semicolon_spellings_agree(self, tmp_path: Path) -> None:
+        """The same peaks give the same result whichever spelling is used.
+
+        Both of these carry several peaks on one line; the plain whitespace form
+        does not (it is one pair per line), so it is not the comparison to make.
+        """
+        from msmcp.library import get_library_provider
+
+        pairs = [(70.0, 10.0), (76.0, 35.0), (77.0, 1000.0)]
+        bodies = {
+            "colon": " ".join(f"{mz:g}:{i:g}" for mz, i in pairs),
+            "semicolon": "; ".join(f"{mz:g} {i:g}" for mz, i in pairs),
+        }
+        results = {}
+        for name, body in bodies.items():
+            path = tmp_path / f"{name}.msp"
+            path.write_text(
+                f"Name: {name}\nNum Peaks: {len(pairs)}\n{body}\n", encoding="utf-8"
+            )
+            provider = get_library_provider(
+                str(path), SecurityPolicy(allowed_root=tmp_path)
+            )
+            assert provider is not None
+            spectrum = next(s for chunk in provider.iter_spectra(10) for s in chunk)
+            results[name] = spectrum.peaks
+        assert results["colon"] == results["semicolon"] == tuple(pairs)
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "70:10 76 35",  # colon field first, bare pair after
+            "70 10 76:35",  # bare pair first, colon field after
+            "70 10 76:35 78:110",  # a whole colon pair hidden after a bare one
+        ],
+    )
+    def test_a_line_mixing_the_two_spellings_is_refused(
+        self, tmp_path: Path, line: str
+    ) -> None:
+        """An ambiguous line raises rather than being silently reinterpreted.
+
+        The ordering matters.  Recognising the colon form only when *some* field
+        carries a colon lets ``70 10 76:35`` fall through to the whitespace path,
+        which would keep ``(70, 10)`` and drop the rest without saying so.
+        """
+        from msmcp.errors import MalformedFileError
+        from msmcp.library import get_library_provider
+
+        path = tmp_path / "mixed.msp"
+        path.write_text(f"Name: Mixed\nNum Peaks: 1\n{line}\n", encoding="utf-8")
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+        assert provider is not None
+        with pytest.raises(MalformedFileError, match="mixes"):
+            list(provider.iter_spectra(10))
+
+    def test_a_whitespace_line_with_more_than_one_pair_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """The whitespace form is one pair per line, so extra fields are an error.
+
+        Reading the first two fields and discarding the rest would drop peaks
+        silently — the failure mode this reader exists to avoid — and the
+        ``Num Peaks`` check only catches it by coincidence (here it would not:
+        one pair declared, one pair kept).
+        """
+        from msmcp.errors import MalformedFileError
+        from msmcp.library import get_library_provider
+
+        path = tmp_path / "overflow.msp"
+        path.write_text("Name: Overflow\nNum Peaks: 1\n70 10 76 35\n", encoding="utf-8")
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+        assert provider is not None
+        with pytest.raises(MalformedFileError, match="is not"):
+            list(provider.iter_spectra(10))
+
+    def test_colon_form_with_a_missing_intensity_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """A malformed field in the colon spelling is still an error."""
+        from msmcp.errors import MalformedFileError
+        from msmcp.library import get_library_provider
+
+        path = tmp_path / "badcolon.msp"
+        path.write_text("Name: BadColon\nNum Peaks: 2\n70:10 76:\n", encoding="utf-8")
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+        assert provider is not None
+        with pytest.raises(MalformedFileError, match="non-numeric"):
+            list(provider.iter_spectra(10))

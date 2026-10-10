@@ -14,7 +14,8 @@ format: install     ## Auto-format code and apply safe fixes (ruff)
 	uv run ruff format .
 	uv run ruff check --fix .
 
-lint: install       ## Static checks: ruff + mypy + basedpyright
+lint: install       ## Static checks: ruff format --check, ruff, mypy, basedpyright (mirrors CI)
+	uv run ruff format --check .
 	uv run ruff check .
 	uv run mypy
 	uv run basedpyright

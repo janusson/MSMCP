@@ -231,3 +231,4 @@ repomix-output.xml
 # macOS
 .DS_Store
 drafts/
+.worktrees/

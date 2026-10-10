@@ -30,7 +30,7 @@ logger = logging.getLogger("msmcp")
 # ---------------------------------------------------------------------------
 mcp = MCPServer(
     "MSMCP-MassFlow-Adapter",
-    version="0.1.0",
+    version="1.0.0",
     instructions=(
         "Local computational mass-spectrometry toolkit.  Its tools read MS "
         "acquisitions from the filesystem (confined to the server's "

@@ -190,9 +190,23 @@ def _open_text(path: Path) -> IO[str]:
 def _parse_peak_line(line: str, line_number: int) -> list[tuple[float, float]]:
     """Parse one MSP peak line into one or more ``(m/z, intensity)`` pairs.
 
-    A line may carry several ``;``-separated peaks, and an optional trailing
-    annotation in double quotes.  A group without two numeric fields is a
-    malformed line, not a peak to skip.
+    Three spellings occur in libraries in the wild, and all three are read:
+
+    ``110.0713 40.0``
+        one whitespace-separated pair per line — the ordinary form;
+    ``110.0713 40.0; 120.0808 100.0``
+        several ``;``-separated pairs on one line;
+    ``110.0713:40.0 120.0808:100.0``
+        several ``m/z:intensity`` pairs separated by whitespace — the GMD/Golm
+        GC-MS exports write this, and they are shipped in the Fiehn/Golm
+        libraries as ``GMD_20111121_*_MSP.msp``.
+
+    A group that mixes the spellings is not guessed at: the colon form is
+    recognised only when *every* field carries a colon, and the whitespace form
+    only when there are exactly two fields.  Anything else raises, so a line is
+    never reinterpreted as something shorter than what it actually says.  An
+    optional trailing annotation in double quotes is ignored, and a group that
+    does not yield two numeric fields is a malformed line, not a peak to skip.
     """
     cleaned = _QUOTED_RE.sub(" ", line)
     pairs: list[tuple[float, float]] = []
@@ -200,19 +214,39 @@ def _parse_peak_line(line: str, line_number: int) -> list[tuple[float, float]]:
         if not group.strip():
             continue
         parts = group.split()
-        if len(parts) < 2:
+        colon_fields = sum(1 for part in parts if ":" in part)
+        if colon_fields:
+            if colon_fields != len(parts):
+                raise MalformedFileError(
+                    f"MSP peak line {line_number} mixes the '<m/z> <intensity>' and "
+                    f"'<m/z>:<intensity>' spellings: {line!r}"
+                )
+            for part in parts:
+                mz_raw, _, intensity_raw = part.partition(":")
+                pairs.append(_pair(mz_raw, intensity_raw, line, line_number))
+            continue
+        # The whitespace form carries exactly one pair per group.  A longer
+        # group is not read as the first two fields and the rest discarded:
+        # dropping peaks without saying so is the failure this reader exists to
+        # avoid, and the strict `Num Peaks` check only catches it by accident.
+        if len(parts) != 2:
             raise MalformedFileError(
                 f"MSP peak line {line_number} is not '<m/z> <intensity>': {line!r}"
             )
-        try:
-            pairs.append((float(parts[0]), float(parts[1])))
-        except ValueError as exc:
-            raise MalformedFileError(
-                f"MSP peak line {line_number} has a non-numeric value: {line!r}"
-            ) from exc
+        pairs.append(_pair(parts[0], parts[1], line, line_number))
     return pairs
 
 
+def _pair(
+    mz_raw: str, intensity_raw: str, line: str, line_number: int
+) -> tuple[float, float]:
+    """Parse one ``m/z`` / ``intensity`` field pair, refusing non-numeric input."""
+    try:
+        return float(mz_raw), float(intensity_raw)
+    except ValueError as exc:
+        raise MalformedFileError(
+            f"MSP peak line {line_number} has a non-numeric value: {line!r}"
+        ) from exc
 def _build_spectrum(
     index: int,
     line_number: int,

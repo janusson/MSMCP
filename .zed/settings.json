@@ -1,10 +1,9 @@
 {
   "context_servers": {
     "msmcp": {
-      "command": {
-        "path": "uv",
-        "args": ["run", "msmcp"]
-      }
+      "command": "uv",
+      "args": ["run", "msmcp"],
+      "env": {}
     }
   }
 }

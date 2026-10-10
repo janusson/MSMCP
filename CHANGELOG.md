@@ -4,12 +4,18 @@ All notable changes to MSMCP are recorded here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-`pyproject.toml` currently declares version `0.1.0`; the first tagged release is
-planned as `1.0.0` once the acceptance criteria in
-[ARCHITECTURE.md](ARCHITECTURE.md) are met. Everything below is unreleased work
-accumulated on `main`.
-
 ## [Unreleased]
+
+## [1.0.0] - 2026-10-08
+
+The first tagged release. Every acceptance criterion in
+[ARCHITECTURE.md](ARCHITECTURE.md) is met, and the release is cut on that basis:
+the criteria are a contract, not a claim that no further work exists.
+
+The spectral-library reader is deliberately **not** in this release — it remains
+the first v1.1 deliverable (see *Known limitations* in ARCHITECTURE.md), so
+`search_library` still generates a synthetic library from the `database_file`
+string rather than opening it, and every report says so.
 
 ### Added
 
@@ -81,6 +87,11 @@ accumulated on `main`.
   isotope substitution difference (`¹³C − ¹²C` = 1.003355 Da), placing M+1 about
   5.3 mDa (~18 ppm at m/z 300) too high. Glucose M+1 is now 181.0668, not
   181.0721.
+- **`make lint` did not run CI's format check**, so a tree that passed `make lint`
+  could still fail the `gate` job — CI runs `ruff format --check .` *first*, and
+  the Makefile had no target that checks formatting (`make format` applies it
+  rather than verifying it). `make lint` now runs it, so the local lint target
+  and CI agree on what "clean" means.
 
 ### Changed
 
