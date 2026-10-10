@@ -357,6 +357,75 @@ class TestLibraryValidatedBeforeDispatch:
 
 
 # ---------------------------------------------------------------------------
+# Reader unit tests — MGF parsing
+# ---------------------------------------------------------------------------
+def _write_mgf(path: Path) -> Path:
+    """Write a minimal MGF library for tests."""
+    content = """\
+BEGIN IONS
+TITLE=Spectrum 1
+PEPMASS=195.088
+RTINSECONDS=120.0
+MSLEVEL=2
+110.07 100.0
+120.08 50.0
+END IONS
+
+BEGIN IONS
+TITLE=Spectrum 2
+PEPMASS=200.0
+150.0 75.0
+END IONS
+"""
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+class TestMGFReader:
+    def test_provider_describes_the_library(self, tmp_path: Path) -> None:
+        from msmcp.library import get_library_provider
+
+        mgf = _write_mgf(tmp_path / "lib.mgf")
+        policy = SecurityPolicy(allowed_root=tmp_path)
+        provider = get_library_provider(str(mgf), policy)
+        assert provider is not None
+        info = provider.describe()
+
+        assert info.format == "MGF"
+        assert info.n_spectra == 2
+        assert info.digest is not None and info.digest.startswith("sha256:")
+        assert Path(info.path) == mgf.resolve()
+
+    def test_iter_spectra_returns_float64_peaks_and_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        from msmcp.library import get_library_provider
+
+        mgf = _write_mgf(tmp_path / "lib.mgf")
+        provider = get_library_provider(str(mgf), SecurityPolicy(allowed_root=tmp_path))
+
+        chunks = list(provider.iter_spectra(chunk_size=1))
+        assert len(chunks) == 2
+        assert [len(c) for c in chunks] == [1, 1]
+
+        s1 = chunks[0][0]
+        assert s1.compound_name == "Spectrum 0"
+        assert s1.precursor_mz == 195.088
+        assert len(s1.peaks) == 2
+        assert s1.peaks[0] == (110.07, 100.0)
+        assert s1.peaks[1] == (120.08, 50.0)
+        assert isinstance(s1.peaks[0][0], float)
+        assert s1.metadata["MSLEVEL"] == "2"
+        assert s1.metadata["RTINMINUTES"] == "2.0"
+
+        s2 = chunks[1][0]
+        assert s2.compound_name == "Spectrum 1"
+        assert s2.precursor_mz == 200.0
+        assert len(s2.peaks) == 1
+        assert s2.peaks[0] == (150.0, 75.0)
+
+
+# ---------------------------------------------------------------------------
 # Reader unit tests — MSP/NIST text parsing
 # ---------------------------------------------------------------------------
 class TestMSPReader:
