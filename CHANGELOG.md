@@ -9,6 +9,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`ARCHITECTURE.md` declares v1.1** — the acceptance criteria for the next
+  release, covering the fitted search null (#12), library format coverage (#2)
+  and acquisition context (#16). The document is no longer titled for v1.0 and
+  its intro no longer frames it as v1.0-only. Declaring the criteria does not
+  meet them: the version stays `1.0.0` until a release includes the library
+  reader, and `docs/roadmap.md` carries the narrative and the exclusions rather
+  than a second copy of the criteria.
+
 - **A maintained roadmap** (`docs/roadmap.md`) — where the repository is, the v1.1 acceptance
   criteria, and what is explicitly not being done. It replaces issue #11, which held the same
   content somewhere with no history, no diff and no review. The board's `Plan` field stays the live

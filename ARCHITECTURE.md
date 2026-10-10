@@ -1,8 +1,13 @@
-# MSMCP v1.0 architecture
+# MSMCP architecture
 
-This document describes what MSMCP v1.0 is, what it is not, and how the pieces
-fit together. It is the reference for deciding whether a change belongs in
-v1.0, in an optional capability, or outside the project for now.
+This document describes what MSMCP is, what it is not, and how the pieces fit
+together. It is the reference for deciding whether a change belongs in the
+released version, in an optional capability, or outside the project for now.
+
+`1.0.0` is released and its acceptance criteria are met below. `v1.1` is the
+next milestone: its criteria are at the end of this document, and its narrative —
+why the milestone exists and what is deliberately excluded — is in
+[`docs/roadmap.md`](docs/roadmap.md).
 
 ## The product in one sentence
 
@@ -366,3 +371,64 @@ The release is complete when the repository demonstrates all of the following:
 
 DreaMS and LSM-MS2 are **not** release blockers. Instrument control is out of
 scope for this repository entirely — see *Out of scope for this repository*.
+
+## Acceptance criteria for v1.1
+
+The release is complete when the repository demonstrates all of the following.
+This is the list a release is judged against; what the software is *for* is the
+scope section above.
+
+### The search null is fitted, not sampled (#12)
+
+- [ ] The upper tail is fitted to the decoy score distribution and evaluated
+      analytically, so a q-value below the sampled floor is expressible and the
+      per-query cost is no longer linear in library size.
+- [ ] A search report names the null model it used and prints the smallest
+      attainable q, so a sampling floor can never be read as a result.
+- [ ] The fitted null is validated against the sampled one on a library where
+      both can be computed, with the disagreement quantified rather than
+      asserted.
+
+### Library format coverage (#2)
+
+- [ ] `get_library_provider` resolves `.mgf`/`.mgf.gz` and a documented local
+      SQLite peak store, in addition to the MSP/NIST text reader.
+- [ ] Every provider crosses the same `SecurityPolicy` as an acquisition —
+      allowed root with symlinks resolved, file-size limit, read-only — and is
+      probed before dispatch, so a malformed library of any format is a typed
+      tool error rather than a failed background job.
+- [ ] The SQLite store is opened read-only by URI (`file:...?mode=ro`), with
+      extension loading disabled and `ATTACH` refused. It is a binary format
+      parsed by a library rather than by this project's own line reader, which
+      makes it a different surface from MSP, not merely a third suffix.
+- [ ] The SQLite schema is documented in this repository, including how a user
+      builds a store from a text library.
+- [ ] Banner and provenance name what was opened, for every format: path,
+      format, spectrum count and digest.
+
+### Acquisition context (#16)
+
+Preserving *how* a spectrum was acquired matters as much as the spectrum itself:
+source settings can be manipulated to produce wildly different results against a
+library entry, and a match is only meaningful when the settings are comparable —
+which is often not the case, and often not knowable. These criteria are therefore
+about making comparability **visible**, never about asserting it.
+
+- [ ] A spectrum or search result reports the acquisition parameters that bear on
+      comparability, parsed from the file and nothing invented: ionisation mode,
+      polarity, MS level, collision energy, isolation window and target, analyser
+      type and resolution, and source conditions where the file carries them.
+- [ ] Absence is visible and never implied away: a spectrum or library entry whose
+      file does not carry a parameter reports it as absent, and no result implies
+      that a query and a library entry were acquired under comparable settings
+      when that is not known.
+- [ ] The parameters are recorded in provenance for the result that used them,
+      following the pattern the instrument-class constants already use.
+
+### Release
+
+- [ ] A release containing the library reader is tagged. The `CHANGELOG`'s
+      `[1.0.0]` section stays byte-identical to tag `1.0.0`; new work sits under
+      a new version heading.
+- [ ] *Known limitations* above reflects what is real: which formats are
+      genuinely readable, and what the null does at library scale.
