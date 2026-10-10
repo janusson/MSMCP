@@ -54,6 +54,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The server no longer tells the model that `search_library` cannot read a
+  library from disk.** The `initialize` instructions still carried the
+  pre-reader caveat — "still scans a synthetic in-memory library rather than the
+  library file you name" — so a host that trusted its server description never
+  passed an `.msp` path, and the supported-format list named only acquisition
+  formats. The instructions now state that an MSP/NIST-style text library is
+  read from disk through the same security boundary as an acquisition, that any
+  other path is a labelled synthetic fallback, and that hits are candidate
+  matches rather than identifications. A test now asserts the instructions name
+  every library suffix `search_library` accepts.
+
+
 - **A metadata-only MSP record no longer makes an entire library
   unsearchable.** A record with header lines but no peaks raised, so
   `GNPS-LIBRARY.msp` died 1,242 records into 15,749, and two other public
@@ -78,6 +90,30 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   that declares peaks is still a `MalformedFileError`.
 
 ### Changed
+
+- **`ping` is registered like every other tool, so the tool-coverage guards can
+  see it.** It was defined in `msmcp.server` and registered at module scope with
+  a bare `@mcp.tool()`, the only tool outside the `register_tools(mcp)`
+  convention the rest of the surface follows. Every guard that discovers tools
+  by calling `register_tools` therefore missed it: the evaluation notebook's
+  `EXPECTED_TOOLS` cross-check, `test_eval_notebook.py`'s "a registered tool is
+  never exercised" assertion, and `test_tool_schemas.py`'s signature/model
+  comparison all skipped it while `README.md` claimed the notebook fails if any
+  registered tool is unexercised. `ping` and `PingResponse` now live in
+  `msmcp/tools/system.py` behind `register_tools`, the notebook exercises
+  `ping`, and `test_tool_schemas.py` names the one tool with no input model
+  rather than skipping it. The published surface is unchanged: same 13 tools,
+  same names, descriptions and annotations.
+
+- **The installed SDK's Tasks limitation is asserted, not assumed.**
+  `ARCHITECTURE.md` and `README.md` justify MSMCP's own polling tool with the
+  claim that the installed `mcp` defines the Tasks types but omits `tasks/get`,
+  `tasks/result` and `tasks/cancel` from its request unions. Nothing tested it,
+  so an SDK upgrade could have falsified three maintained documents with no
+  failing check. `tests/test_server_contract.py` now fails when those requests
+  appear in `ClientRequest` or `ServerRequest` — which is also the trigger for
+  roadmap issue #7.
+
 
 - **The stale root artefacts are resolved** (audit F9). `MCP server
   configuration.md` is now `docs/mcp-server-configuration.md`, behind a
