@@ -23,3 +23,7 @@ Mass spectrometry data MCP server.
 - Run relevant tests after modifications.
 - Run ruff and type checking before declaring a task complete.
 - Keep changes focused.
+
+## Skills
+- `skills/` holds agent playbooks for this project, version-controlled with the code.
+- See `skills/README.md` for the layout and the conventions.
