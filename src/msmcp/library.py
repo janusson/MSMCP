@@ -43,19 +43,30 @@ from msmcp.errors import (
     MalformedFileError,
     UnsupportedFormatError,
 )
+from msmcp.mgf import (
+    declared_spectrum_count as mgf_declared_spectrum_count,
+)
+from msmcp.mgf import (
+    iter_spectra as iter_mgf_spectra,
+)
 from msmcp.provenance import file_digest
 from msmcp.security import SecurityPolicy, resolve_path, validate_file_size
 
 __all__ = [
+    "MGF_SUFFIXES",
     "MSP_SUFFIXES",
     "LibraryInfo",
     "LibraryProvider",
     "LibrarySpectrum",
+    "MGFLibraryProvider",
     "MSPLibraryProvider",
     "get_library_provider",
     "is_supported_library_path",
     "resolve_library_path",
 ]
+
+MGF_SUFFIXES: Final[tuple[str, ...]] = (".mgf", ".mgf.gz")
+"""File suffixes read as MGF (Mascot Generic Format) libraries."""
 
 MSP_SUFFIXES: Final[tuple[str, ...]] = (".msp", ".msp.gz")
 """File suffixes read as MSP / NIST-style text libraries."""
@@ -432,6 +443,61 @@ class MSPLibraryProvider(LibraryProvider):
             yield chunk
 
 
+class MGFLibraryProvider(LibraryProvider):
+    """Read a spectral library stored as MGF (Mascot Generic Format)."""
+
+    format = "MGF"
+
+    def describe(self) -> LibraryInfo:
+        """Count the library's spectra and digest the file it came from."""
+        try:
+            size = self._path.stat().st_size
+        except OSError:
+            size = None
+        return LibraryInfo(
+            path=str(self._path),
+            name=self._path.name,
+            format=self.format,
+            version="MGF",
+            n_spectra=mgf_declared_spectrum_count(self._path),
+            digest=file_digest(self._path),
+            size_bytes=size,
+            n_records_without_peaks=0,
+        )
+
+    def iter_spectra(self, chunk_size: int = 2000) -> Iterator[list[LibrarySpectrum]]:
+        """Yield the library's spectra in chunks of at most *chunk_size*."""
+        if chunk_size < 1:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size!r}")
+
+        chunk: list[LibrarySpectrum] = []
+        for spectrum in iter_mgf_spectra(self._path):
+            peaks = list(
+                zip(spectrum.mz.tolist(), spectrum.intensity.tolist(), strict=True)
+            )
+
+            metadata: dict[str, str] = {}
+            if spectrum.ms_level is not None:
+                metadata["MSLEVEL"] = str(spectrum.ms_level)
+            if spectrum.retention_time is not None:
+                metadata["RTINMINUTES"] = str(spectrum.retention_time)
+
+            lib_spectrum = LibrarySpectrum(
+                index=spectrum.index or 0,
+                compound_name=f"Spectrum {spectrum.index or 0}",
+                precursor_mz=spectrum.precursor_mz,
+                formula=None,
+                peaks=tuple(peaks),
+                metadata=MappingProxyType(metadata),
+            )
+            chunk.append(lib_spectrum)
+            if len(chunk) >= chunk_size:
+                yield chunk
+                chunk = []
+        if chunk:
+            yield chunk
+
+
 # ---------------------------------------------------------------------------
 # Path resolution and the provider registry
 # ---------------------------------------------------------------------------
@@ -445,6 +511,8 @@ def _provider_class_for(name: str) -> type[LibraryProvider] | None:
     lowered = name.lower()
     if lowered.endswith(MSP_SUFFIXES):
         return MSPLibraryProvider
+    if lowered.endswith(MGF_SUFFIXES):
+        return MGFLibraryProvider
     return None
 
 
@@ -463,7 +531,7 @@ def resolve_library_path(
     if not is_supported_library_path(resolved):
         raise UnsupportedFormatError(
             f"'{resolved.suffix}' is not a supported spectral-library format. "
-            f"MSMCP reads MSP/NIST-style text ({', '.join(MSP_SUFFIXES)}); the "
+            f"MSMCP reads MSP/NIST-style text and MGF ({', '.join(MSP_SUFFIXES + MGF_SUFFIXES)}); the "
             f"path was not opened."
         )
     _check_readable(resolved)  # InaccessiblePathError
