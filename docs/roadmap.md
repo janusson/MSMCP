@@ -46,57 +46,9 @@ makes a match interpretable.
 
 ### Acceptance criteria
 
-The release is complete when the repository demonstrates all of the following.
-
-**The null model (`#12`)**
-
-- [ ] The upper tail is **fitted, not sampled**: a model is fitted to the decoy score distribution
-      and evaluated analytically, so a q-value below the sampled floor is expressible and per-query
-      cost is no longer linear in library size.
-- [ ] A search report **names the null model it used and prints the smallest attainable q**, so a
-      sampling floor can never be read as a result.
-- [ ] The fitted null is **validated against the sampled one** on a library where both can be
-      computed, with the disagreement quantified rather than asserted.
-
-**Format coverage (`#2`)**
-
-- [ ] `get_library_provider` resolves `.mgf`/`.mgf.gz` and a documented local SQLite peak store, in
-      addition to MSP/NIST text.
-- [ ] Each new provider crosses the **same `SecurityPolicy`** as MSP — allowed root with symlinks
-      resolved, file-size limit, read-only — and is **probed before dispatch**, so a malformed
-      library of any format is a typed tool error rather than a failed background job.
-- [ ] The SQLite store is opened **read-only by URI** (`file:...?mode=ro`), with extension loading
-      disabled and `ATTACH` refused. It is a binary format parsed by a library rather than by our own
-      line reader, which makes it a different surface from MSP and not merely a third suffix.
-- [ ] The SQLite schema is documented in `ARCHITECTURE.md`, including how a user builds a store from
-      a text library.
-- [ ] Banner and `Provenance` name what was opened for every format: path, format, spectrum count,
-      digest.
-
-**Acquisition context (`#16`)**
-
-The point of this item, in the owner's words: *preserving how something was acquired matters as much
-as the spectrum itself, because source settings can be manipulated to produce wildly different
-results against a library spectrum. A good match should be obtained under comparable settings — but
-that is often difficult to obtain.* The criterion is therefore about making comparability
-**visible**, not about asserting it.
-
-- [ ] A spectrum or search result reports the acquisition parameters that bear on comparability,
-      **parsed from the file and nothing invented**: ionisation mode, polarity, MS level, collision
-      energy, isolation window and target, analyser type and resolution, and source conditions where
-      the file actually carries them.
-- [ ] **Absence is visible and never implied away.** A spectrum or library entry whose file does not
-      carry a parameter reports it as absent; no result implies that a query and a library entry
-      were acquired under comparable settings when that is not known.
-- [ ] The parameters are recorded in `Provenance` for the result that used them, following the
-      pattern the instrument-class constants already use.
-
-**Release**
-
-- [ ] A release containing the reader is tagged. The `CHANGELOG`'s `[1.0.0]` section stays
-      byte-identical to the tag; all new work sits under a new version heading.
-- [ ] `ARCHITECTURE.md`'s *Known limitations* reflects what is real: which formats are genuinely
-      readable, and what the null does at library scale.
+They live in [`ARCHITECTURE.md`](../ARCHITECTURE.md#acceptance-criteria-for-v11), directly after the
+v1.0 criteria they follow. They are deliberately not repeated here: two copies of a contract drift,
+and this repository has already been bitten by exactly that.
 
 ### Explicitly not v1.1
 
@@ -133,14 +85,11 @@ and what would have to change first.
 | `#21` authenticated remote MCP transport | stdio-only by design; anyone who can drive the host LLM can drive the server. |
 | `#22` instrument control and hardware actuation | Belongs to a different project. The MCP layer must never be the only barrier between a model and physical hardware. |
 
-## Open question the owner has not yet decided
+## Version policy
 
-Whether the `v1.1` criteria above should be promoted into `ARCHITECTURE.md` as a
-`## Acceptance criteria for v1.1` section, beside the v1.0 block. Until they are, this document holds
-them and `ARCHITECTURE.md` still describes v1.0 only. The version stays `1.0.0` until a release
-includes the reader.
-
----
+The version stays `1.0.0` until a release includes the library reader. The v1.1 criteria are declared
+in `ARCHITECTURE.md`; declaring them is not the same as meeting them, and nothing here bumps a
+version or cuts a release.
 
 ## Source material
 
