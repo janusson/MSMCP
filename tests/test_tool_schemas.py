@@ -48,6 +48,14 @@ MODEL_FOR_TOOL: dict[str, type[Any]] = {
 # advertise itself as read-only so a host can gate it.
 WRITING_TOOLS = {"cancel_search", "release_reference"}
 
+# Tools whose arguments are the empty set: there is no input model to validate
+# against and no signature/model comparison to make.  Named rather than skipped,
+# because both tests below walk the published surface with
+# ``MODEL_FOR_TOOL.get(...)`` and an unnamed tool silently escapes them -- which
+# is how ``ping`` went unchecked while it was registered outside the
+# ``register_tools()`` convention every other tool module follows.
+TOOLS_WITHOUT_INPUT_MODEL = {"ping"}
+
 # Symbols that only make sense to a reader of the source.  A tool description
 # is prose for a language model choosing a tool; leaking internals wastes
 # context and invites the host to reason about implementation, not behaviour.
@@ -148,6 +156,24 @@ async def test_signature_names_match_the_validating_model() -> None:
         assert set(tool.input_schema.get("required", [])) == {
             name for name, f in model.model_fields.items() if f.is_required()
         }
+
+
+async def test_every_published_tool_is_modelled_or_declared_unmodelled() -> None:
+    """No tool may escape the signature/model comparison by being absent from it."""
+    published = {tool.name for tool in await _tools()}
+    modelled = set(MODEL_FOR_TOOL) | TOOLS_WITHOUT_INPUT_MODEL
+    assert published == modelled, (
+        f"covered by neither an input model nor the unmodelled set: "
+        f"{sorted(published - modelled)}; declared but not published: "
+        f"{sorted(modelled - published)}"
+    )
+
+
+async def test_ping_takes_no_arguments() -> None:
+    """The one unmodelled tool is unmodelled because it has no parameters."""
+    tool = next(t for t in await _tools() if t.name == "ping")
+    assert tool.input_schema.get("properties", {}) == {}
+    assert set(tool.input_schema.get("required", [])) == set()
 
 
 async def test_compute_cosine_advertises_one_peak_source_per_side() -> None:

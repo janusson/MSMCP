@@ -4,14 +4,13 @@ import logging
 import sys
 
 from mcp.server.mcpserver import MCPServer
-from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
 
 from msmcp.tools.chem import register_tools as _register_chem_tools
 from msmcp.tools.io import register_tools as _register_io_tools
 from msmcp.tools.qc import register_tools as _register_qc_tools
 from msmcp.tools.search import register_tools as _register_search_tools
 from msmcp.tools.similarity import register_tools as _register_sim_tools
+from msmcp.tools.system import register_tools as _register_system_tools
 
 # ---------------------------------------------------------------------------
 # Logging boundary - ALL diagnostic output MUST go to stderr.
@@ -37,9 +36,9 @@ mcp = MCPServer(
         "configured allowed root) and answer questions about them: file "
         "summaries, QC metrics, exact-mass and isotope calculations, "
         "precursor-mass validation, and spectral similarity.\n\n"
-        "Supported input formats: .mzML/.mzML.gz, .mgf and .imzML (imaging "
-        "data, read through MassFlow).  The reader is chosen from the file "
-        "extension.\n\n"
+        "Supported input formats: .mzML/.mzML.gz, .mgf and .imzML (imaging, "
+        "via MassFlow); search_library additionally reads MSP/NIST text "
+        "libraries (.msp, .msp.gz).\n\n"
         "Large data never needs to enter the conversation.  load_spectrum "
         "parses a spectrum and returns a short server-side reference "
         "('ptr:spectrum:...'); pass that reference to search_library, inspect "
@@ -51,58 +50,15 @@ mcp = MCPServer(
         "search_library is asynchronous: it submits the scan to a job "
         "executor, returns a job_id immediately, and you must poll "
         "check_search_status until the job leaves the queued/running state.\n\n"
-        "Caveat: search_library still scans a synthetic in-memory library "
-        "rather than the library file you name; only the query spectrum can "
-        "be real data.  Treat its reports as pipeline demonstrations, never "
-        "as compound identifications; the reports repeat this warning."
+        "Caveat: search_library's query spectrum is always real data.  When "
+        "database_file names an MSP/NIST-style text library (.msp, .msp.gz) "
+        "it is read from disk through the same security boundary as an "
+        "acquisition and searched for real; any other path falls back to a "
+        "labelled synthetic library.  Hits are candidate matches ranked by "
+        "the stated scorer — not validated identifications.  The report "
+        "names which library answered it."
     ),
 )
-
-
-# ---------------------------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------------------------
-class PingResponse(BaseModel):
-    """Response schema for the diagnostic ping tool."""
-
-    status: str = Field(description="'ok' when the server is operational.")
-    message: str = Field(description="Human-readable status message.")
-    massflow_available: bool = Field(
-        description="True when the optional `massflow` backend imported."
-    )
-    massflow_version: str | None = Field(
-        default=None,
-        description="Installed MassFlow version, or null when it is absent.",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Tools
-# ---------------------------------------------------------------------------
-@mcp.tool(
-    title="Server health check",
-    annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
-)
-def ping() -> PingResponse:
-    """Check that the server is running and its dependencies import.
-
-    Takes no arguments.  Reports whether `massflow` is available and which
-    version is installed.  Call it first when another MSMCP tool fails in an
-    unexpected way, to tell a broken environment apart from bad arguments.
-    """
-    from msmcp.massflow_io import massflow_version
-
-    version = massflow_version()
-    massflow_available = version is not None
-
-    logger.info("ping() invoked; massflow_available=%s", massflow_available)
-
-    return PingResponse(
-        status="ok",
-        message="MSMCP-MassFlow-Adapter is operational.",
-        massflow_available=massflow_available,
-        massflow_version=version,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +69,7 @@ _register_chem_tools(mcp)
 _register_sim_tools(mcp)
 _register_search_tools(mcp)
 _register_qc_tools(mcp)
+_register_system_tools(mcp)
 
 
 # ---------------------------------------------------------------------------

@@ -70,7 +70,7 @@ def _code_cells(notebook: dict[str, Any]) -> list[str]:
 
 def _registered_tool_names() -> set[str]:
     """Every tool name the server actually publishes, from the source tree."""
-    from msmcp.tools import chem, io, qc, search, similarity
+    from msmcp.tools import chem, io, qc, search, similarity, system
 
     captured: set[str] = set()
 
@@ -84,7 +84,7 @@ def _registered_tool_names() -> set[str]:
 
             return decorator
 
-    for module in (chem, io, qc, search, similarity):
+    for module in (chem, io, qc, search, similarity, system):
         module.register_tools(_Capture())
     return captured
 
