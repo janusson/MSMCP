@@ -23,6 +23,7 @@ rule.
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import subprocess
 import sys
@@ -144,6 +145,17 @@ def _run_session(proc: subprocess.Popen[str]) -> None:
     assert init_result.get("protocolVersion") == "2025-06-18", init_result
     assert init_result.get("serverInfo", {}).get("name") == "MSMCP-MassFlow-Adapter"
     assert "tools" in init_result.get("capabilities", {}), init_result
+
+    # --- the version it advertises is the installed distribution's ---------
+    # A hardcoded version here and a hardcoded version in the startup log
+    # drifted apart once: 1.0.0 over the wire, "v0.1.0" in the log.  The
+    # distribution metadata is the only source both may read.
+    server_info = init_result.get("serverInfo", {})
+    expected_version = importlib.metadata.version("msmcp")
+    assert server_info.get("version") == expected_version, server_info
+    startup = [ln for ln in stderr_lines if "Starting MSMCP-MassFlow-Adapter" in ln]
+    assert startup, f"no startup line on stderr: {stderr_lines[:5]!r}"
+    assert f"v{expected_version}" in startup[0], startup[0]
 
     # --- tools/list: exactly the tools EXPECTED_TOOLS names ----------------
     list_resp = by_id.get(2)

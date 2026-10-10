@@ -5,6 +5,7 @@ import sys
 
 from mcp.server.mcpserver import MCPServer
 
+from msmcp.provenance import package_version
 from msmcp.tools.chem import register_tools as _register_chem_tools
 from msmcp.tools.io import register_tools as _register_io_tools
 from msmcp.tools.qc import register_tools as _register_qc_tools
@@ -25,11 +26,20 @@ logging.basicConfig(
 logger = logging.getLogger("msmcp")
 
 # ---------------------------------------------------------------------------
+# Version
+# ---------------------------------------------------------------------------
+# Resolved from the installed distribution, for which pyproject.toml is the
+# authority.  Everything that reports or logs a version reads this one value:
+# a second literal here is how the advertised version (1.0.0) and the startup
+# log line ("v0.1.0") drifted apart.
+SERVER_VERSION: str = package_version("msmcp") or "0.0.0+unknown"
+
+# ---------------------------------------------------------------------------
 # Server instance
 # ---------------------------------------------------------------------------
 mcp = MCPServer(
     "MSMCP-MassFlow-Adapter",
-    version="1.0.0",
+    version=SERVER_VERSION,
     instructions=(
         "Local computational mass-spectrometry toolkit.  Its tools read MS "
         "acquisitions from the filesystem (confined to the server's "
@@ -77,7 +87,9 @@ _register_system_tools(mcp)
 # ---------------------------------------------------------------------------
 def main() -> None:
     """Launch the server on the stdio transport (child-process mode)."""
-    logger.info("Starting MSMCP-MassFlow-Adapter v0.1.0 on stdio transport")
+    logger.info(
+        "Starting MSMCP-MassFlow-Adapter v%s on stdio transport", SERVER_VERSION
+    )
     mcp.run(transport="stdio")
 
 
