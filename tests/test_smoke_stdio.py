@@ -145,7 +145,7 @@ def _run_session(proc: subprocess.Popen[str]) -> None:
     assert init_result.get("serverInfo", {}).get("name") == "MSMCP-MassFlow-Adapter"
     assert "tools" in init_result.get("capabilities", {}), init_result
 
-    # --- tools/list: exactly the ten registered tools ----------------------
+    # --- tools/list: exactly the tools EXPECTED_TOOLS names ----------------
     list_resp = by_id.get(2)
     assert list_resp is not None, "no response to tools/list"
     assert "error" not in list_resp, list_resp
