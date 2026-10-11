@@ -6,6 +6,7 @@ MSMCP exposes exact-mass validation, adduct and isotope chemistry, spectral simi
 
 Large acquisitions never enter the conversation: spectra are parsed into **server-side data references**, so an agent can hand a 100,000-peak spectrum to the next tool as a short `ptr:spectrum:…` string, with structured **provenance** attached to every derived result.
 
+[![Website: msmcp.dev](https://img.shields.io/badge/website-msmcp.dev-9B5DE5)](https://msmcp.dev)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Package manager: uv](https://img.shields.io/badge/uv-managed-9B5DE5?logo=astral&logoColor=white)](https://docs.astral.sh/uv/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
