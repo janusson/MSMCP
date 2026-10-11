@@ -45,6 +45,7 @@ __all__ = [
     "SoftwareInfo",
     "SourceRef",
     "file_digest",
+    "package_version",
     "provenance_for",
     "software_versions",
 ]
@@ -94,8 +95,14 @@ def _iso(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
 
 
-def _package_version(name: str) -> str | None:
-    """Return the installed version of *name*, or ``None`` when absent."""
+def package_version(name: str) -> str | None:
+    """Return the installed version of *name*, or ``None`` when absent.
+
+    This is the codebase's single authority for a package version: anything
+    that advertises or logs one reads it here, so the value cannot drift from
+    the distribution metadata (which ``pyproject.toml`` populates at build
+    time).
+    """
     try:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
@@ -110,7 +117,7 @@ def software_versions() -> dict[str, str]:
     """
     versions = {"python": platform.python_version()}
     for name in _TRACKED_PACKAGES:
-        version = _package_version(name)
+        version = package_version(name)
         if version is not None:
             versions[name] = version
     return versions
