@@ -1,0 +1,50 @@
+# MSMCP worked-example library: five compounds as an MSP/NIST-style text file.
+# See "Try it in 60 seconds" in README.md.  Caffeine's peak list is also the
+# query spectrum (examples/caffeine_spectrum.mgf), so a correct search ranks it
+# first.
+Name: Caffeine
+Formula: C8H10N4O2
+PrecursorMZ: 195.0877
+Ion_mode: P
+Num Peaks: 5
+110.0713 40.0
+120.0808 100.0
+136.0757 60.0
+138.0662 420.0
+500.1 55.0
+
+Name: Theobromine
+Formula: C7H8N4O2
+PrecursorMZ: 181.0720
+Ion_mode: P
+Num Peaks: 3
+110.0713 12.0
+163.0601 510.0
+181.0720 8.0
+
+Name: Paraxanthine
+Formula: C7H8N4O2
+PrecursorMZ: 181.0720
+Ion_mode: P
+Num Peaks: 3
+124.0506 25.0
+163.0601 300.0
+181.0720 10.0
+
+Name: Glucose
+Formula: C6H12O6
+PrecursorMZ: 181.0707
+Ion_mode: N
+Num Peaks: 3
+85.0284 30.0
+127.0390 45.0
+163.0601 100.0
+
+Name: Adenosine
+Formula: C10H13N5O4
+PrecursorMZ: 268.1040
+Ion_mode: P
+Num Peaks: 3
+119.0353 80.0
+136.0618 500.0
+268.1040 20.0

@@ -64,6 +64,8 @@ _ACC_NO_COMPRESSION = "MS:1000576"
 _ACC_MS_LEVEL = "MS:1000511"
 _ACC_SCAN_START_TIME = "MS:1000016"
 _ACC_SELECTED_ION_MZ = "MS:1000744"
+_ACC_POSITIVE_SCAN = "MS:1000130"
+_ACC_NEGATIVE_SCAN = "MS:1000129"
 
 _NUMPRESS_ACCESSIONS = frozenset({"MS:1002312", "MS:1002313", "MS:1002314"})
 
@@ -89,6 +91,13 @@ class Spectrum:
     mz: np.ndarray
     intensity: np.ndarray
     coordinate: tuple[int, int, int] | None = None
+    polarity: str | None = None
+    """``"positive"`` / ``"negative"`` when the file states the ion mode.
+
+    ``None`` when the source does not declare it (many MGF files, and any
+    spectrum that carries neither the positive- nor the negative-scan cvParam),
+    so a tool never has to invent one.
+    """
 
     @property
     def tic(self) -> float:
@@ -377,11 +386,16 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
     ms_level: int | None = None
     retention_time: float | None = None
     precursor_mz: float | None = None
+    polarity: str | None = None
 
     for child in elem:
         tag = _local(child.tag)
         if tag == "cvParam" and child.get("accession") == _ACC_MS_LEVEL:
             ms_level = _to_int_or_none(child.get("value"))
+        elif tag == "cvParam" and child.get("accession") == _ACC_POSITIVE_SCAN:
+            polarity = "positive"
+        elif tag == "cvParam" and child.get("accession") == _ACC_NEGATIVE_SCAN:
+            polarity = "negative"
         elif tag == "scanList":
             retention_time = _extract_scan_start_time(child)
         elif tag == "precursorList":
@@ -417,6 +431,7 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
         precursor_mz=precursor_mz,
         mz=mz,
         intensity=intensity,
+        polarity=polarity,
     )
 
 

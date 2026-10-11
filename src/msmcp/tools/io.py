@@ -69,6 +69,15 @@ class ReferenceInput(BaseModel):
     reference: str = Field(..., min_length=1)
 
 
+class ListSpectraInput(BaseModel):
+    """Validated input for the list_spectra tool."""
+
+    file_path: str = Field(..., min_length=1)
+    ms_level: int | None = Field(default=None, ge=1)
+    max_spectra: int = Field(default=200, ge=1, le=1000)
+    min_peaks: int = Field(default=0, ge=0)
+
+
 class SpectrumReferenceResult(BaseModel):
     """Structured result of ``load_spectrum``.
 
@@ -113,6 +122,11 @@ def _fmt_rt(val: float) -> str:
 def _fmt_intensity(val: float) -> str:
     """Intensity -> scientific notation above 1e6, otherwise 2 decimal places."""
     return f"{val:.2e}" if abs(val) >= 1e6 else f"{val:.2f}"
+
+
+def _fmt_ms_level(level: int | None) -> str:
+    """MS level -> ``MS1``/``MS2``/..., or ``N/A`` when the file does not state it."""
+    return f"MS{level}" if level is not None else "N/A"
 
 
 # ---------------------------------------------------------------------------
@@ -315,6 +329,140 @@ def register_tools(mcp: Any) -> None:
             noise_threshold,
         )
         return "\n".join(header + body + footer)
+
+    @mcp.tool(
+        title="List spectra in an MS file",
+        annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
+    )
+    def list_spectra(
+        file_path: Annotated[
+            str,
+            Field(
+                min_length=1,
+                description="Path to a local MS file (.mzML, .mzML.gz, .mgf "
+                "or .imzML), absolute or relative to the server working "
+                "directory.",
+            ),
+        ],
+        ms_level: Annotated[
+            int | None,
+            Field(
+                ge=1,
+                description="Only list spectra at this MS level (for example 2 "
+                "for MS/MS). Leave unset to list every level.",
+            ),
+        ] = None,
+        max_spectra: Annotated[
+            int,
+            Field(
+                ge=1,
+                le=1000,
+                description="Maximum number of spectra to list; the scan "
+                "stops once this many match.",
+            ),
+        ] = 200,
+        min_peaks: Annotated[
+            int,
+            Field(
+                ge=0,
+                description="Only list spectra with at least this many peaks. "
+                "0 lists spectra with no peaks too.",
+            ),
+        ] = 0,
+    ) -> str:
+        """List the spectra in a local MS file as a compact index table.
+
+        Reads .mzML, .mzML.gz, .mgf and .imzML (imaging) files; the reader is
+        chosen from the file extension.  For each spectrum reports its index,
+        MS level, retention time, precursor m/z and peak count, so you can
+        choose which spectrum to hand to `load_spectrum` or search.
+
+        Use it before `load_spectrum`: an MS/MS library search needs an MS2
+        query, and a real LC-MS run interleaves MS1 survey scans with the MS2
+        spectra worth searching.  Filter with `ms_level=2` and `min_peaks` to
+        see the candidates without reading every spectrum's peaks.
+
+        The scan reads the whole file unless `max_spectra` matches are reached
+        first, so it is slower than `load_mzml_summary` on large runs but far
+        cheaper than loading each spectrum.  Spectra omitted by the filter are
+        still counted, so the footer states how many were examined.
+        """
+        validated = ListSpectraInput(
+            file_path=file_path,
+            ms_level=ms_level,
+            max_spectra=max_spectra,
+            min_peaks=min_peaks,
+        )
+        validate_spectrum_count(validated.max_spectra, DEFAULT_POLICY)
+        source = ingest.resolve_source(validated.file_path, DEFAULT_POLICY)
+
+        rows: list[str] = []
+        examined = 0
+        truncated = False
+        for spectrum in source.iter_spectra():
+            examined += 1
+            level = spectrum.ms_level
+            if validated.ms_level is not None and level != validated.ms_level:
+                continue
+            peak_count = spectrum.n_peaks
+            if peak_count < validated.min_peaks:
+                continue
+            index = spectrum.index if spectrum.index is not None else "?"
+            rows.append(
+                f"| {index} | {_fmt_ms_level(level)} "
+                f"| {_safe_fmt(spectrum.retention_time, _fmt_rt)} "
+                f"| {_safe_fmt(spectrum.precursor_mz, _fmt_mz)} "
+                f"| {peak_count} |"
+            )
+            if len(rows) >= validated.max_spectra:
+                truncated = True
+                break
+
+        filters: list[str] = []
+        if validated.ms_level is not None:
+            filters.append(f"MS level == {validated.ms_level}")
+        if validated.min_peaks > 0:
+            filters.append(f"at least {validated.min_peaks} peaks")
+        filter_desc = "; ".join(filters) if filters else "none"
+
+        if truncated:
+            listed = (
+                f"**Listed:** {len(rows)} spectra (stopped at the "
+                f"`max_spectra` limit of {validated.max_spectra}; more may follow)."
+            )
+        else:
+            listed = f"**Listed:** {len(rows)} of {examined} spectra in the file."
+
+        lines = [
+            "## Spectrum Index",
+            "",
+            f"**File:** `{os.path.basename(file_path)}`",
+            f"**Format:** {source.format}  (reader: `{source.backend}`)",
+            f"**Filter:** {filter_desc}",
+            listed,
+            "",
+        ]
+        if rows:
+            lines.append("| Index | MS | RT (min) | Precursor m/z | Peaks |")
+            lines.append("|---|---|---|---|---|")
+            lines.extend(rows)
+            lines.append("")
+            lines.append(
+                "Pass an `index` to `load_spectrum` to load the spectrum you "
+                "want, then search or score that reference."
+            )
+        else:
+            lines.append("_No spectra matched the filter._")
+
+        logger.info(
+            "list_spectra(file=%r, ms_level=%s, listed=%d, examined=%d, truncated=%s)",
+            file_path,
+            validated.ms_level,
+            len(rows),
+            examined,
+            truncated,
+        )
+        return "\n".join(lines)
 
     @mcp.tool(
         title="Load a spectrum as a server-side reference",

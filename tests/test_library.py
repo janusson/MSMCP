@@ -202,6 +202,47 @@ class TestRealLibrarySearch:
 
 
 # ---------------------------------------------------------------------------
+# Polarity: reported and flagged, never a silent filter
+# ---------------------------------------------------------------------------
+class TestLibraryPolarity:
+    def test_library_spectra_carry_their_ion_mode(self, tmp_path: Path) -> None:
+        from msmcp.library import get_library_provider
+
+        msp = _write_msp(tmp_path / "ground_truth.msp")
+        provider = get_library_provider(str(msp), SecurityPolicy(allowed_root=tmp_path))
+        spectra = [s for chunk in provider.iter_spectra(10) for s in chunk]
+        assert [s.polarity for s in spectra] == ["positive", "positive", "negative"]
+
+    def test_polarity_mismatch_is_flagged_not_filtered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from msmcp import security
+
+        msp = _write_msp(tmp_path / "ground_truth.msp")
+        monkeypatch.setattr(
+            security, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path)
+        )
+
+        outcome = _run_scan(
+            SearchRequest(
+                database_file=str(msp),
+                experimental_peaks=tuple(CAFFEINE_PEAKS),
+                experimental_file="negative_mode.mzML",
+                query_polarity="negative",
+            )
+        )
+        report = outcome.report
+
+        assert "| Polarity" in report  # the column reaches the report
+        assert "positive \u26a0" in report  # caffeine's ion mode opposes the query
+        assert "opposite ion mode" in report
+        # The hit is reported, not dropped: polarity is a flag, not a filter.
+        assert "Caffeine" in report
+        parameters = outcome.provenance.to_dict()["parameters"]
+        assert parameters["query_polarity"] == "negative"
+
+
+# ---------------------------------------------------------------------------
 # Security: the library path crosses the same boundary as acquisitions
 # ---------------------------------------------------------------------------
 class TestLibrarySecurityBoundary:

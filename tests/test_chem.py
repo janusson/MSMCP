@@ -195,8 +195,8 @@ class TestIsotopePattern:
         ("formula", "m1", "m2"),
         [
             ("H2O", 0.000611, 0.002055),
-            ("C6H12O6", 0.068560, 0.014680),
-            ("C8H10N4O2", 0.103212, 0.009436),
+            ("C6H12O6", 0.068560, 0.014329),
+            ("C8H10N4O2", 0.103212, 0.008941),
             # Halogens: the secondary isotope (³⁷Cl, ⁸¹Br) is an M+2
             # contributor, so M+1 is zero and M+2 carries the signal.
             ("Cl", 0.0, 0.319609),
@@ -218,6 +218,44 @@ class TestIsotopePattern:
         # ³⁷Cl / ³⁵Cl abundance ratio ≈ 0.3196 → M+2 ≈ 31.96%.
         assert pattern[2][1] == pytest.approx(0.2422 / 0.7578, rel=1e-6)
 
+    def test_dichlorine_carries_an_m4_peak(self) -> None:
+        """Cl₂ is the case the Δn ≤ 2 shortcut could not express.
+
+        Two ³⁷Cl atoms put abundance at M+4; the exact multinomial gives the
+        textbook ≈ 9:6:1 (M : M+2 : M+4) pattern.
+        """
+        pattern = _isotope_pattern(_parse_formula("Cl2"), max_isotopologue=5)
+        assert len(pattern) == 5
+        ratio = 0.2422 / 0.7578
+        assert pattern[1][1] == pytest.approx(0.0, abs=1e-12)  # no M+1
+        assert pattern[2][1] == pytest.approx(2 * ratio, rel=1e-6)
+        assert pattern[3][1] == pytest.approx(0.0, abs=1e-12)  # no M+3
+        assert pattern[4][1] == pytest.approx(ratio**2, rel=1e-6)
+
+    def test_dibromine_is_near_one_two_one(self) -> None:
+        """Br₂ has no monoisotopic-dominant isotope: M, M+2, M+4 ≈ 1 : 2 : 1."""
+        pattern = _isotope_pattern(_parse_formula("Br2"), max_isotopologue=5)
+        assert pattern[2][1] == pytest.approx(1.9456, abs=1e-3)
+        assert pattern[4][1] == pytest.approx(0.9463, abs=1e-3)
+
+    def test_m2_is_exact_not_a_pool_approximation(self) -> None:
+        """M+2 must be the exact multinomial coefficient, not ``p1²/2``.
+
+        With a single carbon the two-¹³C pathway is impossible, so methane's
+        M+2 (one ¹³C + one ²H, or two ²H) is ~5e-6 — whereas the earlier
+        ``p1²/2`` pool approximation returned ~9.6e-4, two orders of magnitude
+        too high.  This pins the exact expansion.
+        """
+        pattern = _isotope_pattern(_parse_formula("CH4"))
+        assert 0.0 < pattern[2][1] < 1.0e-5
+
+    def test_isotopologue_count_is_honoured(self) -> None:
+        """``max_isotopologue`` sets the number of rows, not just a label."""
+        assert len(_isotope_pattern(_parse_formula("C8H10N4O2"), 5)) == 5
+        assert len(_isotope_pattern(_parse_formula("C8H10N4O2"), 1)) == 1
+        with pytest.raises(ValueError, match="at least 1"):
+            _isotope_pattern(_parse_formula("C8H10N4O2"), 0)
+
 
 # ---------------------------------------------------------------------------
 # annotate_isotopes — end-to-end
@@ -231,7 +269,19 @@ class TestAnnotateIsotopes:
         assert "Monoisotopic mass: **180.0634 Da**" in out
         assert "| M           |             180.0634 |             1.0000 |" in out
         assert "| M+1         |             181.0668 |             0.0686 |" in out
-        assert "| M+2         |             182.0681 |             0.0147 |" in out
+        assert "| M+2         |             182.0680 |             0.0143 |" in out
+
+    def test_isotopologues_parameter_reveals_the_halogen_m4(
+        self, chem_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        """Default is three rows; raising it exposes a halogen's M+4 peak."""
+        default = chem_tools["annotate_isotopes"](identifier="CHCl3")
+        assert "M+4" not in default
+        extended = chem_tools["annotate_isotopes"](identifier="CHCl3", isotopologues=5)
+        assert "| M+4" in extended
+        # Isotopologue counts outside the advertised range are rejected.
+        with pytest.raises(ValidationError):
+            chem_tools["annotate_isotopes"](identifier="CHCl3", isotopologues=11)
 
     def test_smiles_identifier_resolves_to_formula(
         self, chem_tools: dict[str, Callable[..., str]]

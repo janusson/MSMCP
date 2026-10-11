@@ -9,6 +9,40 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`list_spectra` — a discovery step before loading or searching.** The new
+  read-only tool indexes a file's spectra (index, MS level, retention time,
+  precursor m/z, peak count) behind an optional MS-level and minimum-peak
+  filter, so a caller can find the MS2 candidates in a run instead of guessing a
+  spectrum index — the failure mode `search_library` already warns about when it
+  is handed spectrum 0 of an LC-MS file. It reads through the same security
+  boundary as the other file tools, is capped by `max_spectra`, and reports how
+  many spectra it examined, so a truncated listing says so. Exercised by
+  `tests/test_io.py` and the evaluation notebook.
+
+- **Ion-mode (polarity) is reported in search results, and mismatches are
+  flagged rather than filtered.** The MSP reader parses `Ion_mode` into a real
+  `polarity` field on `LibrarySpectrum`, and the mzML/MGF readers report a
+  spectrum's polarity when the file states it (`Spectrum.polarity`; `None` when
+  it does not — no polarity is invented). `search_library` threads the query's
+  polarity into the report, adds a **Polarity** column to the hit table, and
+  marks any hit whose declared ion mode is opposite the query's. Hits are never
+  dropped on polarity: the flag lets a caller decide, and the mismatch counts as
+  a caveat, not a filter. Query polarity is also recorded in the search
+  provenance.
+
+- **A user-facing front door for the documentation.** The README gains a
+  **What you can ask it** section (plain-language questions → the tools that
+  answer them), a **Try it in 60 seconds** quick start backed by a shipped
+  worked example (`examples/caffeine_library.msp` and
+  `examples/caffeine_spectrum.mgf`), and a **Glossary** of the
+  mass-spectrometry and MCP terms the document uses. The maintainer-facing
+  internals — the foundation-model adapters, the `JobExecutor` interface,
+  developer ergonomics and the repository layout — move to a new
+  **[DEVELOPING.md](DEVELOPING.md)**, so the README stays the user- and
+  agent-facing story. That worked example is executed end to end by
+  `tests/test_quickstart_example.py`, so a quickstart that silently stops
+  working fails the build.
+
 - **`ARCHITECTURE.md` declares v1.1** — the acceptance criteria for the next
   release, covering the fitted search null (#12), library format coverage (#2)
   and acquisition context (#16). The document is no longer titled for v1.0 and
@@ -65,7 +99,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   matches rather than identifications. A test now asserts the instructions name
   every library suffix `search_library` accepts.
 
-
 - **A metadata-only MSP record no longer makes an entire library
   unsearchable.** A record with header lines but no peaks raised, so
   `GNPS-LIBRARY.msp` died 1,242 records into 15,749, and two other public
@@ -114,6 +147,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   appear in `ClientRequest` or `ServerRequest` — which is also the trigger for
   roadmap issue #7.
 
+- **The isotope envelope is now the exact multinomial expansion, not a
+  first-order approximation.** `annotate_isotopes` computes the distribution
+  from `∏(Σ aᵢ·x^Δnᵢ)ⁿ` over every element and atom, honouring the
+  previously-ignored `max_isotopologue` parameter — now the wire parameter
+  `isotopologues` (1–10, default 3) — so `M, M+1, … M+(n-1)` are all reachable
+  and an element's full isotope ladder contributes. Two consequences: a
+  chlorine- or bromine-rich formula now shows its **M+4** peak (Cl₂ ≈ 9:6:1,
+  Br₂ ≈ 1:2:1) instead of being truncated at M+2; and M+2 for light molecules
+  is corrected downward, because the old `p₁²/2` term overcounted when a
+  dominant isotope had a low count (methane M+2 was ~9.6e-4, now ~5e-6; caffeine
+  0.0094 → 0.0089, glucose 0.0147 → 0.0143). M+1 and the monoisotopic mass are
+  unchanged.
 
 - **The stale root artefacts are resolved** (audit F9). `MCP server
   configuration.md` is now `docs/mcp-server-configuration.md`, behind a

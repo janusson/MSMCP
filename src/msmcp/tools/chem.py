@@ -173,6 +173,7 @@ class IsotopeInput(BaseModel):
 
     identifier: str = Field(..., min_length=1)
     is_smiles: bool = False
+    isotopologues: int = Field(default=3, ge=1, le=10)
 
 
 # ======================================================================
@@ -205,69 +206,76 @@ def _isotope_pattern(
 ) -> list[tuple[float, float]]:
     """Compute theoretical isotopologue masses and relative abundances.
 
-    Returns [(mass_Da, rel_abundance), ...] for M, M+1, M+2.
-    Abundances are normalised so that M = 1.0.
+    Returns ``[(mass_Da, rel_abundance), ...]`` for ``M, M+1, ...`` up to
+    ``max_isotopologue`` entries, normalised so the monoisotopic peak is 1.0.
+
+    The envelope is the **exact multinomial expansion** of every element's
+    isotope pattern, convolved across all atoms: the coefficient of ``x**k`` in
+    ``\u220f_element (\u03a3_isotope a_i \u00b7 x**\u0394n_i)**count`` is the relative abundance of
+    the ``M+k`` isotopologue.  Doing the expansion in full means an element's
+    whole isotope ladder contributes, including the \u0394n \u2265 3 isotopes the earlier
+    \u0394n \u2264 2 shortcut dropped (\u2075\u2077Fe is \u0394n = 4, \u2078\u2070Se is \u0394n = 6).  Halogens are the
+    clearest case: Cl and Br have no \u0394n = 1 isotope, so a dibromo compound's
+    envelope is M, M+2, **M+4** (\u2248 1 : 2 : 1 for Br\u2082), which no \u0394n \u2264 2 shortcut
+    can express.  Raise ``max_isotopologue`` to see those higher isotopologues.
+
+    The mass reported for ``M+k`` is the abundance-weighted mean over every
+    substitution combination that yields *k* extra neutrons (``k = 2`` is two
+    \u00b9\u00b3C, *or* one \u00b9\u2078O, *or* one \u00b9\u00b3C plus one \u00b9\u2075N, ...), which is the
+    unresolved peak a unit-resolution instrument reports; the fine structure is
+    not resolved.  A substitution shifts the mass by the difference between the
+    isotope and the monoisotopic mass of that *element* (\u00b9\u00b3C - \u00b9\u00b2C =
+    +1.003355 Da), not by the neutron mass (1.008665 Da): using the neutron mass
+    put M+1 about 5.3 mDa (~18 ppm at m/z 300) too high, outside the tolerance
+    the rest of this project works to.
     """
+    if max_isotopologue < 1:
+        raise ValueError(
+            f"max_isotopologue must be at least 1, got {max_isotopologue!r}"
+        )
+
     # --- monoisotopic mass ------------------------------------------------
     mono_mass = 0.0
     for el, count in composition.items():
         mono_mass += _ISOTOPES[el][0][0] * count
 
-    # --- M+1 / M+2 probabilities and masses -------------------------------
-    # Δn = 1 isotopes (¹³C, ¹⁵N, ¹⁷O, ³³S, …) contribute to M+1;
-    # Δn = 2 isotopes (¹⁸O, ³⁴S, ³⁷Cl, ⁸¹Br, …) contribute to M+2.
-    # Elements without a given Δn isotope contribute nothing — e.g. Cl
-    # and Br have no Δn = 1 isotope, so their M+1 abundance is zero.
-    #
-    # Mass shift: a substitution shifts the mass by the difference between the
-    # isotope and the monoisotopic mass of that *element* (¹³C - ¹²C =
-    # +1.003355 Da), not by the neutron mass (1.008665 Da).  Using the neutron
-    # mass put M+1 about 5.3 mDa (~18 ppm at m/z 300) too high, i.e. outside the
-    # tolerance the rest of this project works to.  The unresolved peak is the
-    # intensity-weighted mean of its fine-structure components, which is what a
-    # unit-resolution instrument actually reports.
-    p1 = 0.0
-    p2_b = 0.0
-    shift1_weighted = 0.0  # Σ p_i · Δm_i over Δn = 1 substitutions
-    shift2_weighted = 0.0  # Σ p_i · Δm_i over Δn = 2 substitutions
+    # weight[k]        : relative abundance of exactly k extra neutrons
+    # shift_weight[k]  : \u03a3 abundance \u00b7 \u0394mass over those combinations, so the
+    #                    abundance-weighted mean shift is shift_weight[k]/weight[k].
+    weight = [1.0] + [0.0] * (max_isotopologue - 1)
+    shift_weight = [0.0] * max_isotopologue
+
     for el, count in composition.items():
-        mono_el_mass = _ISOTOPES[el][0][0]
-        mono_abund = _ISOTOPES[el][0][1]
-        for iso_mass, abund, delta in _ISOTOPES[el][1:]:
-            p = count * (abund / mono_abund)
-            dm = iso_mass - mono_el_mass
-            if delta == 1:
-                p1 += p
-                shift1_weighted += p * dm
-            elif delta == 2:
-                p2_b += p
-                shift2_weighted += p * dm
+        isotopes = _ISOTOPES[el]
+        mono_el_mass = isotopes[0][0]
+        # One atom's polynomial: (abundance, \u0394n, \u0394mass vs the monoisotopic atom).
+        atom = [(abund, delta, mass - mono_el_mass) for mass, abund, delta in isotopes]
+        for _ in range(count):
+            new_weight = [0.0] * max_isotopologue
+            new_shift = [0.0] * max_isotopologue
+            for k in range(max_isotopologue):
+                wk = weight[k]
+                sk = shift_weight[k]
+                if wk == 0.0 and sk == 0.0:
+                    continue
+                for abund, delta, dm in atom:
+                    k2 = k + delta
+                    if k2 >= max_isotopologue:
+                        continue
+                    new_weight[k2] += wk * abund
+                    new_shift[k2] += sk * abund + wk * abund * dm
+            weight, shift_weight = new_weight, new_shift
 
-    mean_shift1 = (shift1_weighted / p1) if p1 else 0.0
-    m1_mass = mono_mass + mean_shift1
-    m1_abund = p1
-
-    # --- M+2 probability (approximate) ------------------------------------
-    # Two contributions:
-    #   a) Two independent +1 substitutions → ≈ p1² / 2
-    #   b) One Δn = 2 substitution (summed above)
-    p2_a = (p1**2) / 2.0
-
-    m2_abund = p2_a + p2_b
-    m2_shift = (
-        (shift2_weighted + p2_a * 2.0 * mean_shift1) / (p2_b + p2_a)
-        if (p2_b + p2_a)
-        else 0.0
-    )
-    m2_mass = mono_mass + m2_shift
-
-    # Build result, normalised to M = 1.0
-    result = [
-        (mono_mass, 1.0),
-        (m1_mass, m1_abund),
-        (m2_mass, m2_abund),
-    ]
-    return result
+    # Normalise to the monoisotopic peak (weight[0] is never zero: every
+    # supported element has a monoisotopic isotope).
+    base = weight[0]
+    pattern: list[tuple[float, float]] = []
+    for k in range(max_isotopologue):
+        wk = weight[k]
+        abund = wk / base
+        mean_shift = (shift_weight[k] / wk) if wk else 0.0
+        pattern.append((mono_mass + mean_shift, abund))
+    return pattern
 
 
 # ======================================================================
@@ -413,19 +421,33 @@ def register_tools(mcp: Any) -> None:
                 ),
             ),
         ] = False,
+        isotopologues: Annotated[
+            int,
+            Field(
+                ge=1,
+                le=10,
+                description="How many isotopologue rows to return, from M up "
+                "to M+(isotopologues-1). Default 3 (M, M+1, M+2). Raise it for "
+                "halogen-rich formulas, whose diagnostic M+4 peak needs more "
+                "rows.",
+            ),
+        ] = 3,
     ) -> str:
-        """Predict the theoretical isotope pattern (M, M+1, M+2) of a compound.
+        """Predict the theoretical isotope pattern (M, M+1, ...) of a compound.
 
         Use this to obtain isotopologue masses and relative abundances, for
         example to check a measured isotope envelope against a proposed
         molecular formula or to confirm a monoisotopic mass.
 
         Returns the monoisotopic mass in daltons (Da) and a Markdown table
-        giving the theoretical mass and relative abundance of the M, M+1 and
-        M+2 isotopologues, normalised so that the monoisotopic peak is 1.0000.
-        Note that M+1 and M+2 only account for single- and double-neutron
-        substitutions, so halogens such as Cl and Br contribute to M+2 rather
-        than M+1.
+        giving the theoretical mass and relative abundance of each isotopologue
+        from M up to M+(isotopologues-1), normalised so that the monoisotopic
+        peak is 1.0000.  The envelope is the exact multinomial expansion of each
+        element's isotopes, so it handles the full isotope ladder: a chlorine-
+        or bromine-rich formula carries its signal in M+2 and M+4 (Cl and Br
+        have no single-neutron isotope), while ordinary C/H/N/O compounds
+        concentrate it in M+1 and M+2.  Raise `isotopologues` to reveal the
+        higher peaks a halogen-rich formula carries.
 
         Pass a chemical formula as the identifier by default (for example
         'C6H12O6'); set is_smiles=True only when the identifier is a SMILES
@@ -435,7 +457,11 @@ def register_tools(mcp: Any) -> None:
         elements with tabulated isotope data are supported (C, H, N, O, S, P,
         F, Cl, Br, I, Na, K, Si, Fe, Se) - any other element returns an error.
         """
-        _ = IsotopeInput(identifier=identifier, is_smiles=is_smiles)
+        _ = IsotopeInput(
+            identifier=identifier,
+            is_smiles=is_smiles,
+            isotopologues=isotopologues,
+        )
 
         # --- SMILES → formula conversion -----------------------------------
         if is_smiles:
@@ -462,7 +488,7 @@ def register_tools(mcp: Any) -> None:
             return f"ERROR: {exc}"
 
         # --- compute isotope pattern ----------------------------------------
-        pattern = _isotope_pattern(composition)
+        pattern = _isotope_pattern(composition, max_isotopologue=isotopologues)
 
         # --- render Markdown table ------------------------------------------
         lines = [
@@ -473,7 +499,7 @@ def register_tools(mcp: Any) -> None:
             "| Isotopologue | Theoretical Mass (Da) | Relative Abundance |",
             "|-------------|----------------------|--------------------|",
         ]
-        labels = ["M", "M+1", "M+2"]
+        labels = ["M"] + [f"M+{k}" for k in range(1, isotopologues)]
         for (mass, abund), label in zip(pattern, labels, strict=True):
             lines.append(f"| {label:<11} | {mass:>20.4f} | {abund:>18.4f} |")
 
