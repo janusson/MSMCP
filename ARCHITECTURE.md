@@ -104,16 +104,22 @@ Constraints that follow from the offline posture:
 * No credentials, no rate limits and no cache layer, because there is no remote
   service to talk to.
 
-### Core v1.0
+### Core capabilities
+
+The table below describes the current core of the server. Two of its entries —
+the spectral library reader (`library.py`) and the instrument-class defaults
+(`instruments.py`) — are merged to `main` but are **not** in the `1.0.0` tag:
+they are the first v1.1 deliverables (see [`docs/roadmap.md`](docs/roadmap.md)).
+Everything else is present in the released version.
 
 | Capability | Where | Notes |
 |---|---|---|
 | MassFlow-backed ingestion | `massflow_io.py`, `ingest.py` | imzML imaging data, via MassFlow's own reader |
 | MSMCP-owned readers | `mzml.py`, `mgf.py` | formats MassFlow does not cover |
-| Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions |
+| Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions (on `main`, unreleased) |
 | Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py` | exact mass, isotopes, ppm validation, cosine, QC |
 | Spectral scoring contract | `models/scoring.py` | `SpectrumScorer`; classical (in-house, reference implementation) and embedding scorers behind one interface |
-| Instrument-class defaults | `instruments.py` | every experimental threshold, its default per instrument class, and the provenance of each default |
+| Instrument-class defaults | `instruments.py` | every experimental threshold, its default per instrument class, and the provenance of each default (on `main`, unreleased) |
 | Server-side data references | `state/pointers.py`, `state/store.py` | payloads never cross MCP/JSON |
 | Provenance / reproducibility | `provenance.py` | structured, immutable, JSON-safe |
 | Asynchronous execution | `execution/executor.py`, `tools/search.py` | pluggable; local asyncio implementation |

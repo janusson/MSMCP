@@ -19,12 +19,13 @@ overridden by the environment variables ``MSMCP_ALLOWED_ROOT``,
 
 from __future__ import annotations
 
+import io
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from msmcp.errors import MsmcpError
+from msmcp.errors import InaccessiblePathError, MsmcpError
 
 __all__ = [
     "DEFAULT_MAX_FILE_SIZE_BYTES",
@@ -35,8 +36,10 @@ __all__ = [
     "SecurityError",
     "SecurityPolicy",
     "SpectrumCountExceededError",
+    "bounded_stream",
     "resolve_path",
     "validate_file_size",
+    "validate_readable_file",
     "validate_spectrum_count",
 ]
 
@@ -211,3 +214,106 @@ def validate_spectrum_count(
             f"Requested spectrum count {count} exceeds the configured maximum "
             f"of {policy.max_spectra}."
         )
+
+
+def validate_readable_file(path: str | os.PathLike[str]) -> None:
+    """Raise :class:`InaccessiblePathError` unless *path* is a readable file.
+
+    The one access check every reader shares: the path must resolve to an
+    existing regular file (not a directory, socket, FIFO or device) that can be
+    opened for reading.  Each failure names the reason and raises a distinct
+    typed error, so a caller can route on the error instead of catching a bare
+    ``OSError``.  Keeping the check here rather than copy-pasted per reader is
+    what stops the four ingestion paths from drifting apart.
+    """
+    resolved = Path(path)
+    try:
+        resolved.stat()
+    except FileNotFoundError as exc:
+        raise InaccessiblePathError(f"File not found: '{resolved}'") from exc
+    except PermissionError as exc:
+        raise InaccessiblePathError(
+            f"Permission denied reading '{resolved}': {exc}"
+        ) from exc
+    except OSError as exc:
+        raise InaccessiblePathError(f"Cannot access '{resolved}': {exc}") from exc
+
+    if not resolved.is_file():
+        raise InaccessiblePathError(f"Not a regular file: '{resolved}'")
+
+    try:
+        with resolved.open("rb"):
+            pass
+    except OSError as exc:
+        raise InaccessiblePathError(f"File is not readable: '{resolved}'") from exc
+
+
+# ---------------------------------------------------------------------------
+# Bounded decompression
+# ---------------------------------------------------------------------------
+class _BoundedStream(io.BufferedIOBase):
+    """A read-only binary stream that refuses to yield more than *max_bytes*.
+
+    The readers wrap the *decompressed* side of a gzip input in this, because
+    :func:`validate_file_size` can only measure the bytes on disk: a gzip file
+    inside the allowed root and inside the size ceiling can still inflate to an
+    arbitrary size.  Counting the bytes as they are consumed closes that gap
+    without decompressing the whole file up front.
+    """
+
+    def __init__(self, stream: io.BufferedIOBase, max_bytes: int) -> None:
+        self._stream = stream
+        self._max_bytes = max_bytes
+        self._read_bytes = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+    def _account(self, count: int) -> None:
+        self._read_bytes += count
+        if self._read_bytes > self._max_bytes:
+            raise FileSizeExceededError(
+                f"Decompressed input exceeds the configured maximum of "
+                f"{self._max_bytes} bytes; refusing to read further.  A "
+                f"compressed file is bounded by its inflated size, not only by "
+                f"the bytes on disk."
+            )
+
+    def read(self, size: int | None = -1) -> bytes:
+        data = self._stream.read(-1 if size is None else size)
+        self._account(len(data))
+        return data
+
+    def read1(self, size: int | None = -1) -> bytes:
+        data = self._stream.read1(-1 if size is None else size)
+        self._account(len(data))
+        return data
+
+    def readinto(self, buffer: Any) -> int:
+        data = self._stream.read(len(buffer))
+        buffer[: len(data)] = data
+        self._account(len(data))
+        return len(data)
+
+    def close(self) -> None:
+        try:
+            self._stream.close()
+        finally:
+            super().close()
+
+
+def bounded_stream(stream: io.BufferedIOBase, max_bytes: int) -> io.BufferedIOBase:
+    """Wrap *stream* so reading beyond *max_bytes* raises FileSizeExceededError.
+
+    *max_bytes* at or below zero disables the bound and returns *stream*
+    unchanged.  Callers pass the size ceiling in force for the path they are
+    reading — for the process boundary that is
+    ``DEFAULT_POLICY.max_file_size_bytes``, read at call time so a substituted
+    policy takes effect.
+    """
+    if max_bytes <= 0:
+        return stream
+    return _BoundedStream(stream, max_bytes)

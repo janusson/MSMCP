@@ -20,9 +20,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **A maintained roadmap** (`docs/roadmap.md`) — where the repository is, the v1.1 acceptance
   criteria, and what is explicitly not being done. It replaces issue #11, which held the same
   content somewhere with no history, no diff and no review. The board's `Plan` field stays the live
-  queue; the document is the narrative and the criteria. The v1.1 criteria are deliberately **not**
-  yet promoted into `ARCHITECTURE.md`, so that document still describes v1.0 only, and the version
-  stays `1.0.0` until a release includes the library reader.
+  queue; the document is the narrative and points at the criteria themselves, which live once, in
+  `ARCHITECTURE.md`. The version stays `1.0.0` until a release includes the library reader.
 
 - **Instrument-class defaults** — `msmcp.instruments` is the single home for the
   experimental thresholds (precursor tolerance, MS2 and diagnostic-ion windows,
@@ -53,6 +52,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   costs in context now fails a check instead of going unnoticed.
 
 ### Fixed
+
+- **The byte budget now bounds what a compressed input inflates to, not only
+  what it occupies on disk.** `MSMCP_MAX_FILE_SIZE_BYTES` was checked with a
+  `stat` against the bytes on disk, but every reader inflates `.gz` inputs
+  transparently — and a plain `.mzML` carries zlib-compressed binary arrays that
+  inflate inside the parser — so a small file inside the allowed root could still
+  make the server materialise an arbitrarily large blob, breaking the module's
+  stated guarantee that a path inside the root cannot cause an unbounded read.
+  The decompressed streams are now bounded so the ceiling applies to the bytes
+  actually produced (`security.bounded_stream` for `.mzML.gz`, `.mgf.gz` and
+  `.msp.gz`, and a bounded zlib inflate for mzML binary arrays), and a
+  decompression bomb raises `FileSizeExceededError` instead of being read.
+  Refusing the bomb and still reading a legitimate compressed input are both
+  tested.
 
 - **The server no longer tells the model that `search_library` cannot read a
   library from disk.** The `initialize` instructions still carried the
