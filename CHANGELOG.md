@@ -65,7 +65,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `.msp.gz`, and a bounded zlib inflate for mzML binary arrays), and a
   decompression bomb raises `FileSizeExceededError` instead of being read.
   Refusing the bomb and still reading a legitimate compressed input are both
-  tested.
+  tested.  The ceiling a reader applies is the one the *path was admitted
+  under* — passed down from the resolving policy (or `ingest.Source`) rather
+  than read from the process default — so a caller that resolves with a stricter
+  policy is not then read under a looser one.
 
 - **The server no longer tells the model that `search_library` cannot read a
   library from disk.** The `initialize` instructions still carried the
@@ -118,6 +121,26 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   against the sampled p-values in `tests/test_null_model.py` (disagreement
   bounded, not asserted). The exhaustive scan remains O(m); the fitted tail is
   an approximation to the decoy distribution, not a claim about a compound.
+  **The floor is not gone, it has moved.** The smallest attainable q is
+  `p(cosine 1.0) × m`, and the fitted `p` is a property of the decoy sample, not
+  of the library, so the product *grows* with library size. Over 24 synthetic
+  libraries of 500–5,000 spectra queried with a spectrum drawn from the library
+  itself, the reported smallest attainable q ran 0.003–0.059 and the three
+  libraries of 4,741–4,933 spectra reported **no hit at all**; the replaced
+  sampled algorithm recovered each of those matches at q = 0.0250. The report
+  prints the floor, so no result over-states itself meanwhile, but `#12` is
+  **not** release-clearing and its criterion stays open in `ARCHITECTURE.md`.
+
+- **`generate_qc_summary` is bounded per request, and says so.** The tool read
+  every spectrum in the file with no ceiling, so a pathological acquisition
+  could run the per-spectrum cost unbounded. It now analyses at most
+  `MSMCP_MAX_SPECTRA` spectra, stops there, and states in the report that the
+  run was capped and how to raise the ceiling. The default for that knob rises
+  from 1000 to 50000 for the same reason: a routine LC-MS/MS or imaging run is
+  several thousand to tens of thousands of spectra, and the point of the cap is
+  to bound a pathological run, not to truncate an ordinary one. Nothing else in
+  the server refuses on this knob — `load_mzml_summary` caps its own request
+  between 1 and 50 — so the default is only reachable through QC.
 
 - **`ping` is registered like every other tool, so the tool-coverage guards can
   see it.** It was defined in `msmcp.server` and registered at module scope with
