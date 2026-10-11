@@ -104,6 +104,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **The search null is fitted, not sampled (roadmap `#12`).** `search_library`
+  drew 40 decoy scores per library spectrum, so the statistical cost was linear
+  in the library and the empirical p-value floor `1/(n_null + 1)` capped the
+  smallest expressible q at ≈0.025 — a large library could not report a strong
+  match however good it was. A **fixed** decoy sample is now drawn
+  (`NULL_SAMPLE_SIZE`, independent of the library) and the upper tail is fitted
+  with a generalised Pareto distribution by the method of moments
+  (`msmcp.models.null_model`); significance above the threshold is read from the
+  fitted survival function, so a q-value below the sampled floor is expressible
+  and the *null* cost is constant. The report names the model, its threshold,
+  shape and scale, and the smallest attainable q, and the fit is validated
+  against the sampled p-values in `tests/test_null_model.py` (disagreement
+  bounded, not asserted). The exhaustive scan remains O(m); the fitted tail is
+  an approximation to the decoy distribution, not a claim about a compound.
+
 - **`ping` is registered like every other tool, so the tool-coverage guards can
   see it.** It was defined in `msmcp.server` and registered at module scope with
   a bare `@mcp.tool()`, the only tool outside the `register_tools(mcp)`
