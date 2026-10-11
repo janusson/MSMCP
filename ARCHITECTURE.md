@@ -302,13 +302,13 @@ dispatches Tasks, the mapping is mechanical rather than a redesign.
 
 ## Security and limits
 
-Every limit is enforced at one place and refuses rather than degrades.
+Every limit is enforced at one place, and fails loudly rather than degrading silently. The one limit that truncates instead of refusing is the per-request spectrum count: `generate_qc_summary` analyses up to `MSMCP_MAX_SPECTRA` spectra and states the cap in its report.
 
 | Boundary | Enforced in | Knob |
 |---|---|---|
 | Filesystem root (symlinks resolved) | `security.resolve_path` | `MSMCP_ALLOWED_ROOT` |
 | Per-file size | `security.validate_file_size` | `MSMCP_MAX_FILE_SIZE_BYTES` |
-| Spectra per request | `security.validate_spectrum_count` | `MSMCP_MAX_SPECTRA` |
+| Spectra per request | `security.validate_spectrum_count` (refuse) / `tools.qc.generate_qc_summary` (cap + disclose) | `MSMCP_MAX_SPECTRA` |
 | Live references | `state.pointers.PointerStore` | `MSMCP_MAX_REFERENCES` |
 | Reference bytes | `state.pointers.PointerStore` | `MSMCP_MAX_TOTAL_BYTES` |
 | Reference lifetime | `state.pointers.PointerStore` | `MSMCP_REFERENCE_TTL_SECONDS` |
@@ -386,14 +386,28 @@ scope section above.
 
 ### The search null is fitted, not sampled (#12)
 
-- [ ] The upper tail is fitted to the decoy score distribution and evaluated
+- [x] The upper tail is fitted to the decoy score distribution and evaluated
       analytically, so a q-value below the sampled floor is expressible and the
       per-query cost is no longer linear in library size.
-- [ ] A search report names the null model it used and prints the smallest
+- [x] A search report names the null model it used and prints the smallest
       attainable q, so a sampling floor can never be read as a result.
-- [ ] The fitted null is validated against the sampled one on a library where
+- [x] The fitted null is validated against the sampled one on a library where
       both can be computed, with the disagreement quantified rather than
       asserted.
+
+*As implemented.* `msmcp.models.null_model` fits a generalised Pareto
+distribution, by the method of moments, to the decoy exceedances above a high
+threshold (peaks-over-threshold). `search_library` draws a **fixed** decoy sample
+(`NULL_SAMPLE_SIZE`, independent of the library) and reads significance above
+the threshold from the fitted survival function, so a p-value below the sampled
+floor is expressible and the **null** cost is constant. The exhaustive scan over
+every spectrum remains O(m) — inherent to searching a library, and now the only
+term still linear in it. The report names the model, its threshold, shape and
+scale, and the smallest attainable q; `tests/test_null_model.py` compares the
+fitted p-values with the sampled ones and asserts the disagreement against a
+bound (max ≈0.05 absolute, mean ≈0.003, on a 500-spectrum library) rather than
+claiming it. The method of moments is a deliberate, scipy-free choice; that test
+is what would catch a fit that stopped tracking its decoys.
 
 ### Library format coverage (#2)
 

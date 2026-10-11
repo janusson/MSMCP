@@ -58,6 +58,7 @@ from msmcp.instruments import (
 from msmcp.library import LibraryInfo, LibraryProvider
 from msmcp.models import get_embedder
 from msmcp.models.backends import LSM_MS2_CKPT_ENV
+from msmcp.models.null_model import TailFit, fit_upper_tail
 from msmcp.models.scoring import ClassicalScorer, SpectrumScorer, get_scorer
 from msmcp.mzml import Spectrum
 from msmcp.provenance import ModelInfo, Provenance, SourceRef, provenance_for
@@ -135,20 +136,21 @@ class PollInput(BaseModel):
 
 
 # ======================================================================
-# Deterministic synthetic spectral library (documented as synthetic)
+# Null model — how significance is calibrated
 # ======================================================================
-# Number of decoy scores drawn per library spectrum for the null model.
+# A FIXED number of decoy scores is drawn per query, independent of the library
+# size, and the upper tail of that sample is fitted with a generalised Pareto
+# distribution (see :mod:`msmcp.models.null_model`).
 #
-# The empirical p-value cannot resolve anything below 1/(n_null + 1), and
-# Benjamini-Hochberg charges the top-ranked hit a factor of m (the number of
-# library spectra tested), so with one decoy per spectrum the smallest
-# attainable q-value is m/(m + 1) — a library search could then never report a
-# hit, however good the match.  40 decoys per spectrum put the smallest
-# attainable q at ≈ 0.025, i.e. clear headroom under the 0.05 threshold rather
-# than sitting exactly on it.  Each decoy is one extra scorer call against peaks
-# already in memory, so the cost is linear in the library and paid once per
-# search; raise this if you need to report q-values well below 0.05.
-NULL_DECOY_MULTIPLIER: Final[int] = 40
+# This is roadmap #12.  The previous design drew 40 decoys per library spectrum,
+# so the statistical cost grew linearly with the library (2.9 s at 2,200
+# spectra, ~130 s at 10⁵ on the audit's measurement) and the empirical floor
+# 1/(n_null + 1) capped the smallest expressible q at ≈0.025.  A fitted tail has
+# no such floor, and the cost is constant because the sample size is.  Each
+# decoy is one scorer call against peaks already in memory; raising this sharpens
+# the tail estimate at that same linear cost, but it no longer tracks the
+# library.
+NULL_SAMPLE_SIZE: Final[int] = 20_000
 
 _NULL_BATCH: Final[int] = 5_000
 """Decoy scores computed per :meth:`SpectrumScorer.score_many` call."""
@@ -752,23 +754,21 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 )
             logger.debug("Chunk %d: processed %d spectra", chunk_id, len(chunk))
 
-        n_null = n_spectra * NULL_DECOY_MULTIPLIER
         null_scores: list[float] = []
-        unpermutable = 0
-        # Draw from the spectra already scored above — no extra SQL, and the
-        # same library the target scores came from.
+        # Draw a FIXED number of decoys from the spectra already scored above —
+        # no extra SQL, and the same library the target scores came from.  The
+        # sample size is independent of the library size, so the null cost is
+        # constant rather than linear in the library (#12).
         pool = [meta["id"] for meta in target_meta if peaks_cache.get(meta["id"])]
         if pool:
             logger.info(
-                "Null model: %d decoy scores (%dx the library) from %d permutable "
-                "spectra",
-                n_null,
-                NULL_DECOY_MULTIPLIER,
+                "Null model: drawing %d decoy scores from %d permutable spectra",
+                NULL_SAMPLE_SIZE,
                 len(pool),
             )
             # Scored in batches: score_many is the interface's amortised path and
             # keeps the query side prepared across a whole batch of decoys.
-            remaining = n_null
+            remaining = NULL_SAMPLE_SIZE
             while remaining > 0:
                 batch = min(remaining, _NULL_BATCH)
                 decoys = [
@@ -792,17 +792,28 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
 
         n_null_actual = len(null_scores)
         report_threshold = profile.fdr_threshold
+        null_fit: TailFit | None = (
+            fit_upper_tail(null_scores) if n_null_actual >= 2 else None
+        )
 
         if use_fdr:
-            p_values = _estimate_empirical_p(target_scores, null_scores)
+            if null_fit is not None:
+                p_values = null_fit.p_values(target_scores)
+                q_floor = null_fit.smallest_attainable_q(n_spectra)
+                null_line = (
+                    f"Null model: {null_fit.describe()}.  Significance is read "
+                    f"from the fitted upper tail (no sampling floor); smallest "
+                    f"attainable q-value **{q_floor:.2e}**."
+                )
+            else:
+                # No permutable spectra, so no null could be calibrated: nothing
+                # can pass, and the report says why rather than inventing zeros.
+                p_values = [1.0] * len(target_scores)
+                null_line = (
+                    "Null model: **none** — no permutable decoy spectra, so "
+                    "significance cannot be calibrated and no hit can pass."
+                )
             q_values = _benjamini_hochberg(p_values)
-            # The smallest q this design can express: p is floored at
-            # 1/(n_null + 1) and the strongest hit is charged a factor of m.
-            q_floor = n_spectra / (n_null_actual + 1) if n_null_actual else 1.0
-            null_line = (
-                f"Null model: {n_null_actual:,} decoy scores from permuted-intensity "
-                f"library spectra; smallest attainable q-value **{q_floor:.2e}**."
-            )
             hits = [
                 {**meta, "q_value": qv}
                 for meta, qv in zip(target_meta, q_values, strict=True)
@@ -904,7 +915,14 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 lines.append(f"{total_passing} hit(s) passed the threshold.")
 
         provenance = _search_provenance(
-            request, n_spectra, len(exp_peaks), library_info, profile
+            request,
+            n_spectra,
+            len(exp_peaks),
+            library_info,
+            profile,
+            null_fit,
+            n_null_actual,
+            use_fdr,
         )
         lines.append("")
         lines.append("---")
@@ -1016,6 +1034,9 @@ def _search_provenance(
     n_query_peaks: int,
     library_info: LibraryInfo | None,
     profile: InstrumentProfile,
+    null_fit: TailFit | None,
+    n_null: int,
+    use_fdr: bool,
 ) -> Provenance:
     """Build the provenance record for one search.
 
@@ -1046,7 +1067,21 @@ def _search_provenance(
         "fdr_threshold": profile.fdr_threshold,
         "small_library_threshold": profile.small_library_threshold,
         "instrument_defaults_provenance": profile.provenance,
+        "null_decoy_scores": n_null,
     }
+    if null_fit is not None:
+        parameters["null_model"] = null_fit.model
+        parameters["null_threshold"] = null_fit.threshold
+        parameters["null_shape_xi"] = null_fit.xi
+        parameters["null_scale_sigma"] = null_fit.sigma
+        parameters["null_smallest_attainable_q"] = null_fit.smallest_attainable_q(
+            n_spectra
+        )
+    elif use_fdr:
+        # FDR mode with no permutable decoys: the null could not be calibrated.
+        parameters["null_model"] = "none (no permutable decoys; uncalibrated)"
+    else:
+        parameters["null_model"] = "empirical decoy sample (p-value mode)"
     if request.query_spectrum_index is not None:
         parameters["query_spectrum_index"] = request.query_spectrum_index
     if library_info is None:

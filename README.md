@@ -273,7 +273,7 @@ Thirteen tools are exposed to the model: compact Markdown (or a single sentence)
 | `validate_precursor` | `tools/similarity.py` | Mass-error gate at the instrument class's precursor tolerance (5.0 ppm for the default `generic` class) |
 | `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference). The matching window comes from `ms2_tolerance`, or the instrument class when it is unset |
 | `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file, using the instrument class's diagnostic-ion window and SNR bands |
-| `search_library` | `tools/search.py` | Asynchronous library search (job executor; classical or real-embedding scoring). `database_file` is read from disk for MSP/NIST-style text libraries (routed through the security boundary); any other path falls back to a labelled synthetic library. The **query** is always real data. Thresholds come from `instrument_class` |
+| `search_library` | `tools/search.py` | Asynchronous library search (job executor; classical or real-embedding scoring). `database_file` is read from disk for MSP/NIST-style text libraries (routed through the security boundary); any other path falls back to a labelled synthetic library. The **query** is always real data. Thresholds come from `instrument_class`; significance is read from a **fitted decoy upper tail**, so a q-value below the sampled floor is expressible and every report names the null model and its smallest attainable q |
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID. The report is delivered once; later polls return a short digest, and `full_report=True` re-requests it |
 | `cancel_search` | `tools/search.py` | Cancel a pending or running search job |
 
@@ -565,7 +565,7 @@ MSMCP is a **local, single-user server**: the MCP host spawns it as a child proc
 |---|---|---|
 | `MSMCP_ALLOWED_ROOT` | process working directory | Filesystem root every file-reading tool is confined to |
 | `MSMCP_MAX_FILE_SIZE_BYTES` | 500 MiB | Per-file size ceiling |
-| `MSMCP_MAX_SPECTRA` | 1000 | Spectra a single request may ask to process |
+| `MSMCP_MAX_SPECTRA` | 50000 | Spectra a single request may process (`generate_qc_summary` caps here and states the cap in its report) |
 | `MSMCP_MAX_REFERENCES` | 128 | Live server-side data references |
 | `MSMCP_MAX_TOTAL_BYTES` | 512 MiB | Summed payload size held by the reference store |
 | `MSMCP_REFERENCE_TTL_SECONDS` | 3600 | Reference lifetime (`0` disables expiry) |
