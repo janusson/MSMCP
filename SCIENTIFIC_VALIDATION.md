@@ -214,6 +214,13 @@ experimental isotope-ratio data.
 and the 2e-3 abundance tolerance are sized to *published-table spread*; they
 absorb a differently-rounded constant, not a wrong one.
 
+**Outstanding evidence limitation.** The claim that the halogen residual is
+*entirely* the ³⁷Cl/³⁵Cl inter-edition spread assumes both transcriptions
+(0.2422 and 0.2424) are faithful to their CIAAW edition. The arithmetic
+consequence was verified independently; **primary-source verification of both
+digits against CIAAW remains outstanding** and would require the published
+tables (not available offline).
+
 ### 4.2 Regression protection
 
 Two mistakes have actually occurred and are pinned by explicit tests

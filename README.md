@@ -520,7 +520,7 @@ MSMCP is a **local, single-user server**: the MCP host spawns it as a child proc
 |---|---|---|
 | `MSMCP_ALLOWED_ROOT` | process working directory | Filesystem root every file-reading tool is confined to |
 | `MSMCP_MAX_FILE_SIZE_BYTES` | 500 MiB | Per-file size ceiling |
-| `MSMCP_MAX_SPECTRA` | 50000 | Spectra a single request may process (`generate_qc_summary` caps here and states the cap in its report) |
+| `MSMCP_MAX_SPECTRA` | 1000 | Spectra a single request may process (`generate_qc_summary` caps here and states the cap in its report) |
 | `MSMCP_MAX_REFERENCES` | 128 | Live server-side data references |
 | `MSMCP_MAX_TOTAL_BYTES` | 512 MiB | Summed payload size held by the reference store |
 | `MSMCP_REFERENCE_TTL_SECONDS` | 3600 | Reference lifetime (`0` disables expiry) |
