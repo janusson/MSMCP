@@ -53,10 +53,11 @@ checkout with its own environment.
   It must print the worktree's own `src/msmcp/__init__.py`.
 
 - **This is enforced, not just advised.** `tests/conftest.py` fails the whole
-  run at import time if `msmcp`, `sys.executable`, or `pytest` resolve outside
-  this checkout's `.venv`. A test run that exercises one revision while
-  importing another is a reproducibility hazard, so it is a hard error with an
-  actionable message rather than a silent pass. The three must agree:
+  run at import time if `msmcp`, `pytest`, or the running interpreter
+  (`sys.prefix`) resolve outside this checkout's `.venv`. A test run that
+  exercises one revision while importing another is a reproducibility hazard, so
+  it is a hard error with an actionable message rather than a silent pass. The
+  three must agree:
 
   ```
   uv run python -c "import msmcp, pytest, sys; print(msmcp.__file__); print(pytest.__file__); print(sys.prefix)"
