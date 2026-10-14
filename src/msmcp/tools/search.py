@@ -63,6 +63,7 @@ from msmcp.models.scoring import ClassicalScorer, SpectrumScorer, get_scorer
 from msmcp.mzml import Spectrum
 from msmcp.provenance import ModelInfo, Provenance, SourceRef, provenance_for
 from msmcp.state import store as reference_store
+from msmcp.state.pointers import ReferenceKindError
 
 logger = logging.getLogger("msmcp.tools.search")
 
@@ -505,6 +506,19 @@ def _peaks_from_reference(reference: str) -> list[tuple[float, float]]:
     return [(float(mz), float(intensity)) for mz, intensity in peaks]
 
 
+def _reference_polarity(reference: str) -> str | None:
+    """Ion mode of a stored spectrum reference, or ``None`` when it has none.
+
+    A peak-list reference carries no ion mode, and a spectrum whose file did
+    not state one reports ``None``; either way no polarity is invented.
+    """
+    try:
+        spectrum = reference_store.resolve_spectrum(reference)
+    except ReferenceKindError:
+        return None
+    return getattr(spectrum, "polarity", None)
+
+
 def _spectrum_label(spectrum: Spectrum, spectrum_index: int) -> str:
     """Name one spectrum the way the dispatch reply reports it."""
     if spectrum.ms_level == 1:
@@ -527,13 +541,14 @@ def _spectrum_label(spectrum: Spectrum, spectrum_index: int) -> str:
 
 def _peaks_from_file(
     file_path: str, spectrum_index: int
-) -> tuple[list[tuple[float, float]], str]:
+) -> tuple[list[tuple[float, float]], str, str | None]:
     """Read one spectrum of *file_path* as a real experimental peak list.
 
-    Returns the peaks and a label naming the spectrum they came from.  The file
-    is opened through the ingestion layer, so the query of a search is always
-    genuine data and a missing or malformed file fails loudly instead of quietly
-    producing a synthetic stand-in.
+    Returns the peaks, a label naming the spectrum they came from, and the ion
+    mode when the file states one (``None`` otherwise).  The file is opened
+    through the ingestion layer, so the query of a search is always genuine data
+    and a missing or malformed file fails loudly instead of quietly producing a
+    synthetic stand-in.
 
     The spectrum is selected by index **and reported**, because the first
     spectrum of a real LC-MS/MS file is normally an MS1 survey scan: a search
@@ -557,7 +572,7 @@ def _peaks_from_file(
                 f"real acquisitions; call `load_mzml_summary` to find a "
                 f"populated one and pass its index."
             )
-        return peaks, _spectrum_label(candidate, spectrum_index)
+        return peaks, _spectrum_label(candidate, spectrum_index), candidate.polarity
 
     raise SpectrumIndexError(
         f"'{file_path}' contains no spectrum at index {spectrum_index}.  The "
@@ -586,6 +601,7 @@ class SearchRequest:
     spectrum_reference: str | None = None
     instrument_class: str | None = None
     query_spectrum_index: int | None = None
+    query_polarity: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -655,6 +671,7 @@ def _library_scan_dict(spectrum: library.LibrarySpectrum) -> dict[str, Any]:
         "formula": spectrum.formula,
         "precursor_mz": spectrum.precursor_mz,
         "peaks": list(spectrum.peaks),
+        "polarity": spectrum.polarity,
     }
 
 
@@ -750,6 +767,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                         "formula": spec["formula"],
                         "precursor_mz": spec["precursor_mz"],
                         "score": score,
+                        "polarity": spec.get("polarity"),
                     }
                 )
             logger.debug("Chunk %d: processed %d spectra", chunk_id, len(chunk))
@@ -841,15 +859,18 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
         lines = _report_banner(request, database_file, n_spectra, library_info)
 
         if request.spectrum_reference:
-            lines.append(
+            query_line = (
                 f"Query spectrum: reference `{request.spectrum_reference}` "
                 f"({len(exp_peaks)} real peaks, held server-side)"
             )
         else:
-            lines.append(
+            query_line = (
                 f"Query spectrum: `{request.experimental_file}` "
                 f"({len(exp_peaks)} real peaks, read from disk)"
             )
+        if request.query_polarity:
+            query_line += f", ion mode: {request.query_polarity}"
+        lines.append(query_line)
         lines.append(
             f"Scoring method: {_scoring_label(scoring_method, ms2_tolerance_da)}"
         )
@@ -878,31 +899,33 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             lines.append("")
             if use_fdr:
                 lines.append(
-                    "| Rank | Compound         | Score  | FDR (q-value) | Precursor m/z | Formula    |"
+                    "| Rank | Compound         | Score  | FDR (q-value) | Precursor m/z | Formula    | Polarity   |"
                 )
                 lines.append(
-                    "|------|-----------------|--------|---------------|---------------|------------|"
+                    "|------|-----------------|--------|---------------|---------------|------------|------------|"
                 )
                 for i, h in enumerate(hits[:top_n], start=1):
                     lines.append(
                         f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | "
                         f"{h['q_value']:.4f}       | "
                         f"{_cell_precursor(h['precursor_mz']):>13} | "
-                        f"{_cell_formula(h['formula']):<10} |"
+                        f"{_cell_formula(h['formula']):<10} | "
+                        f"{_cell_polarity(h.get('polarity'), request.query_polarity):<10} |"
                     )
             else:
                 lines.append(
-                    "| Rank | Compound         | Score  | p-value   | Precursor m/z | Formula    |"
+                    "| Rank | Compound         | Score  | p-value   | Precursor m/z | Formula    | Polarity   |"
                 )
                 lines.append(
-                    "|------|-----------------|--------|-----------|---------------|------------|"
+                    "|------|-----------------|--------|-----------|---------------|------------|------------|"
                 )
                 for i, h in enumerate(hits[:top_n], start=1):
                     lines.append(
                         f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | "
                         f"{h['p_value']:.4f}   | "
                         f"{_cell_precursor(h['precursor_mz']):>13} | "
-                        f"{_cell_formula(h['formula']):<10} |"
+                        f"{_cell_formula(h['formula']):<10} | "
+                        f"{_cell_polarity(h.get('polarity'), request.query_polarity):<10} |"
                     )
 
             lines.append("")
@@ -913,6 +936,21 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 )
             else:
                 lines.append(f"{total_passing} hit(s) passed the threshold.")
+            mismatch = [
+                h
+                for h in hits[:top_n]
+                if request.query_polarity
+                and h.get("polarity")
+                and h["polarity"] != request.query_polarity
+            ]
+            if mismatch:
+                lines.append("")
+                lines.append(
+                    f"⚠ {len(mismatch)} of the hits shown declare the opposite "
+                    f"ion mode to the query (query: {request.query_polarity}).  "
+                    f"Polarity is reported, not filtered — an opposite-polarity "
+                    f"match is unlikely to be the same compound."
+                )
 
         provenance = _search_provenance(
             request,
@@ -1084,6 +1122,8 @@ def _search_provenance(
         parameters["null_model"] = "empirical decoy sample (p-value mode)"
     if request.query_spectrum_index is not None:
         parameters["query_spectrum_index"] = request.query_spectrum_index
+    if request.query_polarity is not None:
+        parameters["query_polarity"] = request.query_polarity
     if library_info is None:
         parameters["library_synthetic"] = True
         parameters["database_file_not_opened"] = request.database_file
@@ -1152,6 +1192,21 @@ def _claim_report(job_id: str) -> bool:
 def _cell_formula(value: Any) -> str:
     """Render a formula cell, using an em dash when the library had none."""
     return str(value) if value else "—"
+
+
+def _cell_polarity(value: Any, query_polarity: str | None) -> str:
+    """Render a hit's ion mode, flagging a mismatch with the query's.
+
+    A hit is flagged with a warning marker when it declares an ion mode opposite
+    to the query's; polarity is reported, never used to filter, so a caller
+    keeps every hit and decides for itself.
+    """
+    if not value:
+        return "—"
+    polarity = str(value)
+    if query_polarity and polarity != query_polarity:
+        return f"{polarity} ⚠"
+    return polarity
 
 
 def _cell_precursor(value: Any) -> str:
@@ -1369,8 +1424,10 @@ def register_tools(mcp: Any) -> None:
         exp_peaks: tuple[tuple[float, float], ...] = ()
         query_label = ""
         query_spectrum_index: int | None = None
+        query_polarity: str | None = None
         if validated.spectrum_reference is not None:
             exp_peaks = tuple(_peaks_from_reference(validated.spectrum_reference))
+            query_polarity = _reference_polarity(validated.spectrum_reference)
             query_label = (
                 f"`{validated.spectrum_reference}` ({len(exp_peaks)} real peaks, "
                 f"read from the server-side store)"
@@ -1384,7 +1441,7 @@ def register_tools(mcp: Any) -> None:
             query_spectrum_index = (
                 0 if validated.spectrum_index is None else validated.spectrum_index
             )
-            placed_peaks, description = _peaks_from_file(
+            placed_peaks, description, query_polarity = _peaks_from_file(
                 validated.experimental_file, query_spectrum_index
             )
             exp_peaks = tuple(placed_peaks)
@@ -1410,6 +1467,7 @@ def register_tools(mcp: Any) -> None:
             spectrum_reference=validated.spectrum_reference,
             instrument_class=validated.instrument_class,
             query_spectrum_index=query_spectrum_index,
+            query_polarity=query_polarity,
         )
 
         handle = _EXECUTOR.submit(
@@ -1423,6 +1481,7 @@ def register_tools(mcp: Any) -> None:
                 "experimental_file": validated.experimental_file,
                 "instrument_class": validated.instrument_class,
                 "spectrum_index": validated.spectrum_index,
+                "query_polarity": query_polarity,
             },
         )
 

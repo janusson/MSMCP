@@ -118,6 +118,16 @@ class TestMzMLParser:
         with pytest.raises(MalformedFileError):
             list(iter_spectra(truncated_mzml))
 
+    def test_polarity_is_parsed_when_the_file_states_it(
+        self, mzml_with_polarity: Path
+    ) -> None:
+        spectra = list(iter_spectra(mzml_with_polarity))
+        assert [s.polarity for s in spectra] == ["positive", "negative"]
+
+    def test_polarity_is_none_when_the_file_omits_it(self, valid_mzml: Path) -> None:
+        # No polarity cvParam → None, never a guessed default.
+        assert all(s.polarity is None for s in iter_spectra(valid_mzml))
+
 
 # ---------------------------------------------------------------------------
 # Error taxonomy at the access boundary

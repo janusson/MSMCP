@@ -84,6 +84,13 @@ _NAME_KEYS: Final[frozenset[str]] = frozenset({"NAME", "COMPOUND"})
 _FORMULA_KEYS: Final[frozenset[str]] = frozenset({"FORMULA", "MF", "MOLFORMULA"})
 _PRECURSOR_KEYS: Final[frozenset[str]] = frozenset({"PRECURSORMZ", "PMZ"})
 _NUM_PEAKS_KEYS: Final[frozenset[str]] = frozenset({"NUMPEAKS"})
+_ION_MODE_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "IONMODE",
+        "IONIZATIONMODE",
+        "POLARITY",
+    }
+)
 
 
 def _normalise_key(raw: str) -> str:
@@ -101,6 +108,23 @@ def _to_float_or_none(raw: str | None) -> float | None:
         return None
 
 
+def _polarity_from_ion_mode(raw: str | None) -> str | None:
+    """Map an MSP ``Ion_mode`` value to ``"positive"/"negative"``, else None.
+
+    Libraries spell the field ``Ion_mode: P``/``N`` (GNPS/NIST) or
+    ``Positive``/``Negative``; anything unrecognised is left ``None`` so the
+    search never filters or flags on a polarity the file did not state.
+    """
+    if raw is None:
+        return None
+    token = raw.strip().upper()
+    if token in ("P", "POS", "POSITIVE", "+"):
+        return "positive"
+    if token in ("N", "NEG", "NEGATIVE", "-"):
+        return "negative"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Value objects
 # ---------------------------------------------------------------------------
@@ -110,9 +134,11 @@ class LibrarySpectrum:
 
     ``peaks`` is a tuple of ``(m/z, intensity)`` float pairs — the exact value
     the scorer consumes — so a library spectrum never needs a second
-    representation.  Metadata that MSMCP does not model (ion mode, collision
-    energy, InChIKey, ...) is preserved verbatim in :attr:`metadata` rather than
-    dropped, so a later reader can use it without a re-parse.
+    representation.  ``polarity`` models the ``Ion_mode`` field the search
+    reports on (``"positive"``/``"negative"``, or ``None`` when the record does
+    not state one).  Metadata MSMCP still does not model (collision energy,
+    InChIKey, ...) is preserved verbatim in :attr:`metadata` rather than dropped,
+    so a later reader can use it without a re-parse.
     """
 
     index: int
@@ -120,6 +146,7 @@ class LibrarySpectrum:
     precursor_mz: float | None
     formula: str | None
     peaks: tuple[tuple[float, float], ...]
+    polarity: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -331,6 +358,7 @@ def _build_spectrum(
         precursor_mz=_to_float_or_none(_first(fields, _PRECURSOR_KEYS)),
         formula=_first(fields, _FORMULA_KEYS),
         peaks=tuple(peaks),
+        polarity=_polarity_from_ion_mode(_first(fields, _ION_MODE_KEYS)),
         metadata=MappingProxyType(dict(fields)),
     )
 
@@ -496,6 +524,7 @@ class MGFLibraryProvider(LibraryProvider):
                 precursor_mz=spectrum.precursor_mz,
                 formula=None,
                 peaks=tuple(peaks),
+                polarity=spectrum.polarity,
                 metadata=MappingProxyType(metadata),
             )
             chunk.append(lib_spectrum)

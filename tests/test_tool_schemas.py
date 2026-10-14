@@ -23,7 +23,12 @@ os.environ.setdefault("MSMCP_EMBEDDING_BACKEND", "mock")
 
 from msmcp.server import mcp
 from msmcp.tools.chem import AdductInput, IsotopeInput
-from msmcp.tools.io import LoadSpectrumInput, MzMLParseInput, ReferenceInput
+from msmcp.tools.io import (
+    ListSpectraInput,
+    LoadSpectrumInput,
+    MzMLParseInput,
+    ReferenceInput,
+)
 from msmcp.tools.qc import QCInput
 from msmcp.tools.search import PollInput, SearchInput, StatusInput
 from msmcp.tools.similarity import ComputeCosineInput, ValidatePrecursorInput
@@ -31,6 +36,7 @@ from msmcp.tools.similarity import ComputeCosineInput, ValidatePrecursorInput
 # Tool name -> the Pydantic model that validates its arguments.
 MODEL_FOR_TOOL: dict[str, type[Any]] = {
     "load_mzml_summary": MzMLParseInput,
+    "list_spectra": ListSpectraInput,
     "load_spectrum": LoadSpectrumInput,
     "summarise_reference": ReferenceInput,
     "release_reference": ReferenceInput,
@@ -123,6 +129,25 @@ async def test_no_tool_reaches_the_network() -> None:
 
 async def test_server_publishes_instructions() -> None:
     assert mcp.instructions, "hosts get no orientation before choosing a tool"
+
+
+async def test_instructions_match_the_library_search_contract() -> None:
+    """The server-wide orientation must not contradict the search tool.
+
+    A host reads ``instructions`` before any tool description, so a stale
+    sentence here shapes the model's plan more than a tool doc does.  This pins
+    the contract ``search_library`` already advertises — MSP/NIST text is read
+    for real, other paths are a labelled synthetic fallback — and fails if the
+    two drift apart again.  (An earlier build told the model the search was
+    *always* synthetic, which was false once the MSP reader landed.)
+    """
+    text = (mcp.instructions or "").lower()
+    assert "msp" in text
+    assert "for real" in text
+    assert "synthetic" in text
+    # The retired wording, kept as an explicit tripwire.
+    assert "still scans a synthetic in-memory library" not in text
+    assert "only the query spectrum can be real" not in text
 
 
 async def test_tool_descriptions_do_not_leak_internals() -> None:

@@ -15,6 +15,10 @@ Understood fields, all optional except the peak lines themselves:
 ``MSLEVEL``
     MS level.  Absent means unknown, which is reported as ``None`` rather than
     guessed.
+``IONMODE``
+    Ion polarity (``POSITIVE``/``NEGATIVE``, or ``P``/``N``), when present, is
+    reported as ``"positive"``/``"negative"``; an unstated or unrecognised
+    value is left ``None`` rather than assumed.
 ``TITLE`` / ``CHARGE`` / ``SCANS``
     Metadata that MSMCP does not currently model; accepted and ignored.
 """
@@ -105,6 +109,23 @@ def _to_int_or_none(raw: str | None) -> int | None:
         return None
 
 
+def _polarity_from_fields(fields: dict[str, str]) -> str | None:
+    """Map an explicit ``IONMODE`` value to ``"positive"/"negative"``, else None.
+
+    Only an explicitly stated ion mode is reported; a file that leaves it out
+    yields ``None`` so no tool has to assume a polarity.
+    """
+    raw = fields.get("IONMODE")
+    if raw is None:
+        return None
+    token = raw.strip().upper()
+    if token in ("POSITIVE", "POS", "P", "+"):
+        return "positive"
+    if token in ("NEGATIVE", "NEG", "N", "-"):
+        return "negative"
+    return None
+
+
 def _parse_peak_line(line: str, line_number: int) -> tuple[float, float]:
     """Parse one ``<m/z> <intensity>`` peak line."""
     parts = line.split()
@@ -148,6 +169,7 @@ def _build_spectrum(
         precursor_mz=_to_float_or_none(fields.get("PEPMASS")),
         mz=mz,
         intensity=intensity,
+        polarity=_polarity_from_fields(fields),
     )
 
 

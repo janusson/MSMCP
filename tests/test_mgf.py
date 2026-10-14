@@ -165,3 +165,19 @@ class TestPathBoundary:
         policy = SecurityPolicy(allowed_root=tmp_path, max_file_size_bytes=10)
         with pytest.raises(FileSizeExceededError):
             resolve_mgf_path(path, policy)
+
+
+class TestMgfPolarity:
+    def test_ionmode_maps_to_polarity(self, tmp_path: Path) -> None:
+        path = tmp_path / "ion.mgf"
+        path.write_text(
+            "BEGIN IONS\nPEPMASS=195.0877\nMSLEVEL=2\nIONMODE=POSITIVE\n"
+            "110.07 40.0\nEND IONS\n"
+            "BEGIN IONS\nPEPMASS=181.0707\nIONMODE=N\n100.0 5.0\nEND IONS\n",
+            encoding="utf-8",
+        )
+        spectra = list(iter_spectra(path))
+        assert [s.polarity for s in spectra] == ["positive", "negative"]
+
+    def test_unstated_ionmode_is_none(self, valid_mgf: Path) -> None:
+        assert all(s.polarity is None for s in iter_spectra(valid_mgf))
