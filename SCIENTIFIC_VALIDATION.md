@@ -41,9 +41,10 @@ implementation under review in PR #50.
 
 | Status | Meaning |
 |---|---|
-| **PASS** | The stated claim is supported by independent evidence within a justified tolerance. |
-| **FAIL** | Independent evidence contradicts the claim. |
+| **VALIDATED** | Every claim in the stated scope is supported by independent evidence within a justified tolerance, and the scope is the whole of the shipped behaviour for that operation. |
+| **PARTIAL** | Some paths/claims are validated; other paths of the same capability are not yet covered by independent evidence. |
 | **NOT VALIDATED** | The capability exists but no *independent* evidence yet supports the scientific claim (software tests may still exist). |
+| **FAIL** | Independent evidence contradicts the claim. |
 
 ---
 
@@ -51,14 +52,28 @@ implementation under review in PR #50.
 
 | # | Capability | Claim scope | Status | Evidence class |
 |---|---|---|---|---|
-| 1 | mzML ingestion | Peaks, metadata, polarity decode per the mzML 1.1.0 CV | **PASS** | Analytical reference (independent document) |
+| 1 | mzML ingestion | Peaks, metadata, polarity decode per the mzML 1.1.0 CV | **PARTIAL** | Analytical reference (independent document) |
 | 1b | MGF ingestion | Field parsing and ion-mode mapping | **NOT VALIDATED** | — (internal fixtures only) |
 | 1c | imzML ingestion | Delegated to MassFlow | **NOT VALIDATED** | — (same-ecosystem fixture) |
-| 2 | Exact mass & isotopes | Monoisotopic mass, M+1/M+2 envelope | **PASS** | Analytical reference (independent table + exact expansion) |
-| 2b | Adduct shifts | Exact Δ per ionisation pathway | **PASS** | Analytical reference (CODATA constants) |
+| 2 | Exact mass & isotopes | Monoisotopic mass, M+1/M+2 envelope | **VALIDATED** (algorithm); constants cited | Analytical reference (independent table + exact expansion) |
+| 2b | Adduct shifts | Exact Δ per ionisation pathway | **VALIDATED** | Analytical reference (CODATA constants) |
 | 3 | Similarity & library search | Ground-truth recovery of the correct library entry | **NOT VALIDATED** | Software tests only (synthetic) |
 | 4 | Statistical significance | Calibrated p/q-value under the decoy null | **NOT VALIDATED** *(known optimistic)* | Internal measurement; see §6 |
-| 5 | MCP protocol integration | JSON-RPC session, tool surface, provenance plumbing | **PASS** (transport) / **NOT VALIDATED** (provenance completeness) | Analytical reference (real stdio session) |
+| 5 | MCP protocol integration | JSON-RPC session, tool surface, provenance plumbing | **PARTIAL** | Analytical reference (real stdio session) |
+
+**Scope discipline.** A validation result is only as broad as the evidence behind
+it. Concretely, for this document:
+
+- The independent mzML document validates the **specific** encoding and metadata
+  paths it exercises (base64 float64/float32, optional zlib, the MS level / scan
+  time / selected-ion m/z / polarity accessions). It does **not** establish
+  compatibility with the full range of vendor-generated mzML — writer quirks,
+  Numpress, omitted-cvParam defaults and imzML remain outside it.
+- The end-to-end MCP session validates the **operations it calls and the
+  provenance they emit**, not provenance completeness across every operation.
+- Agreement between two implementations that use the **same constants** is
+  evidence of algorithmic correctness, not of the constants' scientific truth
+  (§4.1).
 
 Detail follows. §7 lists the three highest-value gaps to close next.
 
@@ -111,7 +126,8 @@ independent document is authored to that standard.
   dependency MassFlow uses to read it back* — that is same-ecosystem evidence,
   not independent validation.
 
-**Status: PASS** for the mzML claim; **NOT VALIDATED** for MGF and imzML.
+**Status: PARTIAL.** The specific mzML paths above are validated; the full
+vendor-generated mzML range, MGF, and imzML are **NOT VALIDATED**.
 
 ---
 
@@ -172,10 +188,53 @@ C/H/N/O molecules; halogen-bearing M+2 differs by ≤1.1e-3.
 * Bare Cl⁻ and Br⁻ have **zero** M+1 (no +1 isotope); a carbon-bearing chloride
   still shows a small M+1 from ¹³C/²H.
 
+### 4.1 Constants: source, precision, and the limit of the independence claim
+
+The reference generator uses a *separate transcription* of the same authoritative
+sources the library draws on. The independence is therefore in two things — the
+**transcription** (different digits/rounding) and the **algorithm** (exact
+polynomial expansion vs the library's own formulation) — but **not** in the
+constants themselves, which on both sides rest on AME2020 / CIAAW. This matters:
+the isotope validation establishes **algorithmic correctness and transcription
+robustness**, *not* that the constants are scientifically true. That last claim
+rests on citing the authorities below, and could only be strengthened by
+experimental isotope-ratio data.
+
+| Constant | Value used by the reference | Source | Precision |
+|---|---|---|---|
+| ¹²C, ¹³C masses | 12.0000000, 13.0033548378 | AME2020 | ≤1e-9 Da (library uses 13.003354835; ~3e-9 apart) |
+| ¹H, ²H | 1.00782503207, 2.0141017778 | AME2020 | ≤1e-9 Da |
+| ¹⁴N, ¹⁵N | 14.0030740048, 15.0001088982 | AME2020 | ≤1e-9 Da |
+| ¹⁶O, ¹⁷O, ¹⁸O | 15.9949146196, 16.99913150, 17.99916100 | AME2020 | ≤1e-8 Da |
+| ³⁵Cl, ³⁷Cl | 34.968852682, 36.965902602 | AME2020 | ≤1e-9 Da |
+| ¹³C/¹²C, ¹⁵N/¹⁴N, ¹⁸O/¹⁶O | 0.0107/0.9893, 0.00368/0.99632, 0.00205/0.99757 | CIAAW 2021 | 4–5 sig. figs. |
+| ³⁷Cl/³⁵Cl | 0.2424/0.7576 (library: 0.2422/0.7578) | CIAAW 2021 | the inter-edition spread *is* the tolerance |
+| proton / electron mass (adducts) | 1.007276466…, 0.000548579… | CODATA | ≤1e-10 Da |
+
+**The tolerances assume the source data are correct.** The 1e-4 Da mass tolerance
+and the 2e-3 abundance tolerance are sized to *published-table spread*; they
+absorb a differently-rounded constant, not a wrong one.
+
+### 4.2 Regression protection
+
+Two mistakes have actually occurred and are pinned by explicit tests
+(`TestIsotopeRegressionProtection`), so neither can return silently:
+
+- **Neutron-mass shift.** M+1 must equal ¹³C − ¹²C (1.0033548 Da) for a
+  carbon-only formula, and be >5 mDa from the neutron mass (1.0086649 Da).
+- **Pooled M+2 approximation.** M+2 must equal `C(n,2)·(p/(1−p))²`, not the
+  earlier `p1²/2` (for C8 the pooled value is ~14% higher, so a revert fails).
+
+A third test pins the **abundance and mass assumptions** themselves — the
+¹³C/¹²C, ¹⁵N/¹⁴N, ¹⁸O/¹⁶O, ²H/¹H, ³⁷Cl/³⁵Cl and ⁸¹Br/⁷⁹Br ratios and the
+¹³C−¹²C mass. An unintended edit (a typo, a swapped digit) fails loudly with a
+message naming the element; a deliberate update to a newer CIAAW edition must
+update the test in the same commit, which is the point.
+
 **Adduct shifts.** `_ADDUCT_DB` computes Δ from CODATA proton/electron masses.
 Independent recomputation (m/z for `[M+H]+` = M + m(¹H⁺); `[M+2H]2+` =
 (M + 2·m(¹H⁺))/2) reproduces every tabulated shift; the negative-mode adducts
-follow the electron-balance convention stated in the module. **PASS.**
+follow the electron-balance convention stated in the module. **VALIDATED.**
 
 **Known limitations / unvalidated assumptions.**
 * Only single and double neutron substitution is modelled at the nominal level;
@@ -185,7 +244,8 @@ follow the electron-balance convention stated in the module. **PASS.**
   envelope is not a substitute for a profile-level isotope model.
 * Elements outside the tabulated set are rejected rather than estimated.
 
-**Status: PASS** (analytical reference).
+**Status: VALIDATED** for the algorithm (analytical reference), with the
+constants themselves cited rather than independently re-measured — see §4.1.
 
 ---
 
@@ -335,8 +395,9 @@ launches a real server and runs `load_spectrum` → `summarise_reference` →
 * No validation that the same operation on the same file is byte-for-byte
   reproducible across runs (determinism), beyond the digest equality above.
 
-**Status: PASS** for the transport/provenance-plumbing claim; **NOT VALIDATED**
-for provenance completeness as a scientific record.
+**Status: PARTIAL.** The transport and the provenance plumbing are validated for
+the operations exercised; provenance completeness as a scientific record across
+every operation is **NOT VALIDATED**.
 
 ---
 
@@ -381,12 +442,24 @@ code regression does.
 
 ## 10. Appendix — reproduction
 
+Run from this worktree (a linked worktree has its own `.venv`; sync it first).
+
 ```sh
-# Regenerate the independent isotope reference table.
+# 0. Sync this worktree's environment and prove the imports resolve here.
+uv sync --extra dev
+uv run python -c "import msmcp, pytest, sys; print(msmcp.__file__); print(pytest.__file__); print(sys.prefix)"
+#    msmcp.__file__ and pytest.__file__ must be under this checkout's src/ and
+#    .venv; sys.prefix must be this checkout's .venv.  tests/conftest.py enforces
+#    this and aborts collection otherwise (see PR #52).
+
+# 1. Regenerate the independent isotope reference table (does not import msmcp).
 uv run python tests/reference/independent_isotope_reference.py
 
-# Run the validation slice (also part of `make test`).
+# 2. Run the validation slice alone.
 uv run pytest tests/test_scientific_validation.py -q
+
+# 3. The full gate.
+make lint && make test && make eval
 ```
 
 **Reference data provenance.**

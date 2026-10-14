@@ -158,6 +158,78 @@ class TestIsotopeReferenceValues:
         assert chloroform[2][1] == pytest.approx(0.959875, abs=_ABUNDANCE_ABS)
 
 
+class TestIsotopeRegressionProtection:
+    """Pin the two mistakes that have actually occurred, plus the assumptions.
+
+    A scientifically meaningful discrepancy must fail loudly.  These assertions
+    are deliberately explicit (and deliberately duplicated from the reference
+    checks): each names a specific failure mode and the value it must exclude.
+    """
+
+    def test_m1_shift_is_not_the_neutron_mass(self) -> None:
+        """The regression that motivated the correction must not return.
+
+        The neutron mass (1.0086649 Da) is not the mass a +1 isotope substitution
+        adds; the substitution shift is ¹³C - ¹²C = 1.0033548 Da.  The two differ
+        by 5.3 mDa, ~18 ppm at m/z 300.
+        """
+        from msmcp.tools.chem import NEUTRON_MASS
+
+        mono = _isotope_pattern(_parse_formula("C8"))
+        shift = mono[1][0] - mono[0][0]
+        assert shift == pytest.approx(1.0033548378, abs=1e-6)
+        # Explicitly exclude the wrong value by a wide margin.
+        assert abs(shift - NEUTRON_MASS) > 5.0e-3
+
+    def test_m2_is_the_multinomial_not_the_pooled_half_square(self) -> None:
+        """M+2 = C(n,2)*(p/(1-p))**2, not the earlier ``p1**2/2`` pool.
+
+        For 8 carbons the pooled value is ~14% higher than the exact multinomial
+        (a single ¹³C never gives M+2; only *pairs* do), so a silent revert to
+        the pooled approximation fails here.
+        """
+        p13 = 0.0107
+        ratio = p13 / (1.0 - p13)
+        observed = _isotope_pattern(_parse_formula("C8"))[2][1]
+
+        # Exact: two independent ¹³C substitutions, C(8,2) ways.
+        assert observed == pytest.approx(28 * ratio**2, rel=1e-12)
+
+        # The pooled approximation the implementation used to make is excluded.
+        pooled = (8 * ratio) ** 2 / 2.0
+        assert abs(observed - pooled) / pooled > 0.05
+
+    def test_isotope_abundance_assumptions_are_pinned(self) -> None:
+        """Changing an abundance must fail here, not silently change envelopes.
+
+        These ratios are the scientific assumptions the envelope rests on.  An
+        *unintended* edit (a typo, a swapped digit) fails with a message naming
+        the element; a deliberate update to a newer CIAAW edition must update
+        this test in the same commit, which is the point.
+        """
+        from msmcp.tools.chem import _ISOTOPES
+
+        def ratio(element: str, index: int) -> float:
+            return _ISOTOPES[element][index][1] / _ISOTOPES[element][0][1]
+
+        assert ratio("C", 1) == pytest.approx(0.0107 / 0.9893, rel=1e-6)
+        assert ratio("N", 1) == pytest.approx(0.00368 / 0.99632, rel=1e-6)
+        assert ratio("O", 1) == pytest.approx(0.00038 / 0.99757, rel=1e-6)
+        assert ratio("O", 2) == pytest.approx(0.00205 / 0.99757, rel=1e-6)
+        assert ratio("H", 1) == pytest.approx(0.000115 / 0.999885, rel=1e-6)
+        assert ratio("Cl", 1) == pytest.approx(0.2422 / 0.7578, rel=1e-6)
+        assert ratio("Br", 1) == pytest.approx(0.4931 / 0.5069, rel=1e-6)
+
+        # The ¹³C exact mass is a scientific constant too, not only the abundance.
+        c12, c13 = _ISOTOPES["C"][0][0], _ISOTOPES["C"][1][0]
+        assert c13 - c12 == pytest.approx(1.0033548, abs=1e-6)
+
+        # And the envelope that follows from them, end to end.
+        caffeine = _isotope_pattern(_parse_formula("C8H10N4O2"))
+        assert caffeine[1][1] == pytest.approx(0.103212, abs=1e-6)
+        assert caffeine[2][1] == pytest.approx(0.008941, abs=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # 2. mzML ingestion - a standards-conformant document built independently
 # ---------------------------------------------------------------------------
@@ -283,7 +355,14 @@ _CAFFEINE_INTENSITY = [40.0, 100.0, 60.0]
 
 
 class TestMzMLIndependentDocument:
-    """Ingestion of an independently written mzML document."""
+    """Ingestion of an independently written mzML document.
+
+    Scope: this validates the specific encoding and CV paths the document
+    exercises (base64 float64/float32, optional zlib, the accessions for MS
+    level, scan time, selected-ion m/z and polarity).  It does **not** establish
+    compatibility with the full range of vendor-generated mzML - writer-specific
+    quirks, Numpress, imzML, and omitted-cvParam defaults remain unvalidated.
+    """
 
     def test_peaks_and_metadata_round_trip_exactly(self, tmp_path: Path) -> None:
         writer = _MzMLWriter()
@@ -479,6 +558,10 @@ def test_full_mcp_workflow_over_stdio(tmp_path: Path) -> None:
     This is the end-to-end claim that the in-process suite cannot make: a real
     server process, a real JSON-RPC session, a real mzML file written by this
     module, and a server-side reference round-tripped through the wire.
+
+    Scope: it validates the operations it calls and the provenance they emit.
+    It does not establish provenance completeness across every operation, nor
+    that the same input is reproducible across machines.
     """
     writer = _MzMLWriter()
     writer.add_spectrum(
