@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import gzip
 import os
+import sys
 import zlib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -26,6 +27,57 @@ import pytest
 os.environ["MSMCP_EMBEDDING_BACKEND"] = "mock"
 
 from msmcp.tools import chem, io, qc, search, similarity
+
+
+def _enforce_environment_isolation() -> None:
+    """Fail fast when pytest is not running against *this* checkout's environment.
+
+    A linked worktree has its own ``.venv``.  If it is not synced, ``uv run
+    pytest`` can fall back to another checkout's interpreter and import that
+    checkout's ``msmcp`` - silently, because both are importable and the tests
+    are collected from the current directory.  A run that exercises one revision
+    while importing another is a reproducibility hazard for a scientific tool,
+    so this is a hard error rather than a warning.  See AGENTS.md, "Isolated
+    worktrees".
+    """
+    checkout = Path(__file__).resolve().parents[1]
+
+    import msmcp
+
+    msmcp_path = Path(msmcp.__file__).resolve()
+    if checkout not in msmcp_path.parents:
+        raise RuntimeError(
+            f"pytest imported msmcp from {msmcp_path}, which is outside this "
+            f"checkout ({checkout}).  The test environment is not isolated.  Run "
+            f"`uv sync --extra dev` in this worktree and `unset VIRTUAL_ENV`, then "
+            f"invoke pytest through this checkout's own `.venv`.  See AGENTS.md, "
+            f"'Isolated worktrees'."
+        )
+
+    # The interpreter and pytest must come from this checkout's venv too, so the
+    # three cannot resolve to different checkouts.  Guarded on the venv existing
+    # so a deliberate external/CI interpreter is not rejected outright.
+    # `sys.prefix` (not `sys.executable`) is the reliable signal: uv makes
+    # `.venv/bin/python` a symlink to its managed interpreter, so `sys.executable`
+    # can report the base path even when the venv is active.
+    venv = checkout / ".venv"
+    if venv.is_dir():
+        prefix = Path(sys.prefix).resolve()
+        if prefix != venv.resolve():
+            raise RuntimeError(
+                f"pytest is running in the environment at {prefix}, which is not "
+                f"this checkout's environment ({venv}).  Run `uv sync --extra dev` "
+                f"here and invoke pytest through this checkout's `.venv`."
+            )
+        pytest_path = Path(pytest.__file__).resolve()
+        if venv.resolve() not in pytest_path.parents:
+            raise RuntimeError(
+                f"pytest was imported from {pytest_path}, which is not this "
+                f"checkout's environment ({venv})."
+            )
+
+
+_enforce_environment_isolation()
 
 
 class FakeMCP[T]:

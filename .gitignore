@@ -231,3 +231,6 @@ repomix-output.xml
 # macOS
 .DS_Store
 drafts/
+
+# Local git worktrees (isolated branch/agent checkouts; local scratch, never committed)
+.worktrees/
