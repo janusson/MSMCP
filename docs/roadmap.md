@@ -66,6 +66,32 @@ and this repository has already been bitten by exactly that.
 
 ---
 
+## Scientific validation
+
+Where the repository makes *scientific* claims, it records the evidence for them
+separately from the software tests — a passing suite says the code matches its
+tests, not that the science is right.
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Exact mass / isotope envelope; mzML ingestion | **VALIDATED** (independent references) | `SCIENTIFIC_VALIDATION.md` §3, §4 |
+| Spectral similarity / library search | **PARTIAL** — independently compared, recovery measured, limits stated | `VALIDATION_SIMILARITY.md` |
+| Statistical significance / FDR (`#12`, `#51`) | **NOT VALIDATED** | `SCIENTIFIC_VALIDATION.md` §6 |
+
+`#54` (independent similarity / library-search validation) is **complete**:
+MSMCP's `ClassicalScorer` was compared against `matchms` `CosineGreedy` on a
+pinned MassBank release (release, DOI and SHA-256 fixed; the dataset stays
+outside the repository) and held-out library recovery was measured. It does
+**not** establish identification confidence, a calibrated FDR, or end-to-end
+analytical correctness, and the greedy-matching discrepancy is documented, not
+resolved. `#12`/`#51` (the search-null floor) stays a separate research problem
+and the null model is unchanged until held-out decoy data exists.
+
+The harness is opt-in (`make validate-similarity`); `matchms` is not a runtime
+dependency.
+
+---
+
 ## Waiting on someone else
 
 Not work — conditions to watch. These cannot be started, and every agent session that sees them in a

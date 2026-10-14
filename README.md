@@ -231,11 +231,21 @@ first (the report also states the significance and the null model it used):
 | Lint | `uv run ruff format --check .` · `uv run ruff check .` · `uv run mypy` · `uv run basedpyright` |
 | Test | `uv run pytest` |
 | Evaluate end to end | `uv run pytest tests/test_eval_notebook.py -m eval -s -q` |
+| Validate similarity (opt-in) | `make validate-similarity` (needs `MSMCP_VALIDATION_DATA`) |
 | Run the server | `uv run msmcp` |
 
 The `Makefile` wraps these into one pipeline: `make lint`, `make test`, `make eval`, and `make all` (sync → format → lint → unit tests → evaluation notebook → repomix pack). Every target depends on `install`, so `make all` works from a fresh clone without a separate sync step. `make test` deliberately omits the evaluation notebook — that is `make eval` — to keep the inner loop at a few seconds.
 
 Re-run `uv sync --extra dev` after changing `pyproject.toml`. The optional `repomix` pack (Node-based) is run as `repomix --style xml --output repomix-output.xml`.
+
+## Scientific validation
+
+MSMCP keeps its *scientific* claims, its software tests and its identification confidence as separate things, and documents the evidence for each:
+
+- [`SCIENTIFIC_VALIDATION.md`](SCIENTIFIC_VALIDATION.md) — per capability: the claim, the evidence, the tolerances and their justification, and an explicit **VALIDATED / PARTIAL / NOT VALIDATED** status. Isotopes and mzML ingestion are validated against independent references; **similarity is PARTIAL**; **statistical significance/FDR is NOT VALIDATED**.
+- [`VALIDATION_SIMILARITY.md`](VALIDATION_SIMILARITY.md) — one bounded experiment comparing MSMCP's scorer against `matchms` on a pinned MassBank release and measuring library recovery on held-out spectra, with its limitations stated plainly.
+
+`make validate-similarity` runs that experiment **opt-in**: it needs the external dataset (`MSMCP_VALIDATION_DATA`) and supplies `matchms` for the one command, so neither the runtime nor the fast test suite depends on it. With no dataset it skips cleanly and downloads nothing.
 
 ## Connecting an LLM client
 

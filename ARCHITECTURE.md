@@ -358,6 +358,31 @@ during the v1.0 work:
    its report once before digesting; a durable executor would keep this record
    beside the job instead.
 
+## Scientific validation
+
+Software tests establish that the code does what its tests say; they do not
+establish that the science is right. Those claims are tracked separately, with an
+explicit status per capability:
+
+- [`SCIENTIFIC_VALIDATION.md`](SCIENTIFIC_VALIDATION.md) — the claim, the
+evidence, the tolerances and their justification, and a status for each
+capability. Isotope/exact-mass and mzML ingestion are validated against
+independent references (**VALIDATED**); spectral similarity is **PARTIAL**;
+statistical significance and FDR are **NOT VALIDATED**.
+- [`VALIDATION_SIMILARITY.md`](VALIDATION_SIMILARITY.md) — one bounded,
+reproducible experiment comparing MSMCP's scorer against `matchms` on a pinned
+MassBank release and measuring held-out library recovery, with its limitations
+stated plainly.
+
+What this does **not** establish: validated compound-identification confidence, a
+calibrated false-discovery rate, or end-to-end analytical correctness. The
+matching-rule difference between MSMCP's greedy matcher and `matchms`'s (nearest
+m/z in query order versus maximum intensity product) is a documented limitation,
+not a resolved one.
+
+The harness is opt-in (`make validate-similarity`); `matchms` is not a dependency
+of the server or of the fast test suite.
+
 ## Acceptance criteria for v1.0
 
 The release is complete when the repository demonstrates all of the following:
