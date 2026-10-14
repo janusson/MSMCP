@@ -49,6 +49,10 @@ the tools individually, so a green local run means a green CI run.
   `eval` marker.
 - `tests/test_spearman.py` guards the tie-aware correlation reported by the
   similarity validation (it runs in the fast suite; no optional dependency).
+- `tests/test_validation_harness.py` covers the shipped validation harness's
+  protocol — the query/database split, the leakage guard, and the
+  absent-versus-invalid dataset behaviour — with neither `matchms` nor the
+  dataset.
 - `validation/` holds the opt-in scientific-validation harness. It is **not**
   collected by pytest and **not** part of the gate; `matchms` is supplied only
   for `make validate-similarity` and is never a runtime dependency.

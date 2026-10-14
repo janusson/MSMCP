@@ -155,5 +155,6 @@ msmcp/
     ├── test_zed_config.py       # .zed/settings.json and the README launch snippet agree
     ├── test_eval_notebook.py    # runs the eval notebook headlessly (`make eval`)
     ├── test_spearman.py         # tie-aware Spearman used by the similarity validation
+    ├── test_validation_harness.py # validation harness protocol: split, leakage guard, skip/fail
     └── test_smoke_stdio.py      # end-to-end JSON-RPC session over a real stdio pipe
 ```
