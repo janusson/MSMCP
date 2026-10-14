@@ -24,6 +24,46 @@ Mass spectrometry data MCP server.
 - Run ruff and type checking before declaring a task complete.
 - Keep changes focused.
 
+## Isolated worktrees
+
+Risky or parallel work happens in a linked worktree, never in a checkout that
+holds someone else's uncommitted changes. Each worktree is an independent
+checkout with its own environment.
+
+- Create one per task, based on the integration branch:
+
+  ```
+  git worktree add .worktrees/<name> -b <branch> origin/main
+  ```
+
+- **Sync its environment before running any tool.** Each worktree gets its own
+  `.venv`; without this step `uv run pytest` (and ruff/mypy) can fall back to the
+  active environment from another checkout and import the wrong `msmcp`:
+
+  ```
+  uv sync --extra dev --offline
+  ```
+
+- Confirm the import resolves to this worktree, not another checkout:
+
+  ```
+  uv run python -c "import msmcp; print(msmcp.__file__)"
+  ```
+
+  It must print the worktree's own `src/msmcp/__init__.py`.
+
+- If the shell exports `VIRTUAL_ENV` from the primary checkout, `uv run` reports
+  that it "does not match the project environment path" and ignores it — that is
+  expected. `unset VIRTUAL_ENV` if a tool still resolves to the wrong checkout.
+
+- Remove when done: `git worktree remove .worktrees/<name>`, then delete the
+  branch. `.worktrees/` is gitignored.
+
+These two commands are the whole procedure. A `make` target was considered and
+deliberately not added: the real failure mode is environment resolution, not
+worktree creation, so the sync step should stay visible rather than be hidden
+behind a target.
+
 ## Gate and pushing
 
 - Gate: `make lint` -> `make test` -> `make eval`, mirrored by `.github/workflows/ci.yml`.
