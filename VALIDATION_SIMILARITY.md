@@ -105,9 +105,10 @@ MSMCP recovers the correct InChIKey in the top-1 hit for **73.6 %** of the 250
 queries (top-10: 88.8 %). The two scorers agree **exactly** on the *naive top-k
 proportions*, but **not on every metric**: MSMCP's strict top-5 is 0.8508
 (conditional) / 0.8440 (original denominator) against matchms's 0.8548 / 0.8480 —
-a 4-in-250 difference. So "identical rankings" is too strong; what is supported
-is exact agreement in particular aggregate metrics at this scale. Near-duplicate
-strictness moves recovery by ≤ 0.014: leakage is small but not zero.
+a **1-in-250 (0.4 pp)** difference. So "identical rankings" is too strong; what
+is supported is exact agreement in particular aggregate metrics at this scale.
+Near-duplicate strictness moves recovery by ≤ 0.014: leakage is small but not
+zero.
 
 ## Interpretation
 
