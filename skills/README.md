@@ -9,6 +9,7 @@ rather than living in one person's editor.
 ```
 skills/
 ├── README.md              # this file (catalog conventions)
+├── CATALOG.md             # Level 0 index of active skills
 ├── {skill_name}/
 │   ├── SKILL.md           # playbook (HARD CAP: 15 KB)
 │   └── references/        # oversized reference material (Level 2 assets)

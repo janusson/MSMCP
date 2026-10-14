@@ -38,6 +38,7 @@ EXPECTED_RESPONSES = 3  # initialize, tools/list, tools/call (notifications have
 EXPECTED_TOOLS = {
     "ping",
     "load_mzml_summary",
+    "list_spectra",
     "load_spectrum",
     "summarise_reference",
     "release_reference",

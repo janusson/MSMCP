@@ -1,0 +1,15 @@
+# MSMCP worked-example query: a single SYNTHETIC MS2 spectrum for demonstration.
+# See "Try it in 60 seconds" in README.md.  Its peaks duplicate the Caffeine
+# record in examples/caffeine_library.msp, so searching it there gives a
+# deterministic top hit (score 1.0).  This is fabricated demonstration data, not
+# a measured spectrum and not a compound identification.
+BEGIN IONS
+TITLE=Caffeine_demo_MS2
+PEPMASS=195.0877
+MSLEVEL=2
+RTINSECONDS=132.0
+110.0713 40.0
+120.0808 100.0
+136.0757 60.0
+138.0662 420.0
+END IONS

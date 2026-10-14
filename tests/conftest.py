@@ -163,11 +163,25 @@ def _mzml_xml(spectra: list[dict[str, Any]]) -> str:
                 f"</selectedIon></selectedIonList></precursor></precursorList>"
             )
 
+        polarity_xml = ""
+        polarity = spec.get("polarity")
+        if polarity == "positive":
+            polarity_xml = (
+                '<cvParam cvRef="MS" accession="MS:1000130" '
+                'name="positive scan" value=""/>'
+            )
+        elif polarity == "negative":
+            polarity_xml = (
+                '<cvParam cvRef="MS" accession="MS:1000129" '
+                'name="negative scan" value=""/>'
+            )
+
         spectrum_xml.append(
             f'<spectrum index="{index}" id="scan={index}" '
             f'defaultArrayLength="{spec.get("declared_length", len(spec["mz"]))}">'
             f'<cvParam cvRef="MS" accession="MS:1000511" name="ms level" '
             f'value="{ms_level}"/>'
+            f"{polarity_xml}"
             f'<scanList count="1"><scan>'
             f'<cvParam cvRef="MS" accession="MS:1000016" name="scan start time" '
             f'value="{rt}" unitAccession="MS:1000038" unitName="second"/>'
@@ -300,6 +314,30 @@ def mzml_two_short_payloads(tmp_path: Path) -> Path:
     spectra: list[dict[str, Any]] = [
         {"mz": [100.0, 200.0], "intensity": [10.0, 20.0], "declared_length": 4},
         {"mz": [150.0], "intensity": [5.0], "declared_length": 9},
+    ]
+    path.write_text(_mzml_xml(spectra), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def mzml_with_polarity(tmp_path: Path) -> Path:
+    """Two MS2 scans: one positive-mode, one negative-mode."""
+    path = tmp_path / "polarity.mzML"
+    spectra: list[dict[str, Any]] = [
+        {
+            "mz": [100.0, 200.0],
+            "intensity": [10.0, 20.0],
+            "ms_level": 2,
+            "precursor_mz": 195.0877,
+            "polarity": "positive",
+        },
+        {
+            "mz": [100.0, 200.0],
+            "intensity": [10.0, 20.0],
+            "ms_level": 2,
+            "precursor_mz": 181.0707,
+            "polarity": "negative",
+        },
     ]
     path.write_text(_mzml_xml(spectra), encoding="utf-8")
     return path
