@@ -52,6 +52,20 @@ checkout with its own environment.
 
   It must print the worktree's own `src/msmcp/__init__.py`.
 
+- **This is enforced, not just advised.** `tests/conftest.py` fails the whole
+  run at import time if `msmcp`, `sys.executable`, or `pytest` resolve outside
+  this checkout's `.venv`. A test run that exercises one revision while
+  importing another is a reproducibility hazard, so it is a hard error with an
+  actionable message rather than a silent pass. The three must agree:
+
+  ```
+  uv run python -c "import msmcp, pytest, sys; print(msmcp.__file__); print(pytest.__file__); print(sys.prefix)"
+  ```
+
+  `sys.prefix` (not `sys.executable`) is checked: uv symlinks
+  `.venv/bin/python` to its managed interpreter, so `sys.executable` can report
+  the base path even when the venv is active.
+
 - If the shell exports `VIRTUAL_ENV` from the primary checkout, `uv run` reports
   that it "does not match the project environment path" and ignores it — that is
   expected. `unset VIRTUAL_ENV` if a tool still resolves to the wrong checkout.
