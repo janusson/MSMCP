@@ -86,6 +86,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   within 1.5x the audit's 20,481-byte measurement. A doubling of what a workflow
   costs in context now fails a check instead of going unnoticed.
 
+- **Scientific validation is a first-class artefact, not a claim.**
+  [`SCIENTIFIC_VALIDATION.md`](SCIENTIFIC_VALIDATION.md) records, per capability,
+  the claim being made, the evidence, the tolerances and their justification, and
+  an explicit **VALIDATED / PARTIAL / NOT VALIDATED** status — keeping analytical
+  reference calculations, independent software comparisons and experimental
+  validation apart. [`VALIDATION_SIMILARITY.md`](VALIDATION_SIMILARITY.md)
+  records one bounded, reproducible experiment: MSMCP's `ClassicalScorer`
+  compared against `matchms` `CosineGreedy` on a pinned MassBank release
+  (release, DOI and SHA-256 fixed; the dataset stays external to the repository)
+  plus held-out library-recovery measurement. Similarity is **PARTIAL**;
+  statistical significance and FDR remain **NOT VALIDATED**; the scoring-rule
+  difference between the two greedy matchers is documented as an open limitation,
+  not resolved. `tests/test_spearman.py` guards the tie-aware correlation the
+  validation reports, and `make validate-similarity` runs the experiment opt-in
+  (`matchms` is never a runtime dependency).
+
+- **Isolated worktrees fail loudly instead of silently testing the wrong
+  code.** `tests/conftest.py` aborts collection when `msmcp`, `pytest`, or the
+  running interpreter (`sys.prefix`) resolve outside the checkout under test, so
+  a run can no longer exercise one revision while importing another's package.
+  `.gitignore` ignores local `.worktrees/`, and `AGENTS.md` documents the
+  isolated-worktree procedure.
+
 ### Fixed
 
 - **MGF libraries now report the ion mode the MGF reader parsed.** `MGFLibraryProvider`

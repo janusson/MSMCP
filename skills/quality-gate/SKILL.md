@@ -19,6 +19,7 @@ Run this before declaring any task complete. All Python targets go through
 | Full static gate | `make lint` |
 | Unit tests | `make test` |
 | Notebook eval | `make eval` |
+| Scientific validation (opt-in) | `make validate-similarity` (needs an external dataset + `matchms`) |
 | Everything | `make all` |
 
 `make lint` runs, in order: `ruff format --check .`, `ruff check .`, `uv run
@@ -46,6 +47,11 @@ the tools individually, so a green local run means a green CI run.
   rule and for the exact registered tool set.
 - `tests/test_eval_notebook.py` runs `notebooks/eval_msmcp.ipynb` under the
   `eval` marker.
+- `tests/test_spearman.py` guards the tie-aware correlation reported by the
+  similarity validation (it runs in the fast suite; no optional dependency).
+- `validation/` holds the opt-in scientific-validation harness. It is **not**
+  collected by pytest and **not** part of the gate; `matchms` is supplied only
+  for `make validate-similarity` and is never a runtime dependency.
 
 ## Conventions the gate assumes
 
@@ -55,6 +61,9 @@ the tools individually, so a green local run means a green CI run.
 - Keep changes focused; do not fix unrelated failures.
 - `drafts/` is gitignored scratch and excluded from lint and type checking;
   nothing shipped may live there.
+- `validation/` is shipped and type-checked (it is in `mypy`'s `files`); it must
+  import cleanly **without** `matchms`, so the fast gate passes on a machine that
+  never installs the optional validation dependency.
 
 ## Checklist
 

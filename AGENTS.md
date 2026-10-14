@@ -119,6 +119,11 @@ behind a target.
   `make test` is the fast unit loop; `make eval` runs the evaluation notebook end to end and is
   the slow one. `make all` chains the whole pipeline, and `make format` is the one that writes.
   Full detail is in `README.md`.
+- `make validate-similarity` is the **opt-in** scientific validation (it needs an external
+  MassBank dataset via `MSMCP_VALIDATION_DATA` and supplies `matchms` for that one command). It is
+  deliberately **not** part of the gate, keeps both the runtime and the fast suite free of
+  `matchms`, and skips cleanly when the dataset is absent. See `SCIENTIFIC_VALIDATION.md` and
+  `VALIDATION_SIMILARITY.md`; a passing unit suite is not scientific validation.
 - If `git push` fails with `could not read Username`, the credential helper is not wired up for a
   non-interactive shell. Supply it explicitly for that one command:
 
