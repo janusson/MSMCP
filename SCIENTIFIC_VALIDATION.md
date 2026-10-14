@@ -57,7 +57,7 @@ implementation under review in PR #50.
 | 1c | imzML ingestion | Delegated to MassFlow | **NOT VALIDATED** | — (same-ecosystem fixture) |
 | 2 | Exact mass & isotopes | Monoisotopic mass, M+1/M+2 envelope | **VALIDATED** (algorithm); constants cited | Analytical reference (independent table + exact expansion) |
 | 2b | Adduct shifts | Exact Δ per ionisation pathway | **VALIDATED** | Analytical reference (CODATA constants) |
-| 3 | Similarity & library search | Ground-truth recovery of the correct library entry | **NOT VALIDATED** | Software tests only (synthetic) |
+| 3 | Similarity & library search | Ground-truth recovery of the correct library entry | **PARTIAL** | Independent matchms comparison + pinned MassBank recovery (§5) |
 | 4 | Statistical significance | Calibrated p/q-value under the decoy null | **NOT VALIDATED** *(known optimistic)* | Internal measurement; see §6 |
 | 5 | MCP protocol integration | JSON-RPC session, tool surface, provenance plumbing | **PARTIAL** | Analytical reference (real stdio session) |
 
@@ -270,29 +270,32 @@ example. Both are **synthetic and internally generated**: the scorer, the query
 and the "truth" share one source, so correct recovery is expected almost by
 construction.
 
-**Independent evidence.** **None.** There is no comparison against an
-established scoring implementation, no analysis on a public reference library,
-and no instrument data.
+**Independent evidence (2026-10-14).** `VALIDATION_SIMILARITY.md` records one
+bounded experiment on the pinned **MassBank `2026.03`** release (CC-BY-4.0,
+SHA-256 pinned): MSMCP's `ClassicalScorer` compared against matchms 0.33.1
+`CosineGreedy` on identical peak lists, then top-1/top-k recovery on held-out
+spectra. Headline results — agreement is **exact on every uncontested pair**
+(median |Δ| = 0, Spearman ρ = 0.9995, **tie-aware**); all divergence is explained
+by window *competition*, where the two greedy rules legitimately differ (max
+|Δ| = 0.42 on a single pair; consequences not yet quantified); and recovery
+agrees with matchms **only on particular aggregate metrics** — the naive top-k
+proportions coincide, but the strict top-5 differs (MSMCP 0.8508 vs matchms
+0.8548 conditional), so "identical rankings" would be too strong. Self-matches
+and near-duplicate leakage are removed, and recovery is reported on both the
+answerable subset and the original denominator.
 
-**Required next evidence.**
-* An independent software comparison against `matchms` (CosineGreedy /
-  ModifiedCosine) on a pinned public library, at the same tolerance — with the
-  caveat that agreement establishes consistency, not correctness.
-* A ground-truth recovery test on a **public, versioned** spectral library not
-  authored by MSMCP.
+**Known limitations / unvalidated assumptions.** Recovery measures retrieval of
+compounds **deliberately represented** in the library, not accuracy on absent
+ones; ground truth is InChIKey equality (assumes MassBank annotations are
+correct); scoring is spectral-only (precursor m/z and adduct are ignored, so
+isomers confound by construction); one positive-mode ESI MS2 slice and one
+matchms algorithm; agreement is a *scoring* comparison, not end-to-end pipeline
+equality; the 20,000 comparison pairs are not independent observations; no
+confidence interval or FDR. Similarity scores remain candidate rankings, not
+identifications.
 
-**Datasets and provenance (required when implemented).** Candidate public
-libraries and their licences: **MassBank** (CC BY / CC0 depending on record set),
-**GNPS** public libraries (CC0 for many), **NIST** (licensed; not redistributable).
-Any pinned dataset must record: exact release/tag, retrieval URL, licence, and a
-SHA-256 of the file, stored *outside* the repository (large data stays out of git).
-
-**Known limitations / unvalidated assumptions.**
-* Similarity scores are reported as candidate rankings, and the server
-  instructions say so explicitly — they are not identifications. That wording is
-  correct and should stay until §6 is resolved.
-
-**Status: NOT VALIDATED.**
+**Status: PARTIAL.** Dataset provenance (SHA-256), pre-registered tolerances,
+results and the full limitation list are in `VALIDATION_SIMILARITY.md`.
 
 ---
 
@@ -439,9 +442,10 @@ code regression does.
    capability with *counter-evidence*, and it blocks the library reader. The
    next action is data, not code: obtain realistic decoy distributions and
    measure fitted-vs-held-out empirical survival across the upper range.
-2. **Similarity and library search have no independent reference (Capability 3).**
-   Add a comparison against `matchms` and a ground-truth recovery test on a
-   pinned public library, recording licence and provenance.
+2. **Similarity and library search are only partially validated (Capability 3,
+   #54).** The matchms comparison and pinned MassBank recovery now exist
+   (`VALIDATION_SIMILARITY.md`); still missing are other ion modes/instruments,
+   `ModifiedCosine`, precursor-aware identification and confidence intervals.
 3. **MGF and imzML ingestion rest on same-ecosystem evidence (Capability 1b/1c).**
    Add an independently produced reference document for each (a hand-written MGF
    is cheap; a public imzML acquisition is not, so provenance matters here too).
