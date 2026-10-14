@@ -7,6 +7,7 @@ exact masses).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
 import pytest
@@ -190,6 +191,23 @@ class TestIsotopePattern:
     def test_carbon_m1_abundance(self) -> None:
         pattern = _isotope_pattern(_parse_formula("C"))
         assert pattern[1][1] == pytest.approx(0.0107 / 0.9893, rel=1e-6)
+
+    def test_multi_carbon_matches_the_binomial_closed_form(self) -> None:
+        """C-only M+k equals the exact binomial ratio, an independent reference.
+
+        With only ¹³C contributing to +1 (and no heavier carbon isotope),
+        ``M+k / M = C(n, k) * (a₁₃/a₁₂)**k`` for an ``n``-carbon formula.  This
+        is the closed-form multinomial result, independent of the convolution
+        the implementation uses, and pins the multi-carbon M+2 that the earlier
+        ``p₁²/2`` pool approximation got wrong.
+        """
+        n_carbon = 8
+        ratio = 0.0107 / 0.9893
+        pattern = _isotope_pattern(_parse_formula("C8"), max_isotopologue=4)
+        assert pattern[0][1] == 1.0
+        for k in (1, 2, 3):
+            expected = math.comb(n_carbon, k) * ratio**k
+            assert pattern[k][1] == pytest.approx(expected, rel=1e-9)
 
     @pytest.mark.parametrize(
         ("formula", "m1", "m2"),
