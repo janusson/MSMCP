@@ -275,17 +275,24 @@ bounded experiment on the pinned **MassBank `2026.03`** release (CC-BY-4.0,
 SHA-256 pinned): MSMCP's `ClassicalScorer` compared against matchms 0.33.1
 `CosineGreedy` on identical peak lists, then top-1/top-k recovery on held-out
 spectra. Headline results — agreement is **exact on every uncontested pair**
-(median |Δ| = 0, Spearman ρ = 0.9994); all divergence is explained by window
-*competition*, where the two greedy rules legitimately differ (max |Δ| = 0.42 on
-a single pair); and recovery is **identical to matchms** (top-1 0.736, top-10
-0.888) with self-matches and near-duplicate leakage removed.
+(median |Δ| = 0, Spearman ρ = 0.9995, **tie-aware**); all divergence is explained
+by window *competition*, where the two greedy rules legitimately differ (max
+|Δ| = 0.42 on a single pair; consequences not yet quantified); and recovery
+agrees with matchms **only on particular aggregate metrics** — the naive top-k
+proportions coincide, but the strict top-5 differs (MSMCP 0.8508 vs matchms
+0.8548 conditional), so "identical rankings" would be too strong. Self-matches
+and near-duplicate leakage are removed, and recovery is reported on both the
+answerable subset and the original denominator.
 
-**Known limitations / unvalidated assumptions.** Ground truth is InChIKey
-equality (it assumes MassBank annotations are correct); scoring is spectral-only
-(precursor m/z and adduct are ignored, so isomers confound by construction); one
-positive-mode ESI MS2 slice and one matchms algorithm; agreement is a *scoring*
-comparison, not end-to-end pipeline equality; no confidence interval or FDR.
-Similarity scores remain candidate rankings, not identifications.
+**Known limitations / unvalidated assumptions.** Recovery measures retrieval of
+compounds **deliberately represented** in the library, not accuracy on absent
+ones; ground truth is InChIKey equality (assumes MassBank annotations are
+correct); scoring is spectral-only (precursor m/z and adduct are ignored, so
+isomers confound by construction); one positive-mode ESI MS2 slice and one
+matchms algorithm; agreement is a *scoring* comparison, not end-to-end pipeline
+equality; the 20,000 comparison pairs are not independent observations; no
+confidence interval or FDR. Similarity scores remain candidate rankings, not
+identifications.
 
 **Status: PARTIAL.** Dataset provenance (SHA-256), pre-registered tolerances,
 results and the full limitation list are in `VALIDATION_SIMILARITY.md`.

@@ -51,13 +51,18 @@ records, keep those that: state an `INCHIKEY`; are `Ion_mode: POSITIVE`;
   itself. Database = those in-group records + a seeded sample of distractor
   compounds → **3,499 references**. Records whose peak list is *identical* to a
   query are removed (self-match / duplicate leakage guard).
-* **Strict variant.** Before ranking, database entries scoring ≥ 0.995 to the
-  query are dropped, removing near-duplicate leakage. Reported alongside the
-  naive number.
-* **Agreement** measured on 20,000 seeded (query, database) pairs.
+* **Agreement** measured on 20,000 seeded (query, database) pairs. These are
+  drawn with replacement from a 250 × 3,499 grid, so they are **not** 20,000
+  independent observations.
+* **Two denominators for recovery.** Near-duplicate filtering can remove a
+  query's only same-compound reference; recovery is therefore reported
+  *conditionally* (among answerable queries) **and** with the **original
+denominator** (all queries, an excluded query counting as a miss). The
+  original-denominator figure is the population-stable one for comparing
+variants.
 * **Tolerances were fixed before results were read:** uncontested pairs
   (no window competition) must agree to ≤ 1e-9; median |Δ| ≤ 0.01, p95 ≤ 0.10,
-  Spearman ρ ≥ 0.99.
+  Spearman ρ ≥ 0.99 (**tie-aware**, average ranks).
 
 `matchms==0.33.1` is supplied per-command only (`uv run --with`); it is **not** a
 project dependency, so the runtime and the fast CI suite never install it.
@@ -72,67 +77,90 @@ project dependency, so the runtime and the fast CI suite never install it.
 | 95th percentile \|Δ\| | **1.81e-4** | ≤ 0.10 |
 | max \|Δ\| | 0.424 | — |
 | exact agreement (\|Δ\| ≤ 1e-9) | **93.0 %** | — |
-| Spearman ρ | **0.99943** | ≥ 0.99 |
+| Spearman ρ (**tie-aware**) | **0.999459** | ≥ 0.99 |
 | contested pairs | 2,273 (1,398 differ) | — |
 | **uncontested pairs that differ** | **0** | must be 0 |
 
 **All disagreement is explained by matching contests.** Where the matching is
-unambiguous the two implementations agree to ≤ 1e-9 on every pair.
+unambiguous the two implementations agree to ≤ 1e-9 on every pair. The
+correlation uses **average ranks**; the earlier `argsort(argsort)` idiom gave
+tied scores arbitrary distinct ranks and reported ρ = 0.999426. The corrected
+value is reported (the old number was not preserved). See `tests/test_spearman.py`
+for the tie behaviour and a regression case where the naive idiom inflates a
+true 0.914 to 1.0.
 
-### 2. Identification recovery (self-matches and duplicates removed)
+### 2. Identification recovery (self-matches and identical duplicates removed)
 
-| Scorer | variant | top-1 | top-5 | top-10 |
-|---|---|---|---|---|
-| **MSMCP** | naive | 0.7360 | 0.8520 | 0.8880 |
-| **MSMCP** | strict | 0.7379 | 0.8508 | 0.8871 |
-| matchms | naive | 0.7360 | 0.8520 | 0.8880 |
-| matchms | strict | 0.7379 | 0.8548 | 0.8871 |
+`strict` additionally drops entries scoring ≥ 0.995 to the query; this can make a
+query unanswerable, so both denominators are shown.
 
-MSMCP recovers the correct InChIKey in the top-1 hit for **73.6 %** of held-out
-queries (top-10: 88.8 %), and **matches matchms exactly** — the algorithm
-difference does not change identification at this scale. The strict (near-
-duplicate-removed) numbers are essentially the same, so duplicate leakage is
-negligible in this design.
+| Scorer | variant | answerable | excluded | conditional top-1/5/10 | original-denominator top-1/5/10 |
+|---|---|---|---|---|---|
+| **MSMCP** | naive | 250/250 | 0 | 0.7360 / 0.8520 / 0.8880 | 0.7360 / 0.8520 / 0.8880 |
+| **MSMCP** | strict | 248/250 | 2 | 0.7379 / 0.8508 / 0.8871 | 0.7320 / 0.8440 / 0.8800 |
+| matchms | naive | 250/250 | 0 | 0.7360 / 0.8520 / 0.8880 | 0.7360 / 0.8520 / 0.8880 |
+| matchms | strict | 248/250 | 2 | 0.7379 / 0.8548 / 0.8871 | 0.7320 / 0.8480 / 0.8800 |
+
+MSMCP recovers the correct InChIKey in the top-1 hit for **73.6 %** of the 250
+queries (top-10: 88.8 %). The two scorers agree **exactly** on the *naive top-k
+proportions*, but **not on every metric**: MSMCP's strict top-5 is 0.8508
+(conditional) / 0.8440 (original denominator) against matchms's 0.8548 / 0.8480 —
+a 4-in-250 difference. So "identical rankings" is too strong; what is supported
+is exact agreement in particular aggregate metrics at this scale. Near-duplicate
+strictness moves recovery by ≤ 0.014: leakage is small but not zero.
 
 ## Interpretation
 
-* **Implementation agreement: PASS.** The MSMCP cosine is a faithful greedy
-  cosine; it is numerically exact against matchms whenever the greedy matching
-  is unambiguous, and rank-correlates at ρ = 0.9994 overall.
-* **The one real discrepancy is structural, not a bug.** `ClassicalScorer`
-  matches query peaks **in query order, each to the nearest free reference
-  peak**; `CosineGreedy` matches the **highest intensity product first**. When a
-  reference peak is within the window of several query peaks (or vice versa),
-  they choose differently and can diverge by up to ~0.42 on a single pair.
-  Minimal reproduction — `query = [(100.0, 10.0), (100.01, 20.0)]`,
-  `reference = [(100.0, 15.0)]`, ±0.02 Da: MSMCP `0.4472`, matchms `0.8944`.
-  MSMCP's rule can *understate* similarity relative to matchms; whether to match
-  on nearest-m/z or maximum-product is a design choice worth revisiting, but it
-  is documented behaviour and is out of scope here.
-* **Identification accuracy: ~74 % top-1 on this protocol.** This is a property
-  of the *method and data*, not proof that 74 % of reported hits are true
+* **Implementation agreement: PASS.** MSMCP's cosine is a faithful greedy
+  cosine — numerically exact against matchms whenever the greedy matching is
+  unambiguous, and rank-correlated at ρ = 0.9995 (tie-aware) overall. The one
+  non-exact quantity is the *score* of contested pairs, not the ranking of
+  ordinary ones.
+* **Recovery agreement: partial.** MSMCP and matchms tie on the naive top-k
+  proportions but differ on the strict top-5 (0.8508 vs 0.8548 conditional;
+  0.8440 vs 0.8480 original denominator). Agreement is metric-specific, not
+  universal.
+* **The greedy-rule discrepancy is structural and consequential.**
+  `ClassicalScorer` matches nearest-m/z **in query order**; `CosineGreedy`
+  matches **maximum intensity product** first. Minimal reproduction —
+  `query = [(100.0, 10.0), (100.01, 20.0)]`, `reference = [(100.0, 15.0)]`,
+  ±0.02 Da: MSMCP `0.4472` vs matchms `0.8944` — a **twofold** score difference.
+  This is an intentional design choice, but **not a harmless one**: a twofold
+  difference can change candidate ordering, any applied score threshold
+  (including the 0.995 near-duplicate cutoff used here), and the interpretation a
+  downstream reader puts on a score. How often it changes a *ranking* on
+  realistic spectra is **not measured here** and is recommended as a separately
+  scoped evaluation. **No algorithm change is made in this PR.**
+* **Identification accuracy: ~74 % top-1 on this protocol.** A property of the
+  *method and data*, not proof that 74 % of reported hits are true
   identifications.
 
 ## Limitations and unvalidated assumptions
 
-1. **Ground truth is InChIKey equality.** It assumes MassBank annotations are
-   correct; unannotated/misannotated records count as failures (or, for the
-   query, are excluded).
-2. **Spectral-only identification.** `ClassicalScorer` ignores precursor m/z,
+1. **Retrieval of compounds deliberately present in the library.** Every query
+   compound is represented in the database by ≥ 1 *different* measurement, by
+   construction. This is **not** an estimate of accuracy on compounds absent
+   from the library — the hard, realistic case.
+2. **Ground truth is InChIKey equality.** It assumes MassBank annotations are
+   correct; misannotated records count as failures (or, for a query, are
+   excluded).
+3. **Spectral-only identification.** `ClassicalScorer` ignores precursor m/z,
    adduct and collision energy — two isomers with similar MS2 will confound it
    by construction. No precursor gating is applied here.
-3. **Subset, not the library.** 250 query compounds and 3,499 references from one
-   positive-mode ESI MS2 slice; other ion modes, instrument classes and the full
-   139k-record set are untested.
-4. **Agreement ≠ end-to-end equality.** The comparison feeds identical peak lists
-   to both scorers, so it isolates the *scoring* step. It does **not** test
-   matchms's own MSP parsing, nor MSMCP's full search pipeline (null model, FDR,
-   report).
-5. **No statistical control.** Recovery is a point proportion; there is no
-   confidence interval and no FDR here (that is #12/#51, deliberately separate).
-6. **One matchms algorithm.** Only `CosineGreedy` was compared; `ModifiedCosine`
-   and the embedding scorers are unvalidated.
-7. **Tolerances are agreement tolerances**, chosen to admit the known
+4. **One library, one slice.** MassBank `2026.03`, positive-mode ESI MS2, ≤ 300
+   peaks, precursor 100–1200 Da; other ion modes, instrument classes and the
+   full 139k-record set are untested.
+5. **Agreement ≠ end-to-end equality.** Identical peak lists are fed to both
+   scorers, isolating the *scoring* step. It does **not** test matchms's own MSP
+   parsing, nor MSMCP's full search pipeline (null model, FDR, report).
+6. **The 20,000 agreement pairs are not independent observations** — sampled with
+   replacement from a 250 × 3,499 grid, with queries and references recurring
+   across pairs. Treat them as a descriptive distribution, not 20,000 trials.
+7. **No calibrated confidence.** Recovery is a point proportion: no confidence
+   interval and no FDR here (that is #12/#51, deliberately separate).
+8. **One matchms algorithm.** Only `CosineGreedy`; `ModifiedCosine` and the
+   embedding scorers are unvalidated.
+9. **Tolerances are agreement tolerances**, chosen to admit the known
    greedy-rule difference; they are not accuracy thresholds.
 
 ## Reproduction

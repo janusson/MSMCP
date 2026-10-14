@@ -32,7 +32,7 @@ run:                ## Launch the MCP server on the stdio transport
 repomix:            ## Pack the repo into repomix-output.xml for AI analysis
 	repomix --style xml --output repomix-output.xml
 
-validate-similarity: ## Opt-in: independent similarity validation vs matchms (needs MSMCP_VALIDATION_DATA + network)
-	uv run --with "matchms==0.33.1" python validation/similarity_validation.py --data "$(MSMCP_VALIDATION_DATA)"
+validate-similarity: ## Opt-in: independent similarity validation vs matchms (set MSMCP_VALIDATION_DATA; skips cleanly when unset)
+	MSMCP_VALIDATION_DATA="$(MSMCP_VALIDATION_DATA)" uv run --with "matchms==0.33.1" python validation/similarity_validation.py
 
 all: install format lint test eval repomix ## Full pipeline: sync, format, lint, test, evaluate, repomix-pack

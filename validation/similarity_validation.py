@@ -38,18 +38,38 @@ Pre-registered tolerances (fixed before results were inspected)
   no query peak within the window of two reference peaks) must agree to
   ``<= 1e-9``.
 * Overall: median ``|delta|`` ``<= 0.01`` and 95th percentile ``<= 0.10``;
-  Spearman rho ``>= 0.99``.
+  Spearman rho ``>= 0.99`` (computed **tie-aware**, average ranks — spectral
+  scores are frequently tied at exactly 0, and arbitrary distinct ranks would
+  inflate the statistic).
 * These tolerate the *known* algorithmic difference below, not arbitrary
   divergence.
 
+Reported quantities are kept distinct
+-------------------------------------
+* **Agreement** (implementation consistency) and **recovery** (identification
+  correctness) are separate questions and are never combined.
+* Recovery is reported with **two denominators**: *conditional* (answerable
+  queries only) and *original denominator* (all queries; an excluded query
+  counts as a miss).  The original-denominator number is the population-stable
+  one to compare between variants.
+* ``n_pairs`` agreement pairs are drawn from a 250 x 3499 grid and are **not**
+  independent observations.
+
 Expected discrepancy (why agreement is not exact)
--------------------------------------------------
+--------------------------------------------------
 ``ClassicalScorer`` matches query peaks **in order**, each to the **nearest**
 free reference peak.  ``CosineGreedy`` matches the **highest intensity product
 first**.  When a reference peak is within the window of several query peaks, or
 a query peak is within the window of several reference peaks (both are
-"contests"), the two pick differently and the scores diverge.  The experiment
-counts contests and reports them, rather than hiding them in an average.
+"contests"), the two pick differently and the scores diverge — by up to ~0.42 on
+a single pair in this data.  The experiment counts contests and reports them
+rather than hiding them in an average.
+
+This is an intentional design choice, **not** a harmless one: a twofold score
+difference can change candidate ordering, any score threshold applied
+(including the near-duplicate cutoff used here), and downstream interpretation.
+Quantifying how often it changes a ranking on realistic spectra is a separate,
+not-yet-scoped piece of work.
 """
 
 # The optional validation dependency (matchms) is not installed in the runtime or
@@ -234,14 +254,46 @@ def _contested(query: Record, reference: Record, tol: float) -> bool:
     return ambiguous(ref_mz, qry_mz) or ambiguous(qry_mz, ref_mz)
 
 
-def _spearman(x: np.ndarray, y: np.ndarray) -> float:
-    """Spearman rho, no scipy dependency."""
-    rx = np.argsort(np.argsort(x)).astype(float)
-    ry = np.argsort(np.argsort(y)).astype(float)
-    rx -= rx.mean()
-    ry -= ry.mean()
+def _average_ranks(values: np.ndarray) -> np.ndarray:
+    """1-based ranks with tied values assigned their average rank.
+
+    Ties matter here: similarity scores are frequently exactly equal (many zero
+    similarities), and giving them arbitrary distinct ranks inflates the
+    correlation.  This is the rank convention Spearman's rho is defined with.
+    """
+    order = np.argsort(values, kind="mergesort")
+    sorted_values = values[order]
+    ranks = np.empty(values.size, dtype=float)
+    i = 0
+    n = values.size
+    while i < n:
+        j = i
+        while j + 1 < n and sorted_values[j + 1] == sorted_values[i]:
+            j += 1
+        ranks[order[i : j + 1]] = (i + j) / 2.0 + 1.0
+        i = j + 1
+    return ranks
+
+
+def spearman_correlation(x: np.ndarray, y: np.ndarray) -> float:
+    """Tie-aware Spearman rho = Pearson correlation of *average* ranks.
+
+    No scipy dependency; cross-checked against ``scipy.stats.spearmanr`` in the
+    test suite.  A constant input has no rank variance, so the coefficient is
+    undefined and reported as 0.0 rather than a misleading 1.0.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size != y.size or x.size < 2:
+        raise ValueError("spearman_correlation needs equal-length arrays of >= 2")
+    rx = _average_ranks(x)
+    ry = _average_ranks(y)
+    rx = rx - rx.mean()
+    ry = ry - ry.mean()
     denom = float(np.sqrt((rx**2).sum() * (ry**2).sum()))
-    return float((rx * ry).sum() / denom) if denom else 0.0
+    if denom == 0.0:
+        return 0.0
+    return float((rx * ry).sum() / denom)
 
 
 def _recovery_from_matrix(
@@ -252,37 +304,47 @@ def _recovery_from_matrix(
     *,
     strict: bool,
 ) -> dict:
-    """Top-k identification recovery from a ``(n_queries, n_db)`` score matrix.
+    """Top-k recovery from a ``(n_queries, n_db)`` score matrix.
 
-    ``strict`` removes database entries whose score to the query is
-    >= :data:`NEAR_DUPLICATE_COSINE` before ranking (near-duplicate leakage).  A
-    query is "answerable" only if its compound still has a database entry; the
-    rest are skipped, not counted as failures.
+    Two denominators are reported, because ``strict`` changes the population:
+
+    * ``conditional`` - among queries whose compound still has a database entry
+      after filtering (*answerable*);
+    * ``original_denominator`` - over **all** original queries, so an excluded
+      query counts as a miss.  This population-stable number is the one to
+      compare between variants.
+
+    ``strict`` removes database entries scoring >= :data:`NEAR_DUPLICATE_COSINE`
+    to the query before ranking (near-duplicate leakage).  Ties are broken by
+    database index (stable sort) so the ranking is deterministic.
     """
+    keys = np.asarray(ref_key)
+    n_total = len(queries)
     hits = {k: 0 for k in TOP_K}
     answerable = 0
-    skipped = 0
     for qi, q in enumerate(queries):
-        key = truth[q.uid]
-        scores = matrix[qi].copy()
+        same = keys == truth[q.uid]
+        scores = matrix[qi].astype(float).copy()
         if strict:
             scores = np.where(scores < NEAR_DUPLICATE_COSINE, scores, -1.0)
-        same = np.array([k == key for k in ref_key])
-        if not np.any(same & (scores >= 0.0)):
-            skipped += 1
+        if not bool(np.any(same & (scores >= 0.0))):
             continue
         answerable += 1
-        order = np.argsort(scores)[::-1]
+        order = np.argsort(-scores, kind="mergesort")
         for k in TOP_K:
-            top = order[:k]
-            if np.any(same[top]):
+            if bool(np.any(same[order[:k]])):
                 hits[k] += 1
+
+    def _frac(numerator: int, denominator: int) -> float:
+        return numerator / denominator if denominator else 0.0
+
     return {
+        "n_queries_total": n_total,
         "answerable_queries": answerable,
-        "skipped_no_alternative_record": skipped,
-        "top1": hits[1] / answerable if answerable else 0.0,
-        "top5": hits[5] / answerable if answerable else 0.0,
-        "top10": hits[10] / answerable if answerable else 0.0,
+        "excluded_queries": n_total - answerable,
+        "hits": {str(k): hits[k] for k in TOP_K},
+        "conditional": {f"top{k}": _frac(hits[k], answerable) for k in TOP_K},
+        "original_denominator": {f"top{k}": _frac(hits[k], n_total) for k in TOP_K},
     }
 
 
@@ -293,9 +355,12 @@ def run(*, data_path: Path, out_path: Path | None) -> dict:
 
     digest = _sha256(data_path)
     if digest != MASSBANK_SHA256:
-        raise SystemExit(
-            f"dataset SHA-256 mismatch:\n  expected {MASSBANK_SHA256}\n  got      {digest}"
+        print(
+            "ERROR: dataset SHA-256 mismatch (file is corrupted or the wrong "
+            f"release).\n  expected {MASSBANK_SHA256}\n  got      {digest}",
+            file=sys.stderr,
         )
+        raise SystemExit(2)
 
     records = load_records(data_path)
     rng = random.Random(SEED)
@@ -344,9 +409,17 @@ def run(*, data_path: Path, out_path: Path | None) -> dict:
             worst = (d, {"query": q.uid, "db": r.uid, "msmcp": a, "matchms": b})
 
     deltas_arr = np.asarray(deltas)
-    rho = _spearman(np.asarray(msmcp_scores), np.asarray(matchms_scores))
+    rho = spearman_correlation(np.asarray(msmcp_scores), np.asarray(matchms_scores))
     agreement = {
         "n_pairs": len(pair_indices),
+        "sampling": {
+            "distinct_query_spectra": len({qi for qi, _ in pair_indices}),
+            "distinct_reference_spectra": len({_di for _, _di in pair_indices}),
+            "note": (
+                "pairs are drawn from a 250-query x 3499-reference grid with "
+                "replacement and are NOT independent observations"
+            ),
+        },
         "median_abs_delta": float(np.median(deltas_arr)),
         "p95_abs_delta": float(np.percentile(deltas_arr, 95)),
         "max_abs_delta": float(deltas_arr.max()),
@@ -474,14 +547,27 @@ def _print_report(result: dict) -> None:
     print(f"   uncontested differing : {a['uncontested_pairs_differing']}")
     print(f"   verdict               : {a['verdict']}")
     print("-" * 74)
-    print("2. IDENTIFICATION RECOVERY (self-matches + duplicates removed)")
+    print("2. IDENTIFICATION RECOVERY (self-matches + identical duplicates removed)")
+    print(
+        f"   queries: {rec['msmcp']['naive']['n_queries_total']} total; "
+        f"strict excludes those whose compound has no remaining reference"
+    )
     for who in ("msmcp", "matchms"):
         for variant in ("naive", "strict"):
             r = rec[who][variant]
+            c = r["conditional"]
+            o = r["original_denominator"]
             print(
-                f"   {who:8s} {variant:6s}: top1={r['top1']:.4f} top5={r['top5']:.4f} "
-                f"top10={r['top10']:.4f}  (answerable {r['answerable_queries']}, "
-                f"skipped {r['skipped_no_alternative_record']})"
+                f"   {who:8s} {variant:6s}: answerable {r['answerable_queries']}"
+                f"/{r['n_queries_total']} (excluded {r['excluded_queries']})"
+            )
+            print(
+                f"      conditional        top1={c['top1']:.4f} top5={c['top5']:.4f} "
+                f"top10={c['top10']:.4f}"
+            )
+            print(
+                f"      original-denominator top1={o['top1']:.4f} top5={o['top5']:.4f} "
+                f"top10={o['top10']:.4f}"
             )
     print("=" * 74)
 
@@ -499,13 +585,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    path = args.data
-    if path is None and os.environ.get("MSMCP_VALIDATION_DATA"):
-        path = Path(os.environ["MSMCP_VALIDATION_DATA"])
-    if path is None or not path.is_file():
+    if args.data is not None:
+        path = args.data
+    else:
+        env_value = os.environ.get("MSMCP_VALIDATION_DATA", "").strip()
+        path = Path(env_value) if env_value else None
+
+    if path is None:
+        # Intentionally absent dataset: skip cleanly, download nothing.
         print(
-            "No dataset: pass --data or set MSMCP_VALIDATION_DATA.\n"
-            f"  {MASSBANK_URL}\n  sha256 {MASSBANK_SHA256}",
+            "similarity validation: skipped - no dataset supplied.\n"
+            "  Set MSMCP_VALIDATION_DATA or pass --data to run (nothing was "
+            "downloaded).\n"
+            f"  fetch:  {MASSBANK_URL}\n  sha256: {MASSBANK_SHA256}",
+            file=sys.stderr,
+        )
+        return 0
+
+    if not path.is_file():
+        # Explicitly provided but missing: fail loudly, do not silently skip.
+        print(
+            f"ERROR: validation dataset not found: {path}\n"
+            f"  fetch:  {MASSBANK_URL}\n  sha256: {MASSBANK_SHA256}",
             file=sys.stderr,
         )
         return 2
