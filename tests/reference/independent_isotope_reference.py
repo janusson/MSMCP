@@ -12,8 +12,8 @@ Two independent choices distinguish it from ``msmcp.tools.chem``:
   transcription; the ~0.1 % spread between published ³⁷Cl/³⁵Cl ratios is the
   reason an abundance tolerance is needed at all).
 * **Algorithm** - the exact polynomial/multinomial expansion of each element's
-  isotopologue distribution, convolved across elements, evaluated in exact
-  ``decimal`` arithmetic.  The library uses the same physics but its own
+  isotopologue distribution, convolved across elements in ``decimal`` arithmetic
+  at 60-digit precision.  The library uses the same physics but its own
   formulation, so agreement is evidence, not tautology.
 
 Run it to regenerate the reference table::

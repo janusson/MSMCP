@@ -8,8 +8,8 @@ right.  The tests here check MSMCP against evidence it did not generate:
 
 * **Analytical reference calculations** - an isotope mass/abundance table and
   exact multinomial expansion transcribed independently of
-  ``msmcp.tools.chem`` (see ``drafts/independent_reference.py`` for the
-  derivation), and the closed-form binomial for a carbon-only envelope.
+  ``msmcp.tools.chem`` (see ``tests/reference/independent_isotope_reference.py``
+  for the derivation), and the closed-form binomial for a carbon-only envelope.
 * **A standards-conformant mzML document** built by this file's own writer, not
   by ``tests/conftest.py``'s fixtures, so ingestion is checked against a
   producer MSMCP does not own.
@@ -42,13 +42,34 @@ import pytest
 from msmcp.mzml import iter_spectra
 from msmcp.tools.chem import _isotope_pattern, _parse_formula
 
+
+def _independent_reference_module() -> Any:
+    """Load the independent reference generator from ``tests/reference/``.
+
+    Loaded by path because it is a standalone script (not a test module).  It
+    never imports msmcp, which is what makes it usable as an independent check.
+    """
+    import importlib.util
+
+    path = (
+        Path(__file__).resolve().parent
+        / "reference"
+        / "independent_isotope_reference.py"
+    )
+    spec = importlib.util.spec_from_file_location("independent_isotope_reference", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 # ---------------------------------------------------------------------------
 # 1. Exact mass and isotope envelope - independent analytical reference
 # ---------------------------------------------------------------------------
-# Reference values re-derived (drafts/independent_reference.py) from an
-# independent transcription of AME2020 atomic masses and CIAAW representative
-# abundances, expanded with the *exact* multinomial formula.  They are not
-# produced by _isotope_pattern.
+# Reference values re-derived (tests/reference/independent_isotope_reference.py)
+# from an independent transcription of AME2020 atomic masses and CIAAW
+# representative abundances, expanded with the *exact* multinomial formula.
+# They are not produced by _isotope_pattern.
 #
 #   formula: (monoisotopic mass / Da, M+1 / M, M+2 / M)
 #
@@ -228,6 +249,86 @@ class TestIsotopeRegressionProtection:
         caffeine = _isotope_pattern(_parse_formula("C8H10N4O2"))
         assert caffeine[1][1] == pytest.approx(0.103212, abs=1e-6)
         assert caffeine[2][1] == pytest.approx(0.008941, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# 1b. The reference argument, and the adduct arithmetic
+# ---------------------------------------------------------------------------
+class TestReferenceAlgorithmAgreement:
+    """The halogen residual is table *choice*, not a defective algorithm.
+
+    If two implementations disagree only because they round ³⁷Cl/³⁵Cl
+    differently, then fed the *same* table they must agree to floating point.
+    This is the crux of the abundance-tolerance argument in
+    ``SCIENTIFIC_VALIDATION.md`` §4.
+    """
+
+    def test_agreement_is_exact_on_a_shared_table(self) -> None:
+        ref = _independent_reference_module()
+        from msmcp.tools.chem import _ISOTOPES, _isotope_pattern, _parse_formula
+
+        for element, rows in _ISOTOPES.items():
+            ref.ISOTOPES[element] = [(repr(mass), abund) for (mass, abund, _d) in rows]
+
+        worst = 0.0
+        for formula in ("CHCl3", "C6H5Cl", "Cl2", "Br2", "C8H10N4O2", "C6H12O6"):
+            independent = ref.exact_envelope(_parse_formula(formula), max_shift=2)
+            actual = _isotope_pattern(_parse_formula(formula))
+            for k in (1, 2):
+                worst = max(worst, abs(actual[k][1] - independent[k]))
+        assert worst < 1e-12, f"worst |delta| = {worst:.3e}"
+
+
+class TestAdductReferenceValues:
+    """Recompute every adduct shift from independently stated constants.
+
+    The shift of an adduct is the exact mass of the ionised species minus the
+    neutral molecule.  The reference here is the same physics written out from
+    **separately stated** CODATA 2018 / AME2020 constants (not read from
+    ``msmcp.tools.chem``), so agreement checks the arithmetic and the
+    electron-balance convention rather than echoing the module's own numbers.
+    """
+
+    PROTON = 1.007276466621  # CODATA 2018: ¹H⁺
+    ELECTRON = 0.000548579909  # CODATA 2018: e⁻
+    H_ATOM = 1.00782503207
+    C_ATOM = 12.0
+    N_ATOM = 14.0030740048
+    O_ATOM = 15.9949146196
+    NA_ATOM = 22.989769282
+    K_ATOM = 38.963706486
+    CL_ATOM = 34.968852682
+
+    def _expected(self) -> dict[str, float]:
+        p, e = self.PROTON, self.ELECTRON
+        h, c, n, o = self.H_ATOM, self.C_ATOM, self.N_ATOM, self.O_ATOM
+        na, k, cl = self.NA_ATOM, self.K_ATOM, self.CL_ATOM
+        return {
+            "[M+H]+": p,
+            "[M+Na]+": na - e,
+            "[M+K]+": k - e,
+            "[M+NH4]+": n + 4 * h - e,
+            "[M+H-H2O]+": p - (2 * h + o),
+            "[M+2H]2+": 2 * p - 2 * e,
+            "[M+3H]3+": 3 * p - 3 * e,
+            "[M+2Na-H]+": 2 * (na - e) - (p - e),
+            "[M-H]-": -p,
+            "[M+Cl]-": cl + e,
+            "[M+HCOO]-": h + c + 2 * o + e,
+            "[M+CH3COO]-": 2 * c + 3 * h + 2 * o + e,
+            "[M-H2O-H]-": -(2 * h + o) - p,
+            "[M+Na-2H]-": (na - e) - 2 * p + 2 * e,
+        }
+
+    def test_every_tabulated_shift_matches_independent_arithmetic(self) -> None:
+        from msmcp.tools.chem import _ADDUCT_DB
+
+        expected = self._expected()
+        assert set(expected) == set(_ADDUCT_DB), (
+            f"adduct table changed: {set(expected) ^ set(_ADDUCT_DB)}"
+        )
+        for adduct, value in expected.items():
+            assert _ADDUCT_DB[adduct]["shift"] == pytest.approx(value, abs=1e-6), adduct
 
 
 # ---------------------------------------------------------------------------

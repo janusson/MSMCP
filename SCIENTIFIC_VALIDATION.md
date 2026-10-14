@@ -92,8 +92,8 @@ mismatch, and polarity. This is *software* evidence: every fixture is built by
 lineage.
 
 **Independent evidence.** `tests/test_scientific_validation.py::TestMzMLIndependentDocument`
-builds documents with a writer owned by the test module — a producer MSMCP does
-not control — and checks:
+builds documents with a writer **independent of the reader under test** (its own
+`_MzMLWriter`, not `tests/conftest.py`'s fixtures), and checks:
 
 * float64 peak arrays round-trip **bit-exactly** (`np.array_equal`), confirming
   no reorder, rescale or rounding;
@@ -176,14 +176,13 @@ C/H/N/O molecules; halogen-bearing M+2 differs by ≤1.1e-3.
   0.2424 in another. This alone moves CHCl₃'s M+2 by ~1.05e-3 and Cl₂'s by
   ~0.7e-3 — the entire observed halogen disagreement. When both sides use the
   *same* table the **algorithm** agrees with the exact expansion to **1e-16**
-  (verified directly); the residual is table choice, not a defect. This
-  distinction is asserted in the test so a future table change cannot be
-  mistaken for an algorithmic regression.
+  (asserted by `TestReferenceAlgorithmAgreement`); the residual is table choice,
+  not a defect.
 
 **Analytical checks with no table at all.**
 * Carbon-only M+1 equals `n·p/(1−p)` and M+2 equals `C(n,2)·(p/(1−p))²`
   (binomial closed form) to `rel=1e-12`.
-* The C8 M+1 shift equals ¹³C − ¹²C to 1 µDa and is >2 mDa away from the
+* The C8 M+1 shift equals ¹³C − ¹²C to 1 µDa and is >5 mDa away from the
   neutron mass — the exact bug the earlier implementation had.
 * Bare Cl⁻ and Br⁻ have **zero** M+1 (no +1 isotope); a carbon-bearing chloride
   still shows a small M+1 from ¹³C/²H.
@@ -234,7 +233,9 @@ update the test in the same commit, which is the point.
 **Adduct shifts.** `_ADDUCT_DB` computes Δ from CODATA proton/electron masses.
 Independent recomputation (m/z for `[M+H]+` = M + m(¹H⁺); `[M+2H]2+` =
 (M + 2·m(¹H⁺))/2) reproduces every tabulated shift; the negative-mode adducts
-follow the electron-balance convention stated in the module. **VALIDATED.**
+follow the electron-balance convention stated in the module. This is asserted in
+the suite by `TestAdductReferenceValues`, which recomputes all 14 shifts from
+separately stated CODATA 2018 / AME2020 constants. **VALIDATED.**
 
 **Known limitations / unvalidated assumptions.**
 * Only single and double neutron substitution is modelled at the nominal level;
