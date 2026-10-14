@@ -3,6 +3,9 @@ name = "msmcp"
 version = "1.0.0"
 description = "Model Context Protocol server for computational mass spectrometry"
 readme = "README.md"
+authors = [
+    { name = "Eric Janusson", email = "ericjanusson@outlook.com" },
+]
 requires-python = ">=3.13"
 dependencies = [
     "mcp[cli]>=2.0.0",
@@ -10,6 +13,13 @@ dependencies = [
     "pydantic>=2.12.5",
     "numpy>=1.26.4",
 ]
+
+[project.urls]
+Homepage = "https://msmcp.dev"
+Documentation = "https://msmcp.dev"
+Repository = "https://github.com/janusson/MSMCP"
+Issues = "https://github.com/janusson/MSMCP/issues"
+Changelog = "https://github.com/janusson/MSMCP/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = [
