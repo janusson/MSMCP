@@ -86,7 +86,7 @@ select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.mypy]
 python_version = "3.13"
-files = ["src", "tests"]
+files = ["src", "tests", "validation"]
 # The installed package is `msmcp` (src-layout); resolve `msmcp.*` imports
 # against the src/ tree.
 mypy_path = ["src"]
@@ -95,7 +95,7 @@ warn_redundant_casts = true
 
 [[tool.mypy.overrides]]
 # Optional / missing runtime modules without type stubs.
-module = ["rdkit", "massflow.*", "torch"]
+module = ["rdkit", "massflow.*", "torch", "matchms", "matchms.*"]
 ignore_missing_imports = true
 
 [tool.basedpyright]

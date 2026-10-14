@@ -1,0 +1,97 @@
+{
+  "dataset": {
+    "name": "MassBank",
+    "release": "2026.03",
+    "asset": "MassBank_NISTformat.msp",
+    "url": "https://github.com/MassBank/MassBank-data/releases/download/2026.03/MassBank_NISTformat.msp",
+    "licence": "CC-BY-4.0",
+    "doi": "10.5281/zenodo.3378723",
+    "sha256": "cf49e1b293f1c8c1b4a645123638826eea70db656bd76e09ea0c47a1a56fc269"
+  },
+  "matchms_version": "0.33.1",
+  "parameters": {
+    "seed": 20261014,
+    "tolerance_da": 0.02,
+    "min_peaks": 5,
+    "max_peaks": 300,
+    "precursor_range": [
+      100.0,
+      1200.0
+    ],
+    "n_query_compounds": 250,
+    "n_db_target": 3500,
+    "n_agreement_pairs": 20000,
+    "near_duplicate_cosine": 0.995
+  },
+  "counts": {
+    "filtered_records": 59061,
+    "queries": 250,
+    "database": 3499
+  },
+  "implementation_agreement": {
+    "n_pairs": 20000,
+    "median_abs_delta": 0.0,
+    "p95_abs_delta": 0.00018087091788018852,
+    "max_abs_delta": 0.42356958979066195,
+    "exact_agreement_frac": 0.9301,
+    "contested_pairs": 2273,
+    "contested_pairs_differing": 1398,
+    "uncontested_pairs_differing": 0,
+    "spearman_rho": 0.999425594432564,
+    "worst_pair": [
+      0.42356958979066195,
+      {
+        "query": "MSBNK-RIKEN-PR300485",
+        "db": "MSBNK-BAFG-CSL25011734610",
+        "msmcp": 0.08175421942620185,
+        "matchms": 0.5053238092168638
+      }
+    ],
+    "tolerances": {
+      "exact": 1e-09,
+      "median_abs": 0.01,
+      "p95_abs": 0.1,
+      "spearman": 0.99
+    },
+    "verdict": {
+      "median_ok": true,
+      "p95_ok": true,
+      "spearman_ok": true,
+      "uncontested_exact_ok": true
+    }
+  },
+  "identification_recovery": {
+    "msmcp": {
+      "naive": {
+        "answerable_queries": 250,
+        "skipped_no_alternative_record": 0,
+        "top1": 0.736,
+        "top5": 0.852,
+        "top10": 0.888
+      },
+      "strict": {
+        "answerable_queries": 248,
+        "skipped_no_alternative_record": 2,
+        "top1": 0.7379032258064516,
+        "top5": 0.8508064516129032,
+        "top10": 0.8870967741935484
+      }
+    },
+    "matchms": {
+      "naive": {
+        "answerable_queries": 250,
+        "skipped_no_alternative_record": 0,
+        "top1": 0.736,
+        "top5": 0.852,
+        "top10": 0.888
+      },
+      "strict": {
+        "answerable_queries": 248,
+        "skipped_no_alternative_record": 2,
+        "top1": 0.7379032258064516,
+        "top5": 0.8548387096774194,
+        "top10": 0.8870967741935484
+      }
+    }
+  }
+}

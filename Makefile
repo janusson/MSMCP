@@ -5,7 +5,7 @@
 # .python-version.  The `repomix` target additionally requires the `repomix`
 # CLI (https://repomix.com/, Node-based).
 
-.PHONY: install format lint test eval run repomix all
+.PHONY: install format lint test eval run repomix all validate-similarity
 
 install:            ## Create/update the virtualenv and sync all deps (incl. dev extras)
 	uv sync --extra dev
@@ -31,5 +31,8 @@ run:                ## Launch the MCP server on the stdio transport
 
 repomix:            ## Pack the repo into repomix-output.xml for AI analysis
 	repomix --style xml --output repomix-output.xml
+
+validate-similarity: ## Opt-in: independent similarity validation vs matchms (needs MSMCP_VALIDATION_DATA + network)
+	uv run --with "matchms==0.33.1" python validation/similarity_validation.py --data "$(MSMCP_VALIDATION_DATA)"
 
 all: install format lint test eval repomix ## Full pipeline: sync, format, lint, test, evaluate, repomix-pack
