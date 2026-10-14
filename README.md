@@ -24,18 +24,20 @@ Large acquisitions never enter the conversation: spectra are parsed into **serve
 7. [Connecting an LLM client](#connecting-an-llm-client)
 8. [An agent working through MSMCP](#an-agent-working-through-msmcp)
 9. [Tool reference](#tool-reference)
-10. [Supported input formats](#supported-input-formats)
-11. [Provenance](#provenance)
-12. [Spectral foundation models](#spectral-foundation-models)
-13. [Asynchronous job orchestration](#asynchronous-job-orchestration)
-14. [Developer ergonomics](#developer-ergonomics)
-15. [Repository layout](#repository-layout)
-16. [Known limitations & roadmap](#known-limitations--roadmap)
-17. [Security notes](#security-notes)
-18. [Configuration reference](#configuration-reference)
+10. [Instrument classes](#instrument-classes)
+11. [Supported input formats](#supported-input-formats)
+12. [Provenance](#provenance)
+13. [Spectral foundation models](#spectral-foundation-models)
+14. [Asynchronous job orchestration](#asynchronous-job-orchestration)
+15. [Developer ergonomics](#developer-ergonomics)
+16. [Repository layout](#repository-layout)
+17. [Known limitations & roadmap](#known-limitations--roadmap)
+18. [Security notes](#security-notes)
+19. [Configuration reference](#configuration-reference)
 
-For the full design — scope boundaries, layer rules, and the v1.0 acceptance
-criteria — see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+For the full design — scope boundaries, layer rules, and the acceptance
+criteria (v1.0, and the v1.1 criteria that follow) — see
+**[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 ---
 
@@ -238,13 +240,17 @@ Agent:   check_search_status(job_id="362c0267…")
      | Rank | Compound | Score | FDR (q-value) | Precursor m/z | Formula | …"
 
 Agent:   validate_precursor(theoretical_mass=194.0804, experimental_mass=194.0831)
-  → "VALIDATION REJECTED — Mass error: 13.9 ppm … Reconsider the molecular
-     formula, adduct assignment, or instrument calibration."
+  → "VALIDATION REJECTED
+     Mass error:        13.91 ppm
+     Instrument class:  generic (precursor tolerance 5.0 ppm)
+     … This is physically invalid for the hypothesised compound under the
+     generic class assumption. Reconsider the molecular formula, adduct
+     assignment, or instrument calibration."
 
 Agent:   release_reference(reference="ptr:spectrum:9f3c…")
   → "Released. The stored peaks are no longer available."
 
-Agent:   "The top hit is caffeine, but the precursor mass error (13.9 ppm)
+Agent:   "The top hit is caffeine, but the precursor mass error (13.91 ppm)
          fails validation — likely a sodiated adduct. Let me check…"
 ```
 
@@ -258,21 +264,56 @@ Thirteen tools are exposed to the model: compact Markdown (or a single sentence)
 
 | Tool | Module | Purpose |
 |---|---|---|
-| `ping` | `server.py` | Diagnostic health check |
+| `ping` | `tools/system.py` | Diagnostic health check |
 | `load_mzml_summary` | `tools/io.py` | First-*N*-spectra text summary of a local `.mzML` file |
 | `load_spectrum` | `tools/io.py` | Parse one spectrum from any supported format and register it server-side; returns a `DataReference` plus metadata and provenance |
 | `summarise_reference` | `tools/io.py` | Read a referenced spectrum back from server memory (no file re-read) |
 | `release_reference` | `tools/io.py` | Free a reference immediately rather than waiting for expiry |
 | `predict_adduct_offset` | `tools/chem.py` | Exact mass shift for 14 canonical adducts |
 | `annotate_isotopes` | `tools/chem.py` | M / M+1 / M+2 pattern from a formula or SMILES |
-| `validate_precursor` | `tools/similarity.py` | ppm mass-error gate at the 5.0 ppm threshold |
-| `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference) |
-| `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file |
-| `search_library` | `tools/search.py` | Asynchronous library search (job executor; classical or real-embedding scoring). `database_file` is read from disk for MSP/NIST-style text libraries (routed through the security boundary); any other path falls back to a labelled synthetic library. The **query** is always real data |
+| `validate_precursor` | `tools/similarity.py` | Mass-error gate at the instrument class's precursor tolerance (5.0 ppm for the default `generic` class) |
+| `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference). The matching window comes from `ms2_tolerance`, or the instrument class when it is unset |
+| `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file, using the instrument class's diagnostic-ion window and SNR bands |
+| `search_library` | `tools/search.py` | Asynchronous library search (job executor; classical or real-embedding scoring). `database_file` is read from disk for MSP/NIST-style text libraries (routed through the security boundary); any other path falls back to a labelled synthetic library. The **query** is always real data. Thresholds come from `instrument_class`; significance is read from a **fitted decoy upper tail**, so a q-value below the sampled floor is expressible and every report names the null model and its smallest attainable q |
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID. The report is delivered once; later polls return a short digest, and `full_report=True` re-requests it |
 | `cancel_search` | `tools/search.py` | Cancel a pending or running search job |
 
 Only `cancel_search` and `release_reference` mutate server state, and both advertise that on the wire.
+
+## Instrument classes
+
+Several tools apply an experimental threshold: `validate_precursor`'s precursor
+gate, `compute_cosine`'s and `search_library`'s m/z matching window,
+`generate_qc_summary`'s diagnostic-ion window and SNR bands, and
+`search_library`'s significance threshold and small-library floor. None of
+these is a bare literal. Each is resolved from the `instrument_class` argument
+(default `generic`), which names a documented profile in
+`src/msmcp/instruments.py`:
+
+| Class | Precursor gate | MS2 / diagnostic-ion window | SNR bands |
+|---|---|---|---|
+| `generic` (default) | 5.0 ppm | 0.02 Da | 5 / 20 |
+| `orbitrap` | 5.0 ppm | 0.01 Da | 5 / 20 |
+| `tof` | 15.0 ppm | 0.05 Da | 5 / 20 |
+| `ion_trap` | 0.5 Da | 0.5 Da | 5 / 20 |
+| `triple_quad` | 0.7 Da | 0.7 Da | 5 / 20 |
+
+Accurate-mass classes express the precursor gate in ppm; unit-resolution
+classes (`ion_trap`, `triple_quad`) use a Da window, because a ppm gate shrinks
+below one nominal mass at a few kDa and is meaningless on an instrument that
+cannot resolve fractions of a nominal mass. The FDR threshold (0.05) and the
+small-library floor (2000) are shared across classes — they are properties of
+the statistics, not of the mass analyser.
+
+The class and the values actually applied are always stated in the result: in
+the report body for `validate_precursor`, `compute_cosine` and
+`generate_qc_summary`, and in `Provenance.parameters` for `search_library`. An
+explicit `ms2_tolerance` on `compute_cosine` overrides the class default, and
+the response says which source the window came from. These are documented
+conventions, not measured acquisition parameters — MSMCP does not yet parse
+instrument model, resolution or calibration from a file (see *Known
+limitations & roadmap*) — so the class is the assumption a result was produced
+under, stated rather than hidden.
 
 ## Supported input formats
 
@@ -320,18 +361,21 @@ It is deliberately not a provenance framework: no graph, no query language, no s
 ```text
 LLM calls: predict_adduct_offset(adduct_string="[M+H]+")
 → "Adduct: [M+H]+
+   Polarity: positive
    Charge state: +1
-   Exact mass shift (Δ): +1.006728 Da
-   m/z offset for neutral M: M + 1.006728 Da"
+   Exact mass shift (Δ): +1.007276 Da
+   m/z offset for neutral M: M + 1.007276 Da"
 
 LLM calls: annotate_isotopes(identifier="C6H12O6")
 → "Monoisotopic mass: 180.0634 Da
    | M   | 180.0634 | 1.0000 |
-   | M+1 | 181.0721 | 0.0686 |
-   | M+2 | 182.0807 | 0.0147 |"
+   | M+1 | 181.0668 | 0.0686 |
+   | M+2 | 182.0681 | 0.0147 |"
 
 LLM calls: validate_precursor(theoretical_mass=180.0634, experimental_mass=180.0628)
-→ "VALIDATION PASSED — Mass error: 3.33 ppm"
+→ "VALIDATION PASSED
+   Mass error:        3.33 ppm
+   Instrument class:  generic (precursor tolerance 5.0 ppm)"
 ```
 
 Hallucinated adducts (e.g. `[M+H2O]+`) are explicitly rejected with the list of supported ionisation pathways, rather than silently producing plausible-looking numbers.
@@ -406,7 +450,7 @@ v1.0 ships `LocalAsyncExecutor`: CPU-bound work dispatched with `asyncio.to_thre
 
 ## Developer ergonomics
 
-- **Testing**: 500 pytest cases across `tests/` — chemistry (exact masses against literature values, adduct validation), similarity (5.0-ppm boundary arithmetic, greedy matching, embedding semantics), **spectral scoring** (`test_scoring.py`: the `SpectrumScorer` contract and its invariants — unmatched intensity must lower the score, empty/zero-intensity spectra score 0.0 not `nan`, scorers are pure and thread-safe), embedding backends (backend resolution, hermetic real-inference pipelines with stubbed models, checkpoint-load safety gating, stdio transport protection), the **data-reference store** (`test_pointers.py`: registration, immutability, malformed/unknown/expired/wrong-kind failures, namespace isolation, byte and count ceilings, concurrent access from real threads), **provenance** (`test_provenance.py`: immutability, JSON-safety, digests, the multi-step chain), the **job executor** (`test_executor.py`: submit/status/result/cancel, non-blocking dispatch, concurrency cap, TTL sweep, traceback-carrying failures), **ingestion** (`test_mgf.py`, `test_ingest.py`: MGF parsing and its malformed inputs, format dispatch, MassFlow-backed imzML including the stdout-logging guard and a corrupt-payload path), search (a full dispatcher → executor → poller round trip, the once-then-digest delivery contract and its re-request, real vs. synthetic halves of the pipeline, scorer routing, cancellation, failure), the **spectral library reader** (`test_library.py`: a real MSP library searched end to end, the security-boundary refusal, the pre-dispatch probe that makes a malformed library an immediate tool error, and an empty library that is read and reports no hits; `test_library_benchmark.py`: ground-truth per-perturbation recovery, including a perturbation that must fail to recover), mzML parsing, QC, the security boundary, the **wire contract** (`test_tool_schemas.py`), an **end-to-end workflow** (`test_workflow.py`: load → reference → summarise → search → provenance → release, plus the assertion that a 100k-peak spectrum serialises to under 4 kB), and an **end-to-end stdio smoke test** (`test_smoke_stdio.py`, the only test that drives the real transport: initialize handshake, `tools/list`, a `tools/call`, and a check that every stdout line parses as JSON-RPC). Tests run hermetically: embedding backends are pinned to the test/dev-only deterministic mocks and no network or external services are required.
+- **Testing**: over 500 pytest cases across `tests/` — chemistry (exact masses against literature values, adduct validation), similarity (5.0-ppm boundary arithmetic, greedy matching, embedding semantics), **spectral scoring** (`test_scoring.py`: the `SpectrumScorer` contract and its invariants — unmatched intensity must lower the score, empty/zero-intensity spectra score 0.0 not `nan`, scorers are pure and thread-safe), embedding backends (backend resolution, hermetic real-inference pipelines with stubbed models, checkpoint-load safety gating, stdio transport protection), the **data-reference store** (`test_pointers.py`: registration, immutability, malformed/unknown/expired/wrong-kind failures, namespace isolation, byte and count ceilings, concurrent access from real threads), **provenance** (`test_provenance.py`: immutability, JSON-safety, digests, the multi-step chain), the **job executor** (`test_executor.py`: submit/status/result/cancel, non-blocking dispatch, concurrency cap, TTL sweep, traceback-carrying failures), **ingestion** (`test_mgf.py`, `test_ingest.py`: MGF parsing and its malformed inputs, format dispatch, MassFlow-backed imzML including the stdout-logging guard and a corrupt-payload path), search (a full dispatcher → executor → poller round trip, the once-then-digest delivery contract and its re-request, real vs. synthetic halves of the pipeline, scorer routing, cancellation, failure), the **spectral library reader** (`test_library.py`: a real MSP library searched end to end, the security-boundary refusal, the pre-dispatch probe that makes a malformed library an immediate tool error, and an empty library that is read and reports no hits; `test_library_benchmark.py`: ground-truth per-perturbation recovery, including a perturbation that must fail to recover), mzML parsing, QC, the security boundary, the **wire contract** (`test_tool_schemas.py`), an **end-to-end workflow** (`test_workflow.py`: load → reference → summarise → search → provenance → release, plus the assertion that a 100k-peak spectrum serialises to under 4 kB), and an **end-to-end stdio smoke test** (`test_smoke_stdio.py`, the only test that drives the real transport: initialize handshake, `tools/list`, a `tools/call`, and a check that every stdout line parses as JSON-RPC). Tests run hermetically: embedding backends are pinned to the test/dev-only deterministic mocks and no network or external services are required.
 - **End-to-end evaluation**: `notebooks/eval_msmcp.ipynb` is the benchmark/stress suite — precursor and adduct boundaries, embedding shape/determinism/degenerate-input cases, real mzML parsing and QC, the full async search state machine (including failure, cancellation, lost-job and concurrency-cap behaviour), the server-side reference flow, and a per-tool diagnostic table. `tests/test_eval_notebook.py::test_eval_notebook_passes_every_check` executes every code cell headlessly and fails if any recorded check fails or if a registered tool is never exercised; `make eval` runs it and prints the per-tool roll-up (a machine-readable copy lands in `notebooks/.eval_artifacts/eval_report.json`). It is marked `eval` and excluded from the default `pytest` run so `make test` stays fast — `make all` runs both. A structural guard (`test_notebook_is_structurally_valid`) runs with the normal suite and fails if the notebook stops parsing, compiles, or has stored outputs.
 - **Where parameter documentation lives**: the MCP SDK builds each tool's `inputSchema` from the **function signature**, not from Pydantic models. Descriptions therefore belong on `Annotated[..., Field(description=...)]` in the signature; a description added only to an input model never reaches the host. The Pydantic models in each `tools/` module are for *validation* only (they are what raises `ValidationError` on bad arguments), and they deliberately carry no `description=`. `tests/test_tool_schemas.py` fails the build if a parameter reaches the wire undocumented, or if a body constraint (e.g. `ge=1, le=50`) is missing from the schema.
 - **Linting/typing**: `ruff` (E/F/I/UP/B/SIM/RUF), `mypy` and `basedpyright` all run clean over `src/`, `tests/` and the evaluation notebook, via `uv run ruff check .`, `uv run mypy` and `uv run basedpyright`. There are **no per-file suppressions for source code and no `ignore_errors` overrides**: the temporary debt from the earlier milestones has been removed rather than relocated. The only remaining ignore is `E402` on the notebook, where a cell must set environment flags before importing `msmcp`. The gitignored `drafts/` scratch directory is excluded from all three — it holds one-off scripts and audit probes, not shipped code; the audit *report* itself is kept in `docs/audit/`.
@@ -423,9 +467,10 @@ msmcp/
 ├── uv.lock                      # reproducible lockfile
 ├── Makefile                     # developer pipeline: install/format/lint/test/eval/all
 ├── README.md                    # this file
-├── ARCHITECTURE.md              # v1.0 scope, layers, limitations, acceptance criteria
+├── ARCHITECTURE.md              # scope, layers, limitations, v1.0 + v1.1 acceptance criteria
 ├── CHANGELOG.md                 # what landed, by release
 ├── docs/
+│   ├── roadmap.md               # maintained plan: current state + v1.1 criteria
 │   ├── mcp-server-configuration.md  # unedited design-session transcript (host setup)
 │   └── audit/
 │       └── 2026-09-22-standard-audit.md  # dated audit: findings and ordered backlog
@@ -442,6 +487,7 @@ msmcp/
 │   ├── mgf.py                   # dependency-free MGF reader (MSMCP-owned)
 │   ├── massflow_io.py           # MassFlow-backed imzML reader + stdout-logging guard
 │   ├── library.py               # LibraryProvider + MSP/NIST text library reader
+│   ├── instruments.py           # instrument-class defaults for every experimental threshold
 │   ├── state/
 │   │   ├── pointers.py          # DataReference + PointerStore (bounded, TTL, namespaces)
 │   │   └── store.py             # the process-wide store and tool-facing helpers
@@ -456,7 +502,8 @@ msmcp/
 │       ├── chem.py              # adduct shifts, isotope annotation
 │       ├── similarity.py        # ppm validation, classical + embedding cosine
 │       ├── qc.py                # truthful QC metrics
-│       └── search.py            # executor-backed library scan
+│       ├── search.py            # executor-backed library scan
+│       └── system.py            # server-level diagnostic tools (ping)
 ├── notebooks/
 │   ├── eval_msmcp.ipynb         # end-to-end evaluation/benchmark suite (see `make eval`)
 │   └── .eval_artifacts/         # generated mzML fixtures + eval_report.json (gitignored)
@@ -471,6 +518,7 @@ msmcp/
     ├── test_mzml.py
     ├── test_mgf.py
     ├── test_ingest.py           # format dispatch + MassFlow imzML integration
+    ├── test_instruments.py      # instrument-class defaults and their documented provenance
     ├── test_qc.py
     ├── test_pointers.py         # the data-reference store
     ├── test_provenance.py
@@ -479,6 +527,8 @@ msmcp/
     ├── test_library_benchmark.py # ground-truth per-perturbation recovery
     ├── test_workflow.py         # end-to-end: load -> reference -> search -> provenance
     ├── test_tool_schemas.py     # wire contract: titles, annotations, param docs, constraint drift
+    ├── test_server_contract.py  # server instructions + the installed-SDK Tasks assumption
+    ├── test_zed_config.py       # .zed/settings.json and the README launch snippet agree
     ├── test_eval_notebook.py    # runs the eval notebook headlessly (`make eval`)
     └── test_smoke_stdio.py      # end-to-end JSON-RPC session over a real stdio pipe
 ```
@@ -496,14 +546,14 @@ msmcp/
 - **MS-Numpress-compressed mzML arrays** need the optional `pynumpress` package and report a missing-dependency error without it.
 - **Hardware control is out of scope for this repository, not just for v1.0.** Direct instrument control, actuation and the safety interlock layer that must precede them belong to a **different project**. MSMCP is a data and computation interface; the MCP application layer must never be the only barrier between a model and physical hardware. There is no instrument-control code here and none will be added.
 
-See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full limitations list and the v1.0 acceptance criteria.
+See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full limitations list and the acceptance criteria (v1.0 and v1.1).
 
 ## Security notes
 
 MSMCP is a **local, single-user server**: the MCP host spawns it as a child process with your credentials, so anything the server can do, a misused agent can do too. Keep these boundaries in mind:
 
 - **Trust boundary** — anyone who can drive the LLM client can drive the server. Run it only on machines you own; it speaks stdio by design and must never be exposed as a network service.
-- **File access** — every file-reading tool (`load_mzml_summary`, `load_spectrum`, `generate_qc_summary`, and both `search_library`'s query and its `database_file` library path) is confined to a single allowed root directory (`src/msmcp/security.py`). The default root is the server's working directory, override it with `MSMCP_ALLOWED_ROOT`. Paths that resolve outside that root — including symlinks that point outside it — are rejected with `PathEscapeError`, and for imzML the paired `.ibd` payload is checked against the same root. Files are also capped by a size limit (`MSMCP_MAX_FILE_SIZE_BYTES`, default 500 MiB) and a per-request spectrum-count limit (`MSMCP_MAX_SPECTRA`). Access failures are reported truthfully and distinctly (`InaccessiblePathError` for missing/unreadable paths, `MalformedFileError` for unparseable data, `UnsupportedFormatError` for vendor formats, `MissingDependencyError` when an optional decoder is absent) rather than as a generic failure.
+- **File access** — every file-reading tool (`load_mzml_summary`, `load_spectrum`, `generate_qc_summary`, and both `search_library`'s query and its `database_file` library path) is confined to a single allowed root directory (`src/msmcp/security.py`). The default root is the server's working directory, override it with `MSMCP_ALLOWED_ROOT`. Paths that resolve outside that root — including symlinks that point outside it — are rejected with `PathEscapeError`, and for imzML the paired `.ibd` payload is checked against the same root. Files are also capped by a size limit (`MSMCP_MAX_FILE_SIZE_BYTES`, default 500 MiB) and a per-request spectrum-count limit (`MSMCP_MAX_SPECTRA`); for compressed input — a `.gz` file or a zlib-compressed mzML binary array — the size limit is enforced against the **inflated** bytes as they are read (`bounded_stream` in `src/msmcp/security.py`), so a small compressed file cannot expand past the budget. Access failures are reported truthfully and distinctly (`InaccessiblePathError` for missing/unreadable paths, `MalformedFileError` for unparseable data, `UnsupportedFormatError` for vendor formats, `MissingDependencyError` when an optional decoder is absent) rather than as a generic failure.
 - **Server-side data** — registered references are bounded (`MSMCP_MAX_REFERENCES`, `MSMCP_MAX_TOTAL_BYTES`), expire after `MSMCP_REFERENCE_TTL_SECONDS` (default 3600), are held read-only, and are namespaced. Exceeding a limit refuses the request; it never silently discards data a caller still holds. Reference identifiers are opaque random tokens, never object ids, addresses or paths.
 - **Execution** — concurrent jobs are capped by the executor (default 4). A cancelled job's partial output is discarded rather than returned.
 - **Checkpoint loading** — the LSM-MS2 adapter deserialises a checkpoint file (`torch.jit.load`, falling back to `torch.load` with `weights_only=True`); checkpoint files can execute arbitrary code, so only point `MSMCP_LSM_MS2_CKPT` at files you trust. A checkpoint that needs full-pickle loading is **rejected unless `MSMCP_LSM_MS2_ALLOW_UNSAFE=1` explicitly opts in** — that fallback (`torch.load` without `weights_only`) can execute arbitrary code from the file. The DreaMS adapter downloads pre-trained weights from the upstream repository on first use — pin the `dreams` install to a commit you trust.
@@ -516,13 +566,18 @@ MSMCP is a **local, single-user server**: the MCP host spawns it as a child proc
 |---|---|---|
 | `MSMCP_ALLOWED_ROOT` | process working directory | Filesystem root every file-reading tool is confined to |
 | `MSMCP_MAX_FILE_SIZE_BYTES` | 500 MiB | Per-file size ceiling |
-| `MSMCP_MAX_SPECTRA` | 1000 | Spectra a single request may ask to process |
+| `MSMCP_MAX_SPECTRA` | 50000 | Spectra a single request may process (`generate_qc_summary` caps here and states the cap in its report) |
 | `MSMCP_MAX_REFERENCES` | 128 | Live server-side data references |
 | `MSMCP_MAX_TOTAL_BYTES` | 512 MiB | Summed payload size held by the reference store |
 | `MSMCP_REFERENCE_TTL_SECONDS` | 3600 | Reference lifetime (`0` disables expiry) |
 | `MSMCP_EMBEDDING_BACKEND` | `real` | `real` requires real inference; `mock` selects the test/dev-only stand-ins |
 | `MSMCP_LSM_MS2_CKPT` | unset | Path to a bring-your-own LSM-MS2 checkpoint |
 | `MSMCP_LSM_MS2_ALLOW_UNSAFE` | unset | `1` opts into full-pickle checkpoint loading (unsafe) |
+
+Instrument-specific thresholds are deliberately **not** environment variables:
+they are the per-call `instrument_class` argument described in
+[Instrument classes](#instrument-classes), so the assumption behind a result
+travels with the result rather than with the server's process environment.
 
 ---
 

@@ -33,8 +33,8 @@ from typing import IO, cast
 
 import numpy as np
 
+from msmcp import security
 from msmcp.errors import (
-    InaccessiblePathError,
     MalformedFileError,
     MissingDependencyError,
     UnsupportedFormatError,
@@ -116,7 +116,7 @@ def resolve_mzml_path(
     """
     resolved = resolve_path(path, policy)  # PathEscapeError
     _check_supported_format(resolved)  # UnsupportedFormatError
-    _check_readable(resolved)  # InaccessiblePathError
+    security.validate_readable_file(resolved)  # InaccessiblePathError
     validate_file_size(resolved, policy)  # FileSizeExceededError
     return resolved
 
@@ -153,33 +153,6 @@ def _check_supported_format(path: Path) -> None:
     )
 
 
-def _check_readable(path: Path) -> None:
-    try:
-        path.stat()
-    except FileNotFoundError as exc:
-        raise InaccessiblePathError(f"File not found: '{path}'") from exc
-    except PermissionError as exc:
-        raise InaccessiblePathError(
-            f"Permission denied reading '{path}': {exc}"
-        ) from exc
-    except OSError as exc:
-        raise InaccessiblePathError(f"Cannot access '{path}': {exc}") from exc
-
-    if not path.is_file():
-        raise InaccessiblePathError(f"Not a regular file: '{path}'")
-
-    if not _is_readable(path):
-        raise InaccessiblePathError(f"File is not readable: '{path}'")
-
-
-def _is_readable(path: Path) -> bool:
-    try:
-        with path.open("rb"):
-            return True
-    except OSError:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Low-level XML / binary decoding
 # ---------------------------------------------------------------------------
@@ -213,13 +186,77 @@ def _to_float_or_none(raw: str | None) -> float | None:
 
 
 def _open_binary(path: Path) -> IO[bytes]:
-    """Open *path* for binary reading, transparently handling gzip."""
+    """Open *path* for binary reading, transparently handling gzip.
+
+    A gzip payload is wrapped so the file-size ceiling applies to the
+    *decompressed* bytes read, not only to the bytes on disk (see
+    :func:`msmcp.security.bounded_stream`).
+    """
     handle = path.open("rb")
     magic = handle.read(2)
     handle.seek(0)
     if magic == b"\x1f\x8b":
-        return cast(IO[bytes], gzip.GzipFile(fileobj=handle))
+        buffered = gzip.GzipFile(fileobj=handle)
+        bounded = security.bounded_stream(
+            buffered, security.DEFAULT_POLICY.max_file_size_bytes
+        )
+        return cast(IO[bytes], bounded)
     return handle
+
+
+def _zlib_decompress_bounded(raw: bytes, max_bytes: int) -> bytes:
+    """zlib-decompress an mzML ``<binary>`` payload, bounded by *max_bytes*.
+
+    The ``.gz`` readers bound the *file-level* inflate (see
+    :func:`msmcp.security.bounded_stream`), but a plain ``.mzML`` carries its
+    arrays as base64-encoded zlib blobs that inflate inside the parser, so the
+    file-level guard never sees them.  Without a ceiling here a small file could
+    still make the server materialise an arbitrarily large array — the same
+    unbounded-blob concern the byte budget exists to close.  The decompressor is
+    driven with a hard output limit, so the budget is enforced as the data is
+    produced rather than after it has been materialised.
+
+    Raises :class:`~msmcp.errors.MalformedFileError` for corrupt or truncated
+    zlib and :class:`~msmcp.security.FileSizeExceededError` when the inflated
+    array would exceed the budget.
+    """
+
+    def _malformed() -> MalformedFileError:
+        return MalformedFileError("mzML <binary> payload failed zlib decompression.")
+
+    def _too_large() -> security.FileSizeExceededError:
+        return security.FileSizeExceededError(
+            f"A zlib-compressed mzML <binary> payload inflates beyond the "
+            f"configured maximum of {max_bytes} bytes; refusing to read further.  "
+            f"A compressed array is bounded by its inflated size, not only by "
+            f"the bytes on disk."
+        )
+
+    if max_bytes <= 0:
+        try:
+            return zlib.decompress(raw)
+        except zlib.error as exc:
+            raise _malformed() from exc
+
+    decompressor = zlib.decompressobj()
+    try:
+        out = decompressor.decompress(raw, max_bytes + 1)
+    except zlib.error as exc:
+        raise _malformed() from exc
+    # ``unconsumed_tail`` is non-empty when the output limit was hit with input
+    # still to process: the stream inflates past the budget, so stop now rather
+    # than materialise any more of it.
+    if len(out) > max_bytes or decompressor.unconsumed_tail:
+        raise _too_large()
+    try:
+        out += decompressor.flush()
+    except zlib.error as exc:
+        raise _malformed() from exc
+    if len(out) > max_bytes:
+        raise _too_large()
+    if not decompressor.eof:
+        raise _malformed()
+    return out
 
 
 def _decode_binary(text: str, *, compression: str, precision: str) -> np.ndarray:
@@ -243,12 +280,7 @@ def _decode_binary(text: str, *, compression: str, precision: str) -> np.ndarray
         raise MalformedFileError("mzML <binary> payload is not valid base64.") from exc
 
     if compression == "zlib":
-        try:
-            raw = zlib.decompress(raw)
-        except zlib.error as exc:
-            raise MalformedFileError(
-                "mzML <binary> payload failed zlib decompression."
-            ) from exc
+        raw = _zlib_decompress_bounded(raw, security.DEFAULT_POLICY.max_file_size_bytes)
 
     dtype = np.dtype("<f8") if precision == "64" else np.dtype("<f4")
     if len(raw) % dtype.itemsize:

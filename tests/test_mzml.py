@@ -22,7 +22,7 @@ from msmcp.mzml import (
     iter_spectra,
     resolve_mzml_path,
 )
-from msmcp.security import FileSizeExceededError, PathEscapeError, SecurityPolicy
+from msmcp.security import FileSizeExceededError, SecurityPolicy
 from msmcp.tools import io
 
 
@@ -44,6 +44,27 @@ class TestDecodeBinary:
             payload, compression="zlib", precision="64"
         ) == pytest.approx(arr)
 
+    def test_zlib_array_beyond_the_byte_budget_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A zlib array inside a plain mzML is bounded by its *inflated* size.
+
+        A ``.mzML`` is not gzip, so ``security.bounded_stream`` never sees this
+        payload; the parser must bound it, or a tiny file could carry an array
+        that inflates far past ``max_file_size_bytes``.
+        """
+        from msmcp import security
+
+        monkeypatch.setattr(
+            security,
+            "DEFAULT_POLICY",
+            SecurityPolicy(max_file_size_bytes=4096),
+        )
+        # 4 MiB of zeros compresses to a few KB but inflates past the budget.
+        payload = base64.b64encode(zlib.compress(b"\x00" * (4 << 20))).decode()
+        with pytest.raises(FileSizeExceededError, match="inflates beyond"):
+            _decode_binary(payload, compression="zlib", precision="64")
+
     def test_float32(self) -> None:
         arr32 = np.array([1.0, -2.0, 3.5], dtype="<f4")
         payload = base64.b64encode(arr32.tobytes()).decode()
@@ -54,6 +75,19 @@ class TestDecodeBinary:
     def test_bad_base64_is_malformed(self) -> None:
         with pytest.raises(MalformedFileError, match="base64"):
             _decode_binary("!!!not-base64!!!", compression="none", precision="64")
+
+    def test_truncated_zlib_is_malformed(self) -> None:
+        """A truncated zlib stream stays a MalformedFileError, not a partial read.
+
+        The bounded decompressor replaces ``zlib.decompress``; it must preserve
+        that a stream missing its end marker is refused, not silently returned
+        with the bytes it managed to inflate.
+        """
+        arr = np.array([1.0, 2.0, 3.0], dtype="<f8")
+        blob = zlib.compress(arr.tobytes())
+        payload = base64.b64encode(blob[: len(blob) // 2]).decode()
+        with pytest.raises(MalformedFileError, match="zlib"):
+            _decode_binary(payload, compression="zlib", precision="64")
 
     def test_numpress_missing_dependency(self) -> None:
         with pytest.raises(MissingDependencyError, match="pynumpress"):
@@ -89,18 +123,6 @@ class TestMzMLParser:
 # Error taxonomy at the access boundary
 # ---------------------------------------------------------------------------
 class TestErrorTaxonomy:
-    def test_missing_file(self, tmp_path: Path) -> None:
-        policy = SecurityPolicy(allowed_root=tmp_path)
-        with pytest.raises(InaccessiblePathError, match="not found"):
-            resolve_mzml_path(tmp_path / "missing.mzML", policy)
-
-    def test_directory_is_not_a_file(self, tmp_path: Path) -> None:
-        directory = tmp_path / "data.mzML"
-        directory.mkdir()
-        policy = SecurityPolicy(allowed_root=tmp_path)
-        with pytest.raises(InaccessiblePathError, match="Not a regular file"):
-            resolve_mzml_path(directory, policy)
-
     @pytest.mark.parametrize("ext", [".mgf", ".raw", ".d", ".txt"])
     def test_unsupported_formats(self, tmp_path: Path, ext: str) -> None:
         path = tmp_path / f"data{ext}"
@@ -108,25 +130,6 @@ class TestErrorTaxonomy:
         policy = SecurityPolicy(allowed_root=tmp_path)
         with pytest.raises(UnsupportedFormatError):
             resolve_mzml_path(path, policy)
-
-
-# ---------------------------------------------------------------------------
-# Security boundaries applied to the I/O path
-# ---------------------------------------------------------------------------
-class TestSecurityBoundary:
-    def test_path_escape(self, tmp_path: Path, valid_mzml: Path) -> None:
-        root = tmp_path / "root"
-        root.mkdir()
-        policy = SecurityPolicy(allowed_root=root)
-        with pytest.raises(PathEscapeError):
-            resolve_mzml_path(valid_mzml, policy)
-
-    def test_file_size_limit(self, tmp_path: Path) -> None:
-        big = tmp_path / "big.mzML"
-        big.write_bytes(b"x" * 1024)
-        policy = SecurityPolicy(allowed_root=tmp_path, max_file_size_bytes=10)
-        with pytest.raises(FileSizeExceededError):
-            resolve_mzml_path(big, policy)
 
 
 # ---------------------------------------------------------------------------

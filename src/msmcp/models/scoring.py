@@ -23,8 +23,9 @@ Semantics every implementation must preserve
 
 Cost is part of the contract
 ----------------------------
-The null model scores ``NULL_DECOY_MULTIPLIER`` decoys per library spectrum,
-so a scorer's per-pair cost *is* the search cost.  :meth:`SpectrumScorer.score_many`
+The null model scores a fixed ``NULL_SAMPLE_SIZE`` decoy sample per query — a
+constant set by :mod:`msmcp.tools.search`, not a multiple of the library — so a
+scorer's per-pair cost *is* the search cost.  :meth:`SpectrumScorer.score_many`
 exists for that reason: it is the method the null model calls, and it is where an
 implementation amortises query-side work (the classical scorer prepares the
 query's norms once; the embedding scorer embeds the query once instead of once

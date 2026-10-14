@@ -19,15 +19,17 @@ Nothing is deleted from either. Completed and abandoned work stays in the record
   `gate` status check (`ruff format --check`, `ruff check`, `mypy`, `basedpyright`, `pytest`,
   `make eval`) and forbids deletion and force-push.
 - **The spectral-library reader is on `main` and deliberately unreleased.** `#12`, the fitted
-  upper-tail null, must land before any release that includes it. So `main` is ahead of the released
-  version by design, and the next release is not a formality.
+  upper-tail null, was the release blocker; it has now landed on the working branch
+  (`msmcp.models.null_model`), so a release that includes the reader is no longer waiting on
+  statistics. The version still stays `1.0.0` until that release is cut — see *Version policy*.
 - **What the reader can do today.** It opens an MSP/NIST-style library (`.msp`, `.msp.gz`) through
   the same security boundary as an acquisition and searches it for real. It reads the
   `m/z:intensity` spelling the Fiehn/Golm GMD exports use, skips and counts metadata-only records
   rather than failing, and refuses an empty query spectrum before dispatch. Verified against
   `GNPS-LIBRARY.msp` (15,749 records), a 96-library collection, and a real Bruker maXis acquisition.
-- **What it cannot do.** It cannot express a q-value below the sampled floor, and its cost is linear
-  in library size.
+- **What it cannot do.** The scan is exhaustive, so its cost stays linear in library size (the null
+  is now constant). The fitted tail is a method-of-moments generalised-Pareto approximation, measured
+  against the sampled p-values rather than exact, and the reader still covers only MSP/NIST text.
 
 ---
 
@@ -35,13 +37,14 @@ Nothing is deleted from either. Completed and abandoned work stays in the record
 
 ### Why this milestone exists
 
-The reader works. What it does not have is a statistical floor that holds at library scale: the null
-scores 40 decoys per library spectrum (`NULL_DECOY_MULTIPLIER` in `src/msmcp/tools/search.py`),
-which is linear in library size — 2.9 s at 2,200 spectra, ~130 s at 10⁵ — and floors the attainable
-q at ≈0.025. "Searches a real library" and "reports a trustworthy significance" are different
-claims, and only the first is true today.
+The reader worked, but its statistical floor did not hold at library scale: the null scored 40 decoys
+per library spectrum (`NULL_DECOY_MULTIPLIER` in `src/msmcp/tools/search.py`), linear in library size
+— 2.9 s at 2,200 spectra, ~130 s at 10⁵ — and floored the attainable q at ≈0.025, so "searches a real
+library" and "reports a trustworthy significance" were different claims.
 
-The milestone also completes the reader's format coverage and adds the acquisition context that
+`#12` has now landed: `msmcp.models.null_model` fits the decoy upper tail and `search_library` reads
+significance from it over a **fixed** decoy sample, so the sampled floor is gone and the null cost is
+constant. What remains for v1.1 is the reader's format coverage and the acquisition context that
 makes a match interpretable.
 
 ### Acceptance criteria
@@ -88,8 +91,8 @@ and what would have to change first.
 ## Version policy
 
 The version stays `1.0.0` until a release includes the library reader. The v1.1 criteria are declared
-in `ARCHITECTURE.md`; declaring them is not the same as meeting them, and nothing here bumps a
-version or cuts a release.
+in `ARCHITECTURE.md`; `#12` now meets its three, but the format-coverage and acquisition-context
+criteria are still open, and nothing here bumps a version or cuts a release.
 
 ## Source material
 

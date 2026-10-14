@@ -29,8 +29,8 @@ from typing import IO, Final, cast
 
 import numpy as np
 
+from msmcp import security
 from msmcp.errors import (
-    InaccessiblePathError,
     MalformedFileError,
     UnsupportedFormatError,
 )
@@ -64,34 +64,26 @@ def resolve_mgf_path(
         raise UnsupportedFormatError(
             f"'{resolved.suffix}' is not an MGF file.  Expected a .mgf or .mgf.gz file."
         )
-    _check_readable(resolved)
+    security.validate_readable_file(resolved)
     validate_file_size(resolved, policy)  # FileSizeExceededError
     return resolved
 
 
-def _check_readable(path: Path) -> None:
-    try:
-        path.stat()
-    except FileNotFoundError as exc:
-        raise InaccessiblePathError(f"File not found: '{path}'") from exc
-    except PermissionError as exc:
-        raise InaccessiblePathError(
-            f"Permission denied reading '{path}': {exc}"
-        ) from exc
-    except OSError as exc:
-        raise InaccessiblePathError(f"Cannot access '{path}': {exc}") from exc
-
-    if not path.is_file():
-        raise InaccessiblePathError(f"Not a regular file: '{path}'")
-
-
 def _open_text(path: Path) -> IO[str]:
-    """Open *path* as text, transparently handling gzip."""
+    """Open *path* as text, transparently handling gzip.
+
+    A gzip payload is bounded by its *decompressed* size, not only by the bytes
+    on disk (see :func:`msmcp.security.bounded_stream`).
+    """
     handle = path.open("rb")
     magic = handle.read(2)
     handle.seek(0)
     if magic == b"\x1f\x8b":
-        return io.TextIOWrapper(cast(IO[bytes], gzip.GzipFile(fileobj=handle)))
+        buffered = gzip.GzipFile(fileobj=handle)
+        bounded = security.bounded_stream(
+            buffered, security.DEFAULT_POLICY.max_file_size_bytes
+        )
+        return io.TextIOWrapper(cast(IO[bytes], bounded))
     return io.TextIOWrapper(handle)
 
 
