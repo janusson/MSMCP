@@ -357,6 +357,11 @@ during the v1.0 work:
    most recent deliveries. A job polled again after 1024 later searches re-sends
    its report once before digesting; a durable executor would keep this record
    beside the job instead.
+8. **Distribution is prepared but not published.** The repository's
+   `Dockerfile` is a local, stdio-only packaging starting point and builds from
+   the committed `uv.lock`. There is no registry manifest, published package,
+   signed image, or hosted runtime yet; those require release decisions beyond
+   this source-tree change.
 
 ## Scientific validation
 

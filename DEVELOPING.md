@@ -55,9 +55,34 @@ v1.0 ships `LocalAsyncExecutor`: CPU-bound work dispatched with `asyncio.to_thre
 
 **Statuses are MCP task statuses** (`working` / `completed` / `failed` / `cancelled`), and `JobStatusSnapshot.to_task_dict()` renders a snapshot into the shape of an MCP `Task`. The installed SDK (`mcp` 2.1.1) defines the Tasks *types* but does not dispatch `tasks/get`, `tasks/result` or `tasks/cancel` — they are absent from its request unions — so MSMCP exposes the same semantics through its own polling tool and keeps the wire representation aligned. Inventing an application-level task protocol would be spec-incompatible and is deliberately not done.
 
+The readiness check is deliberately structural rather than version-based:
+`tests/test_server_contract.py::test_installed_sdk_does_not_dispatch_tasks`
+intersects the installed SDK's `ClientRequest` and `ServerRequest` unions with
+the Tasks request types. Run it with:
+
+```bash
+uv run pytest tests/test_server_contract.py -q
+```
+
+If that test fails, the SDK has started dispatching one or more Tasks methods;
+revisit the adapter and the #7 documentation before upgrading the release.
+
 **Cancellation is honest about its limits:** a worker thread cannot be interrupted, so cancelling marks the job terminal and *discards* its output. A caller that sees `cancelled` never sees a partial result.
 
 **Portability:** the executor is the seam for a process pool, a job queue or Prefect. Nothing in v1.0 depends on one, and `JobExecutor` is what makes adding one a contained change.
+
+## Distribution checks
+
+The root `Dockerfile` is intentionally a local packaging starting point, not a
+published artifact. It uses `uv sync --frozen` against `uv.lock` and launches
+the same stdio entry point as a source checkout. Build it locally with:
+
+```bash
+docker build -t msmcp:local .
+```
+
+Registry metadata, package publication, image signing, and an offline install
+procedure remain open parts of issue #19.
 
 ## Developer ergonomics
 
