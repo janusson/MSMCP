@@ -238,6 +238,24 @@ The `Makefile` wraps these into one pipeline: `make lint`, `make test`, `make ev
 
 Re-run `uv sync --extra dev` after changing `pyproject.toml`. The optional `repomix` pack (Node-based) is run as `repomix --style xml --output repomix-output.xml`.
 
+## Container image (pre-release packaging)
+
+The repository includes a minimal `Dockerfile` for local packaging checks. It
+uses the committed `uv.lock` with `uv sync --frozen`, keeps the server on its
+stdio transport, and does not add a network service or runtime credentials:
+
+```bash
+docker build -t msmcp:local .
+docker run --rm -i \
+  -e MSMCP_ALLOWED_ROOT=/data \
+  -v "$PWD/examples:/data:ro" \
+  msmcp:local
+```
+
+This image is a reproducible container starting point, not a published release
+or registry entry. Package publication, registry metadata, and release signing
+remain separate work under issue #19.
+
 ## Scientific validation
 
 MSMCP keeps its *scientific* claims, its software tests and its identification confidence as separate things, and documents the evidence for each:
@@ -503,9 +521,9 @@ user- and agent-facing story.
 
 - **Search names which library answered it**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. A library path in a readable format (MSP/NIST text or MGF, `.msp`/`.msp.gz`/`.mgf`/`.mgf.gz`) is read from disk through the same `SecurityPolicy` as acquisitions — allowed root, size limit, read-only — and is refused with `PathEscapeError` if it resolves outside the allowed root. A path with no reader still falls back to a synthetic library, and the report says which path was used, in a banner ahead of any hit table. Still to come is the local SQLite peak store.
 - **In-process job state**: jobs live in server memory and do not survive a restart; the poller reports a lost job as failed rather than pending. A durable executor is a drop-in `JobExecutor` implementation.
-- **MCP Tasks are not dispatchable by the installed SDK**: `mcp` 2.1.1 ships the Tasks types but omits `tasks/get`, `tasks/result` and `tasks/cancel` from its request unions, so no server can answer them. MSMCP keeps its snapshots in the MCP `Task` shape and exposes the semantics through `check_search_status` instead of inventing a protocol.
-- **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself, because MassFlow 0.1.x is imaging-only. `.imzML` goes through MassFlow. Vendor formats are refused with conversion guidance.
-- **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 awaits a public weights release; its adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
+- **MCP Tasks are not dispatchable by the installed SDK**: the pinned `mcp` 2.1.1 ships the Tasks types but omits `tasks/get`, `tasks/result` and `tasks/cancel` from its request unions, so no server can answer them. The structural regression check in `tests/test_server_contract.py` is the readiness signal for #7; if it fails after an SDK upgrade, revisit the adapter before release. MSMCP keeps its snapshots in the MCP `Task` shape and exposes the semantics through `check_search_status` instead of inventing a protocol.
+- **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself, because the pinned MassFlow 0.1.x line is imaging-only. `.imzML` goes through MassFlow. Vendor formats are refused with conversion guidance. Revisit issue #10 when the installed MassFlow line exposes an mzML or MGF reader; the ingestion table and provenance backend must be updated together.
+- **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 has no public weights wired into this repository; its bring-your-own-checkpoint adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`real` / `mock`). Neither is required for core MSMCP to run or to be tested. Revisit issue #9 when upstream publishes usable inference weights.
 - **Whole-slide images**: MassFlow materialises one placeholder per pixel when loading an imzML acquisition, so very large images are bounded by MassFlow's own behaviour.
 - **MS-Numpress-compressed mzML arrays** need the optional `pynumpress` package and report a missing-dependency error without it.
 - **Hardware control is out of scope for this repository, not just for v1.0.** Direct instrument control, actuation and the safety interlock layer that must precede them belong to a **different project**. MSMCP is a data and computation interface; the MCP application layer must never be the only barrier between a model and physical hardware. There is no instrument-control code here and none will be added.
