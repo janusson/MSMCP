@@ -347,8 +347,10 @@ during the v1.0 work:
    forever.
 3. **MSMCP owns its mzML and MGF readers.** That is a deliberate consequence of
    MassFlow 0.1.x being imaging-only, not an architectural preference.
-4. **MS-Numpress-compressed mzML arrays** require the optional `pynumpress`
-   package and report a missing-dependency error without it.
+4. **MS-Numpress-compressed mzML arrays** use the optional `pynumpress`
+   package (`uv sync --extra numpress`). Linear, PIC, SLOF, and zlib-combined
+   arrays are supported. Python preflight checks reject malformed streams and
+   declared-length mismatches before calling the native decoder.
 5. **MassFlow materialises one placeholder per pixel** when loading an imzML
    acquisition, so whole-slide images are bounded by MassFlow's own behaviour.
 6. **The eval notebook is the slowest artefact** to run (`make eval`, ~15 s).

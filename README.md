@@ -376,7 +376,7 @@ The reader is chosen from the file extension; every reader produces the same spe
 
 | Format | Reader | Notes |
 |---|---|---|
-| `.mzML`, `.mzML.gz` | `msmcp.mzml` | dependency-free; zlib-compressed binary arrays supported |
+| `.mzML`, `.mzML.gz` | `msmcp.mzml` | dependency-free for plain/zlib arrays; MS-Numpress uses the optional `numpress` extra |
 | `.mgf`, `.mgf.gz` | `msmcp.mgf` | strict: an unparseable peak line raises rather than being skipped |
 | `.imzML` (+ `.ibd`) | MassFlow | imaging data; pixel coordinates are preserved on each spectrum |
 | `.raw`, `.d`, `.wiff`, `.mzXML` | — | recognised and refused, naming the vendor and suggesting MSConvert |
@@ -388,7 +388,7 @@ Two MassFlow behaviours are worth knowing before debugging an unexpected directo
 - Importing MassFlow's data manager **reconfigures the root logger to write to stdout**, which would corrupt the stdio JSON-RPC framing. `massflow_io` repoints those handlers at stderr on import, and a test asserts that no handler in the process targets stdout after a read.
 - The same import **creates a `logs/` directory** in the working directory. That is library behaviour MSMCP cannot suppress; it is gitignored and documented rather than hidden.
 
-MS-Numpress-compressed mzML arrays require the optional `pynumpress` package and raise a missing-dependency error without it.
+MS-Numpress linear, positive integer (PIC), and short logged float (SLOF) arrays are decoded with the optional `pynumpress` package. Install it with `uv sync --extra numpress`; Numpress followed by zlib compression is supported too. Without the extra, the reader raises `MissingDependencyError`. Malformed or truncated payloads are rejected before calling the native decoder.
 
 ## Glossary
 
@@ -507,7 +507,7 @@ user- and agent-facing story.
 - **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself, because MassFlow 0.1.x is imaging-only. `.imzML` goes through MassFlow. Vendor formats are refused with conversion guidance.
 - **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 awaits a public weights release; its adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
 - **Whole-slide images**: MassFlow materialises one placeholder per pixel when loading an imzML acquisition, so very large images are bounded by MassFlow's own behaviour.
-- **MS-Numpress-compressed mzML arrays** need the optional `pynumpress` package and report a missing-dependency error without it.
+- **MS-Numpress-compressed mzML arrays** need the optional `pynumpress` package (`uv sync --extra numpress`); linear, PIC, SLOF, and their zlib-combined forms are supported. Without it, the reader reports `MissingDependencyError`.
 - **Hardware control is out of scope for this repository, not just for v1.0.** Direct instrument control, actuation and the safety interlock layer that must precede them belong to a **different project**. MSMCP is a data and computation interface; the MCP application layer must never be the only barrier between a model and physical hardware. There is no instrument-control code here and none will be added.
 
 See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full limitations list and the acceptance criteria (v1.0 and v1.1).
