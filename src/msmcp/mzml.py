@@ -219,7 +219,7 @@ def _to_float_or_none(raw: str | None) -> float | None:
         return None
 
 
-def _open_binary(path: Path) -> IO[bytes]:
+def _open_binary(path: Path, max_bytes: int | None = None) -> IO[bytes]:
     """Open *path* for binary reading, transparently handling gzip.
 
     A gzip payload is wrapped so the file-size ceiling applies to the
@@ -232,7 +232,10 @@ def _open_binary(path: Path) -> IO[bytes]:
     if magic == b"\x1f\x8b":
         buffered = gzip.GzipFile(fileobj=handle)
         bounded = security.bounded_stream(
-            buffered, security.DEFAULT_POLICY.max_file_size_bytes
+            buffered,
+            max_bytes
+            if max_bytes is not None
+            else security.DEFAULT_POLICY.max_file_size_bytes,
         )
         return cast(IO[bytes], bounded)
     return handle
@@ -316,7 +319,7 @@ def _numpress_integer_count(raw: bytes, *, offset: int) -> int:
     return count
 
 
-def _validate_numpress(raw: bytes, *, codec: str) -> int:
+def _validate_numpress(raw: bytes, *, codec: str, max_bytes: int) -> int:
     """Preflight payload structure before invoking pynumpress's native decoder."""
     if codec == "pic":
         count = _numpress_integer_count(raw, offset=0)
@@ -334,7 +337,7 @@ def _validate_numpress(raw: bytes, *, codec: str) -> int:
             raise MalformedFileError("Malformed MS-Numpress SLOF payload length.")
         count = (len(raw) - 8) // 2
 
-    byte_budget = security.DEFAULT_POLICY.max_file_size_bytes
+    byte_budget = max_bytes
     # pynumpress 0.1.5's vector wrappers reserve up to two doubles per encoded
     # byte for linear/PIC and one double per two encoded bytes for SLOF.
     decoder_reserve = len(raw) * (16 if codec in {"linear", "pic"} else 4)
@@ -354,8 +357,14 @@ def _decode_binary(
     *,
     compression: str,
     precision: str,
+    max_bytes: int | None = None,
 ) -> np.ndarray:
     """Decode a ``<binary>`` payload into a float64 array."""
+    byte_budget = (
+        max_bytes
+        if max_bytes is not None
+        else security.DEFAULT_POLICY.max_file_size_bytes
+    )
     if compression.startswith("numpress"):
         try:
             decoder = importlib.import_module("pynumpress")
@@ -377,10 +386,8 @@ def _decode_binary(
                 "mzML <binary> payload is not valid base64."
             ) from exc
         if compression.endswith("-zlib"):
-            raw = _zlib_decompress_bounded(
-                raw, security.DEFAULT_POLICY.max_file_size_bytes
-            )
-        count = _validate_numpress(raw, codec=codec)
+            raw = _zlib_decompress_bounded(raw, byte_budget)
+        count = _validate_numpress(raw, codec=codec, max_bytes=byte_budget)
         if count == 0:
             return _empty_array()
         if codec == "linear" and count == 1:
@@ -406,7 +413,7 @@ def _decode_binary(
         raise MalformedFileError("mzML <binary> payload is not valid base64.") from exc
 
     if compression == "zlib":
-        raw = _zlib_decompress_bounded(raw, security.DEFAULT_POLICY.max_file_size_bytes)
+        raw = _zlib_decompress_bounded(raw, byte_budget)
 
     dtype = np.dtype("<f8") if precision == "64" else np.dtype("<f4")
     if len(raw) % dtype.itemsize:
@@ -436,7 +443,7 @@ def _empty_array() -> np.ndarray:
 
 
 def _parse_binary_data_array(
-    elem: ET.Element, *, declared_length: int | None
+    elem: ET.Element, *, declared_length: int | None, max_bytes: int | None = None
 ) -> tuple[np.ndarray, str]:
     """Decode one binary array, treating an empty payload as "no peaks".
 
@@ -500,6 +507,7 @@ def _parse_binary_data_array(
         payload,
         compression=compression,
         precision=precision,
+        max_bytes=max_bytes,
     ), kind
 
 
@@ -540,7 +548,7 @@ def _extract_precursor_mz(elem: ET.Element) -> float | None:
     return None
 
 
-def _parse_spectrum(elem: ET.Element) -> Spectrum:
+def _parse_spectrum(elem: ET.Element, *, max_bytes: int | None = None) -> Spectrum:
     index = _to_int_or_none(elem.get("index"))
     ms_level: int | None = None
     retention_time: float | None = None
@@ -571,7 +579,7 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
         if _local(binary_data_array.tag) != "binaryDataArray":
             continue
         arr, kind = _parse_binary_data_array(
-            binary_data_array, declared_length=declared_length
+            binary_data_array, declared_length=declared_length, max_bytes=max_bytes
         )
         if kind == "mz":
             mz = arr
@@ -597,7 +605,9 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
 # ---------------------------------------------------------------------------
 # Public iteration / counting
 # ---------------------------------------------------------------------------
-def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
+def iter_spectra(
+    path: str | Path, policy: SecurityPolicy | None = None
+) -> Iterator[Spectrum]:
     """Stream spectra from *path*, one at a time.
 
     A spectrum whose binary arrays do not supply the ``defaultArrayLength`` it
@@ -613,14 +623,17 @@ def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
     signal under thousands of copies of itself.
     """
     resolved = Path(path)
-    handle = _open_binary(resolved)
+    effective = policy if policy is not None else security.DEFAULT_POLICY
+    handle = _open_binary(resolved, effective.max_file_size_bytes)
     mismatched_spectra = 0
     try:
         for event, elem in ET.iterparse(handle, events=("end",)):
             if event == "end" and _local(elem.tag) == "spectrum":
                 try:
                     declared = _to_int_or_none(elem.get("defaultArrayLength"))
-                    spectrum = _parse_spectrum(elem)
+                    spectrum = _parse_spectrum(
+                        elem, max_bytes=effective.max_file_size_bytes
+                    )
                     if declared is not None and (
                         spectrum.mz.size != declared
                         or spectrum.intensity.size != declared

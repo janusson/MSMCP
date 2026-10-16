@@ -18,6 +18,7 @@ from msmcp.errors import (
     MissingDependencyError,
     UnsupportedFormatError,
 )
+from msmcp.ingest import resolve_source
 from msmcp.mzml import (
     _decode_binary,
     _parse_spectrum,
@@ -232,6 +233,38 @@ class TestDecodeBinary:
                 compression="numpress-pic",
                 precision="64",
             )
+
+    def test_numpress_native_decoder_reservation_uses_source_policy(
+        self, tmp_path: Path
+    ) -> None:
+        pynumpress = importlib.import_module("pynumpress")
+        values = np.arange(1000, dtype=np.float64)
+        encoded = base64.b64encode(pynumpress.encode_pic(values)).decode()
+        xml = f"""<mzML><run><spectrumList count="1">
+          <spectrum index="0" defaultArrayLength="1000">
+            <cvParam accession="MS:1000511" value="1"/>
+            <binaryDataArrayList count="2">
+              <binaryDataArray><cvParam accession="MS:1000514"/>
+                <cvParam accession="MS:1002313"/><binary>{encoded}</binary>
+              </binaryDataArray>
+              <binaryDataArray><cvParam accession="MS:1000515"/>
+                <cvParam accession="MS:1002313"/><binary>{encoded}</binary>
+              </binaryDataArray>
+            </binaryDataArrayList>
+          </spectrum>
+        </spectrumList></run></mzML>"""
+        path = tmp_path / "policy.mzML"
+        path.write_text(xml)
+        assert path.stat().st_size < 10_000
+
+        restrictive = SecurityPolicy(allowed_root=tmp_path, max_file_size_bytes=10_000)
+        source = resolve_source(path, restrictive)
+        with pytest.raises(FileSizeExceededError, match="byte limit"):
+            list(source.iter_spectra())
+
+        permissive = SecurityPolicy(allowed_root=tmp_path, max_file_size_bytes=100_000)
+        source = resolve_source(path, permissive)
+        assert len(list(source.iter_spectra())) == 1
 
     def test_spectrum_parser_uses_numpress_array_cv_terms(self) -> None:
         pynumpress = importlib.import_module("pynumpress")
