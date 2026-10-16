@@ -42,7 +42,7 @@ from msmcp.security import (
     validate_file_size,
 )
 
-__all__ = ["declared_spectrum_count", "iter_spectra", "resolve_mgf_path"]
+__all__ = ["declared_spectrum_count", "iter_mgf_blocks", "iter_spectra", "resolve_mgf_path"]
 
 _BEGIN: Final[str] = "BEGIN IONS"
 _END: Final[str] = "END IONS"
@@ -159,8 +159,8 @@ def _build_spectrum(
     )
 
 
-def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
-    """Stream spectra from *path*, one at a time.
+def iter_mgf_blocks(path: str | Path) -> Iterator[tuple[int, dict[str, str], list[tuple[float, float]]]]:
+    """Stream MGF blocks from *path*, yielding (index, fields, peaks).
 
     Raises
     ------
@@ -198,7 +198,7 @@ def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
                         f"MGF file has an '{_END}' at line {line_number} with "
                         f"no matching '{_BEGIN}'."
                     )
-                yield _build_spectrum(index, fields, peaks)
+                yield index, fields, peaks
                 index += 1
                 inside = False
                 fields = {}
@@ -221,6 +221,18 @@ def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
             )
     finally:
         handle.close()
+
+
+def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
+    """Stream spectra from *path*, one at a time.
+
+    Raises
+    ------
+    MalformedFileError
+        A block is opened but never closed, or a peak line does not parse.
+    """
+    for index, fields, peaks in iter_mgf_blocks(path):
+        yield _build_spectrum(index, fields, peaks)
 
 
 def declared_spectrum_count(path: str | Path) -> int:

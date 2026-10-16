@@ -359,6 +359,57 @@ class TestLibraryValidatedBeforeDispatch:
 # ---------------------------------------------------------------------------
 # Reader unit tests — MSP/NIST text parsing
 # ---------------------------------------------------------------------------
+class TestMGFReader:
+    def test_provider_describes_the_library(self, tmp_path: Path) -> None:
+        from msmcp.library import get_library_provider
+
+        mgf = tmp_path / "lib.mgf"
+        mgf.write_text(
+            "BEGIN IONS\nTITLE=Caffeine\nPEPMASS=195.0877\n110.0713 40.0\n120.0808 100.0\nEND IONS\n"
+            "BEGIN IONS\nTITLE=Theobromine\nPEPMASS=181.0720\n137.0463 100.0\nEND IONS\n",
+            encoding="utf-8",
+        )
+        policy = SecurityPolicy(allowed_root=tmp_path)
+        provider = get_library_provider(str(mgf), policy)
+        assert provider is not None
+        info = provider.describe()
+
+        assert info.format == "MGF"
+        assert info.n_spectra == 2
+        assert info.digest is not None and info.digest.startswith("sha256:")
+        assert Path(info.path) == mgf.resolve()
+
+    def test_iter_spectra_returns_float64_peaks_and_metadata(
+        self, tmp_path: Path
+    ) -> None:
+        from msmcp.library import get_library_provider
+
+        mgf = tmp_path / "lib.mgf"
+        mgf.write_text(
+            "BEGIN IONS\nTITLE=Caffeine\nPEPMASS=195.0877\n110.0713 40.0\n120.0808 100.0\nEND IONS\n"
+            "BEGIN IONS\nTITLE=Theobromine\nPEPMASS=181.0720\n137.0463 100.0\nEND IONS\n"
+            "BEGIN IONS\nTITLE=Glucose\nPEPMASS=180.0634\n89.0233 100.0\nEND IONS\n",
+            encoding="utf-8",
+        )
+        provider = get_library_provider(str(mgf), SecurityPolicy(allowed_root=tmp_path))
+        assert provider is not None
+        spectra = [s for chunk in provider.iter_spectra(2) for s in chunk]
+
+        by_name = {s.compound_name: s for s in spectra}
+        assert set(by_name) == {"Caffeine", "Theobromine", "Glucose"}
+
+        caffeine = by_name["Caffeine"]
+        assert caffeine.precursor_mz == pytest.approx(195.0877)
+        assert caffeine.formula is None
+        assert len(caffeine.peaks) == 2
+        assert caffeine.peaks[0] == pytest.approx((110.0713, 40.0))
+        assert all(isinstance(mz, float) for mz, _ in caffeine.peaks)
+        assert caffeine.metadata["TITLE"] == "Caffeine"
+
+        # chunking must not lose or duplicate spectra
+        assert [s.index for s in spectra] == sorted(s.index for s in spectra)
+
+
 class TestMSPReader:
     def test_provider_describes_the_library(self, tmp_path: Path) -> None:
         from msmcp.library import get_library_provider
