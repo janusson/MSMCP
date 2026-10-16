@@ -23,6 +23,7 @@ os.environ.setdefault("MSMCP_EMBEDDING_BACKEND", "mock")
 
 from msmcp.server import mcp
 from msmcp.tools.chem import AdductInput, IsotopeInput
+from msmcp.tools.chromatograms import ChromatogramInput
 from msmcp.tools.io import (
     ListSpectraInput,
     LoadSpectrumInput,
@@ -35,6 +36,7 @@ from msmcp.tools.similarity import ComputeCosineInput, ValidatePrecursorInput
 
 # Tool name -> the Pydantic model that validates its arguments.
 MODEL_FOR_TOOL: dict[str, type[Any]] = {
+    "extract_chromatograms": ChromatogramInput,
     "load_mzml_summary": MzMLParseInput,
     "list_spectra": ListSpectraInput,
     "load_spectrum": LoadSpectrumInput,
@@ -198,7 +200,31 @@ async def test_ping_takes_no_arguments() -> None:
     """The one unmodelled tool is unmodelled because it has no parameters."""
     tool = next(t for t in await _tools() if t.name == "ping")
     assert tool.input_schema.get("properties", {}) == {}
-    assert set(tool.input_schema.get("required", [])) == set()
+
+
+async def test_chromatogram_tool_publishes_a_structured_output_schema() -> None:
+    tool = next(t for t in await _tools() if t.name == "extract_chromatograms")
+    schema = tool.output_schema
+    assert schema is not None
+    properties = schema["properties"]
+    assert set(properties) == {
+        "schema_version",
+        "source",
+        "acquisition",
+        "chromatograms",
+        "extraction_parameters",
+        "completeness",
+        "missing_observations",
+        "warnings",
+        "provenance",
+    }
+    definitions = schema["$defs"]
+    chromatograms = definitions["ChromatogramData"]["properties"]
+    assert "retention_times_min" in chromatograms
+    assert "tic_intensities" in chromatograms
+    assert "bpc_intensities" in chromatograms
+    assert "xic" in chromatograms
+    assert set(tool.input_schema.get("required", [])) == {"file_path"}
 
 
 async def test_compute_cosine_advertises_one_peak_source_per_side() -> None:

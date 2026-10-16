@@ -66,6 +66,8 @@ _ACC_SCAN_START_TIME = "MS:1000016"
 _ACC_SELECTED_ION_MZ = "MS:1000744"
 _ACC_POSITIVE_SCAN = "MS:1000130"
 _ACC_NEGATIVE_SCAN = "MS:1000129"
+_ACC_CENTROID_SPECTRUM = "MS:1000127"
+_ACC_PROFILE_SPECTRUM = "MS:1000128"
 
 _NUMPRESS_ACCESSIONS = frozenset({"MS:1002312", "MS:1002313", "MS:1002314"})
 
@@ -98,6 +100,8 @@ class Spectrum:
     spectrum that carries neither the positive- nor the negative-scan cvParam),
     so a tool never has to invent one.
     """
+    representation: str | None = None
+    """``"centroid"`` or ``"profile"`` when stated by the spectrum CV terms."""
 
     @property
     def tic(self) -> float:
@@ -419,6 +423,7 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
     retention_time: float | None = None
     precursor_mz: float | None = None
     polarity: str | None = None
+    representations: set[str] = set()
 
     for child in elem:
         tag = _local(child.tag)
@@ -428,6 +433,10 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
             polarity = "positive"
         elif tag == "cvParam" and child.get("accession") == _ACC_NEGATIVE_SCAN:
             polarity = "negative"
+        elif tag == "cvParam" and child.get("accession") == _ACC_CENTROID_SPECTRUM:
+            representations.add("centroid")
+        elif tag == "cvParam" and child.get("accession") == _ACC_PROFILE_SPECTRUM:
+            representations.add("profile")
         elif tag == "scanList":
             retention_time = _extract_scan_start_time(child)
         elif tag == "precursorList":
@@ -464,6 +473,9 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
         mz=mz,
         intensity=intensity,
         polarity=polarity,
+        representation=next(iter(representations))
+        if len(representations) == 1
+        else None,
     )
 
 

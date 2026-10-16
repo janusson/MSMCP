@@ -7,6 +7,7 @@ from mcp.server.mcpserver import MCPServer
 
 from msmcp.provenance import package_version
 from msmcp.tools.chem import register_tools as _register_chem_tools
+from msmcp.tools.chromatograms import register_tools as _register_chromatogram_tools
 from msmcp.tools.io import register_tools as _register_io_tools
 from msmcp.tools.qc import register_tools as _register_qc_tools
 from msmcp.tools.search import register_tools as _register_search_tools
@@ -46,6 +47,8 @@ mcp = MCPServer(
         "configured allowed root) and answer questions about them: file "
         "summaries, QC metrics, exact-mass and isotope calculations, "
         "precursor-mass validation, and spectral similarity.\n\n"
+        "extract_chromatograms returns structured scan-level TIC, base-peak, "
+        "and optional multiple XIC traces from mzML in one bounded pass.\n\n"
         "Supported input formats: .mzML/.mzML.gz, .mgf and .imzML (imaging, "
         "via MassFlow); search_library additionally reads MSP/NIST text "
         "libraries (.msp, .msp.gz).\n\n"
@@ -76,6 +79,7 @@ mcp = MCPServer(
 # Register tools from sub-modules
 # ---------------------------------------------------------------------------
 _register_io_tools(mcp)
+_register_chromatogram_tools(mcp)
 _register_chem_tools(mcp)
 _register_sim_tools(mcp)
 _register_search_tools(mcp)
