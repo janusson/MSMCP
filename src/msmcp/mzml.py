@@ -24,6 +24,8 @@ import binascii
 import gzip
 import importlib
 import logging
+import math
+import struct
 import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Iterator
@@ -60,6 +62,12 @@ _ACC_INTENSITY_ARRAY = "MS:1000515"
 _ACC_32BIT_FLOAT = "MS:1000521"
 _ACC_64BIT_FLOAT = "MS:1000523"
 _ACC_ZLIB_COMPRESSION = "MS:1000574"
+_ACC_NUMPRESS_LINEAR = "MS:1002312"
+_ACC_NUMPRESS_PIC = "MS:1002313"
+_ACC_NUMPRESS_SLOF = "MS:1002314"
+_ACC_NUMPRESS_LINEAR_ZLIB = "MS:1002746"
+_ACC_NUMPRESS_PIC_ZLIB = "MS:1002747"
+_ACC_NUMPRESS_SLOF_ZLIB = "MS:1002748"
 _ACC_NO_COMPRESSION = "MS:1000576"
 _ACC_MS_LEVEL = "MS:1000511"
 _ACC_SCAN_START_TIME = "MS:1000016"
@@ -67,7 +75,24 @@ _ACC_SELECTED_ION_MZ = "MS:1000744"
 _ACC_POSITIVE_SCAN = "MS:1000130"
 _ACC_NEGATIVE_SCAN = "MS:1000129"
 
-_NUMPRESS_ACCESSIONS = frozenset({"MS:1002312", "MS:1002313", "MS:1002314"})
+_NUMPRESS_ACCESSIONS = frozenset(
+    {
+        _ACC_NUMPRESS_LINEAR,
+        _ACC_NUMPRESS_PIC,
+        _ACC_NUMPRESS_SLOF,
+        _ACC_NUMPRESS_LINEAR_ZLIB,
+        _ACC_NUMPRESS_PIC_ZLIB,
+        _ACC_NUMPRESS_SLOF_ZLIB,
+    }
+)
+_NUMPRESS_CODECS = {
+    _ACC_NUMPRESS_LINEAR: ("linear", False),
+    _ACC_NUMPRESS_PIC: ("pic", False),
+    _ACC_NUMPRESS_SLOF: ("slof", False),
+    _ACC_NUMPRESS_LINEAR_ZLIB: ("linear", True),
+    _ACC_NUMPRESS_PIC_ZLIB: ("pic", True),
+    _ACC_NUMPRESS_SLOF_ZLIB: ("slof", True),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +219,7 @@ def _to_float_or_none(raw: str | None) -> float | None:
         return None
 
 
-def _open_binary(path: Path) -> IO[bytes]:
+def _open_binary(path: Path, max_bytes: int | None = None) -> IO[bytes]:
     """Open *path* for binary reading, transparently handling gzip.
 
     A gzip payload is wrapped so the file-size ceiling applies to the
@@ -207,7 +232,10 @@ def _open_binary(path: Path) -> IO[bytes]:
     if magic == b"\x1f\x8b":
         buffered = gzip.GzipFile(fileobj=handle)
         bounded = security.bounded_stream(
-            buffered, security.DEFAULT_POLICY.max_file_size_bytes
+            buffered,
+            max_bytes
+            if max_bytes is not None
+            else security.DEFAULT_POLICY.max_file_size_bytes,
         )
         return cast(IO[bytes], bounded)
     return handle
@@ -268,19 +296,115 @@ def _zlib_decompress_bounded(raw: bytes, max_bytes: int) -> bytes:
     return out
 
 
-def _decode_binary(text: str, *, compression: str, precision: str) -> np.ndarray:
+def _numpress_integer_count(raw: bytes, *, offset: int) -> int:
+    """Validate Numpress's packed integer stream and return its value count."""
+    nibble_count = (len(raw) - offset) * 2
+
+    def nibble_at(index: int) -> int:
+        byte = raw[offset + index // 2]
+        return byte >> 4 if index % 2 == 0 else byte & 0x0F
+
+    pos = 0
+    count = 0
+    while pos < nibble_count:
+        if pos == nibble_count - 1 and pos % 2 == 1 and nibble_at(pos) == 0:
+            break
+        head = nibble_at(pos)
+        pos += 1
+        payload_nibbles = 8 - (head if head <= 8 else head - 8)
+        if pos + payload_nibbles > nibble_count:
+            raise MalformedFileError("Malformed MS-Numpress integer stream.")
+        pos += payload_nibbles
+        count += 1
+    return count
+
+
+def _validate_numpress(raw: bytes, *, codec: str, max_bytes: int) -> int:
+    """Preflight payload structure before invoking pynumpress's native decoder."""
+    if codec == "pic":
+        count = _numpress_integer_count(raw, offset=0)
+    elif codec == "linear":
+        if len(raw) == 8:
+            count = 0
+        elif len(raw) == 12:
+            count = 1
+        elif len(raw) >= 16:
+            count = 2 + _numpress_integer_count(raw, offset=16)
+        else:
+            raise MalformedFileError("Malformed MS-Numpress linear header or values.")
+    else:
+        if len(raw) < 8 or (len(raw) - 8) % 2:
+            raise MalformedFileError("Malformed MS-Numpress SLOF payload length.")
+        count = (len(raw) - 8) // 2
+
+    byte_budget = max_bytes
+    # pynumpress 0.1.5's vector wrappers reserve up to two doubles per encoded
+    # byte for linear/PIC and one double per two encoded bytes for SLOF.
+    decoder_reserve = len(raw) * (16 if codec in {"linear", "pic"} else 4)
+    if max(count * np.dtype(np.float64).itemsize, decoder_reserve) > byte_budget:
+        raise security.FileSizeExceededError(
+            "MS-Numpress decoding exceeds the configured byte limit."
+        )
+    if codec in {"linear", "slof"} and len(raw) >= 8:
+        fixed_point = struct.unpack(">d", raw[:8])[0]
+        if count and (not math.isfinite(fixed_point) or fixed_point <= 0):
+            raise MalformedFileError("Malformed MS-Numpress fixed-point value.")
+    return count
+
+
+def _decode_binary(
+    text: str,
+    *,
+    compression: str,
+    precision: str,
+    max_bytes: int | None = None,
+) -> np.ndarray:
     """Decode a ``<binary>`` payload into a float64 array."""
-    if compression == "numpress":
+    byte_budget = (
+        max_bytes
+        if max_bytes is not None
+        else security.DEFAULT_POLICY.max_file_size_bytes
+    )
+    if compression.startswith("numpress"):
         try:
-            importlib.import_module("pynumpress")
+            decoder = importlib.import_module("pynumpress")
         except ImportError as exc:
             raise MissingDependencyError(
                 "This mzML file uses MS-Numpress compression, which requires "
                 "the optional 'pynumpress' package. Install it and retry."
             ) from exc
-        raise UnsupportedFormatError(
-            "MS-Numpress decoding is not implemented in this milestone."
-        )
+        codec = compression.removeprefix("numpress-")
+        if codec == "numpress":
+            codec = "linear"  # retain the internal compatibility name
+        if codec.endswith("-zlib"):
+            codec = codec.removesuffix("-zlib")
+        clean = "".join(text.split())
+        try:
+            raw = base64.b64decode(clean, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise MalformedFileError(
+                "mzML <binary> payload is not valid base64."
+            ) from exc
+        if compression.endswith("-zlib"):
+            raw = _zlib_decompress_bounded(raw, byte_budget)
+        count = _validate_numpress(raw, codec=codec, max_bytes=byte_budget)
+        if count == 0:
+            return _empty_array()
+        if codec == "linear" and count == 1:
+            fixed_point = struct.unpack(">d", raw[:8])[0]
+            decoded = np.array([struct.unpack("<I", raw[8:12])[0] / fixed_point])
+        else:
+            try:
+                decoded = getattr(decoder, f"decode_{codec}")(raw)
+            except (OverflowError, RuntimeError, ValueError) as exc:
+                raise MalformedFileError(
+                    "MS-Numpress decoder rejected the encoded values."
+                ) from exc
+        array = np.asarray(decoded, dtype=np.float64)
+        if array.size != count or not np.all(np.isfinite(array)):
+            raise MalformedFileError("MS-Numpress decoder returned invalid values.")
+        array.setflags(write=False)
+        return array
 
     clean = "".join(text.split())
     try:
@@ -289,7 +413,7 @@ def _decode_binary(text: str, *, compression: str, precision: str) -> np.ndarray
         raise MalformedFileError("mzML <binary> payload is not valid base64.") from exc
 
     if compression == "zlib":
-        raw = _zlib_decompress_bounded(raw, security.DEFAULT_POLICY.max_file_size_bytes)
+        raw = _zlib_decompress_bounded(raw, byte_budget)
 
     dtype = np.dtype("<f8") if precision == "64" else np.dtype("<f4")
     if len(raw) % dtype.itemsize:
@@ -319,7 +443,7 @@ def _empty_array() -> np.ndarray:
 
 
 def _parse_binary_data_array(
-    elem: ET.Element, *, declared_length: int | None
+    elem: ET.Element, *, declared_length: int | None, max_bytes: int | None = None
 ) -> tuple[np.ndarray, str]:
     """Decode one binary array, treating an empty payload as "no peaks".
 
@@ -356,8 +480,14 @@ def _parse_binary_data_array(
     else:
         precision = "64"  # common default when a producer omits the cvParam
 
-    if accessions & _NUMPRESS_ACCESSIONS:
-        compression = "numpress"
+    numpress_accessions = accessions & _NUMPRESS_ACCESSIONS
+    if len(numpress_accessions) > 1:
+        raise MalformedFileError(
+            "A binaryDataArray has conflicting MS-Numpress codecs."
+        )
+    if numpress_accessions:
+        codec, with_zlib = _NUMPRESS_CODECS[next(iter(numpress_accessions))]
+        compression = f"numpress-{codec}" + ("-zlib" if with_zlib else "")
     elif _ACC_ZLIB_COMPRESSION in accessions:
         compression = "zlib"
     else:
@@ -373,7 +503,12 @@ def _parse_binary_data_array(
             )
         return _empty_array(), kind
 
-    return _decode_binary(payload, compression=compression, precision=precision), kind
+    return _decode_binary(
+        payload,
+        compression=compression,
+        precision=precision,
+        max_bytes=max_bytes,
+    ), kind
 
 
 def _extract_scan_start_time(elem: ET.Element) -> float | None:
@@ -413,7 +548,7 @@ def _extract_precursor_mz(elem: ET.Element) -> float | None:
     return None
 
 
-def _parse_spectrum(elem: ET.Element) -> Spectrum:
+def _parse_spectrum(elem: ET.Element, *, max_bytes: int | None = None) -> Spectrum:
     index = _to_int_or_none(elem.get("index"))
     ms_level: int | None = None
     retention_time: float | None = None
@@ -444,7 +579,7 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
         if _local(binary_data_array.tag) != "binaryDataArray":
             continue
         arr, kind = _parse_binary_data_array(
-            binary_data_array, declared_length=declared_length
+            binary_data_array, declared_length=declared_length, max_bytes=max_bytes
         )
         if kind == "mz":
             mz = arr
@@ -470,7 +605,9 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
 # ---------------------------------------------------------------------------
 # Public iteration / counting
 # ---------------------------------------------------------------------------
-def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
+def iter_spectra(
+    path: str | Path, policy: SecurityPolicy | None = None
+) -> Iterator[Spectrum]:
     """Stream spectra from *path*, one at a time.
 
     A spectrum whose binary arrays do not supply the ``defaultArrayLength`` it
@@ -486,14 +623,17 @@ def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
     signal under thousands of copies of itself.
     """
     resolved = Path(path)
-    handle = _open_binary(resolved)
+    effective = policy if policy is not None else security.DEFAULT_POLICY
+    handle = _open_binary(resolved, effective.max_file_size_bytes)
     mismatched_spectra = 0
     try:
         for event, elem in ET.iterparse(handle, events=("end",)):
             if event == "end" and _local(elem.tag) == "spectrum":
                 try:
                     declared = _to_int_or_none(elem.get("defaultArrayLength"))
-                    spectrum = _parse_spectrum(elem)
+                    spectrum = _parse_spectrum(
+                        elem, max_bytes=effective.max_file_size_bytes
+                    )
                     if declared is not None and (
                         spectrum.mz.size != declared
                         or spectrum.intensity.size != declared
