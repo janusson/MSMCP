@@ -160,6 +160,19 @@ class TestDecodeBinary:
                 precision="64",
             )
 
+    def test_numpress_preflight_rejects_truncation_before_native_decode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pynumpress = importlib.import_module("pynumpress")
+
+        def decoder_must_not_run(_: bytes) -> None:
+            pytest.fail("native decoder ran before truncated input was rejected")
+
+        monkeypatch.setattr(pynumpress, "decode_pic", decoder_must_not_run)
+        payload = base64.b64encode(b"\x00").decode()
+        with pytest.raises(MalformedFileError, match="integer stream"):
+            _decode_binary(payload, compression="numpress-pic", precision="64")
+
     def test_upstream_numpress_fixture_decodes_real_linear_and_pic_arrays(self) -> None:
         fixture = Path(__file__).parent / "data" / "mini_numpress.chrom.mzML"
         root = ET.parse(fixture).getroot()

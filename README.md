@@ -388,7 +388,7 @@ Two MassFlow behaviours are worth knowing before debugging an unexpected directo
 - Importing MassFlow's data manager **reconfigures the root logger to write to stdout**, which would corrupt the stdio JSON-RPC framing. `massflow_io` repoints those handlers at stderr on import, and a test asserts that no handler in the process targets stdout after a read.
 - The same import **creates a `logs/` directory** in the working directory. That is library behaviour MSMCP cannot suppress; it is gitignored and documented rather than hidden.
 
-MS-Numpress linear, positive integer (PIC), and short logged float (SLOF) arrays are decoded with the optional `pynumpress` package. Install it with `uv sync --extra numpress`; Numpress followed by zlib compression is supported too. Without the extra, the reader raises `MissingDependencyError`. Malformed or truncated payloads are rejected before calling the native decoder.
+MS-Numpress linear, positive integer (PIC), and short logged float (SLOF) arrays are decoded with the optional `pynumpress` package. Install it with `uv sync --extra numpress`; Numpress followed by zlib compression is supported too. Without the extra, the reader raises `MissingDependencyError`. Structural checks and allocation bounds run before native decoding; malformed data is reported as `MalformedFileError`.
 
 ## Glossary
 

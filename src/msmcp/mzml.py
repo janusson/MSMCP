@@ -340,7 +340,7 @@ def _validate_numpress(raw: bytes, *, codec: str) -> int:
     decoder_reserve = len(raw) * (16 if codec in {"linear", "pic"} else 4)
     if max(count * np.dtype(np.float64).itemsize, decoder_reserve) > byte_budget:
         raise security.FileSizeExceededError(
-            "Decoded MS-Numpress array exceeds the configured byte limit."
+            "MS-Numpress decoding exceeds the configured byte limit."
         )
     if codec in {"linear", "slof"} and len(raw) >= 8:
         fixed_point = struct.unpack(">d", raw[:8])[0]
