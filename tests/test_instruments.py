@@ -237,7 +237,7 @@ class TestQCInstrumentClass:
 def test_search_report_and_provenance_record_the_instrument_class() -> None:
     outcome = _run_scan(
         SearchRequest(
-            database_file="library/f7-test.db",
+            database_file="library/f7-test.txt",
             experimental_peaks=((110.0713, 40.0), (120.0808, 100.0), (136.0757, 60.0)),
             experimental_file="experimental/f7.mzML",
             instrument_class="orbitrap",
