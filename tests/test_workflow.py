@@ -36,7 +36,7 @@ from msmcp.tools import io as msmcp_io
 from msmcp.tools import qc
 from msmcp.tools.io import SpectrumReferenceResult
 
-LIBRARY_MZML = "library/does-not-exist.db"
+LIBRARY_MZML = "library/does-not-exist.txt"
 
 
 def allow_root(root: Path, monkeypatch: pytest.MonkeyPatch) -> SecurityPolicy:

@@ -322,7 +322,7 @@ def test_search_report_carries_the_provenance_banner() -> None:
 
     # A real library spectrum as the query: a known true positive, so the
     # report contains an actual hit table to order the banner against.
-    library = "libraries/metabolomics.db"
+    library = "libraries/metabolomics.txt"
     n_spectra, seed = _library_spec(library)
     conn = _build_mock_database(n_spectra=n_spectra, seed=seed)
     try:
@@ -366,7 +366,7 @@ def test_report_builder_is_well_formed_for_every_scorer(method: str) -> None:
 
     report = _run_scan(
         SearchRequest(
-            database_file="lib.db",
+            database_file="lib.mzML",
             experimental_peaks=((120.08, 100.0), (500.1, 55.0)),
             experimental_file="exp.mzML",
             scoring_method=method,  # type: ignore[arg-type]
