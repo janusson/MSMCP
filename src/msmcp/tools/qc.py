@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 from typing import Annotated, Any
 
@@ -204,8 +205,9 @@ def register_tools(mcp: Any) -> None:
         """Report quality-control metrics for a local MS acquisition.
 
         Reads .mzML, .mzML.gz, .mgf and .imzML (imaging) files; the reader is
-        chosen from the file extension.  Scans every spectrum and reports
-        spectrum and total-ion-current counts, per-spectrum peak density, an
+        chosen from the file extension. Scans at most the configured per-request
+        spectrum limit and reports when full-acquisition coverage is unconfirmed.
+        Metrics include total-ion-current counts, per-spectrum peak density, an
         *estimated* signal-to-noise ratio (base peak / median positive
         intensity, a transparent proxy rather than a calibrated instrument
         SNR), and the prevalence of ten diagnostic immonium and oxonium
@@ -218,9 +220,9 @@ def register_tools(mcp: Any) -> None:
         report, so a QC verdict is never separated from the assumption behind
         it.
 
-        Use it to judge whether an acquisition is worth searching.  Unlike
-        `load_mzml_summary`, this reads the whole file rather than the first
-        few spectra, so it is slower on large runs.
+        Use it to judge whether an acquisition is worth searching. Unlike
+        `load_mzml_summary`, it may scan up to the configured spectrum limit;
+        it never presents a capped summary as covering the full acquisition.
         """
         _ = QCInput(file_path=file_path, instrument_class=instrument_class)
         profile = get_profile(instrument_class)
@@ -228,32 +230,46 @@ def register_tools(mcp: Any) -> None:
 
         source = ingest.resolve_source(file_path, DEFAULT_POLICY)
 
+        spectrum_limit = DEFAULT_POLICY.max_spectra
         n_total = 0
         total_tic = 0.0
         snr_values: list[float] = []
         n_peaks_list: list[int] = []
         diag_masks: list[int] = []
-
-        for spectrum in source.iter_spectra():
-            n_total += 1
-            tic = spectrum.tic
-            total_tic += tic
-            snr_values.append(_estimate_snr(spectrum.intensity))
-            n_peaks_list.append(spectrum.n_peaks)
-            diag_masks.append(_diagnostic_mask(spectrum.mz, diagnostic_tolerance))
+        spectra = source.iter_spectra()
+        try:
+            for spectrum in itertools.islice(spectra, spectrum_limit):
+                n_total += 1
+                tic = spectrum.tic
+                total_tic += tic
+                snr_values.append(_estimate_snr(spectrum.intensity))
+                n_peaks_list.append(spectrum.n_peaks)
+                diag_masks.append(_diagnostic_mask(spectrum.mz, diagnostic_tolerance))
+        finally:
+            close = getattr(spectra, "close", None)
+            if callable(close):
+                close()
 
         if n_total == 0:
             raise MalformedFileError(f"'{file_path}' contains no spectra to analyse.")
 
         mean_tic = total_tic / n_total
+        coverage = (
+            f"**Coverage:** the {spectrum_limit:,}-spectrum processing limit was "
+            "reached; full-acquisition coverage is not confirmed. Metrics below "
+            f"describe only the {n_total:,} spectra analysed."
+            if n_total >= spectrum_limit
+            else "**Coverage:** complete; the reader reached the end of the acquisition."
+        )
         header = [
             "## QC Summary Report",
             "",
             f"**File:** `{file_path}`",
             f"**Format:** {source.format} (reader: `{source.backend}`)",
             f"**Spectra analysed:** {n_total:,}",
-            f"**Total ion current:** {total_tic:.6e}",
-            f"**Mean TIC / spectrum:** {mean_tic:.6e}",
+            coverage,
+            f"**Total ion current (analysed spectra):** {total_tic:.6e}",
+            f"**Mean TIC / analysed spectrum:** {mean_tic:.6e}",
             f"**Instrument class:** {profile.instrument_class} "
             f"(diagnostic-ion window ±{diagnostic_tolerance:g} Da, "
             f"SNR bands {profile.snr_low:g}/{profile.snr_high:g})",
