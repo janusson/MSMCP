@@ -10,7 +10,7 @@ delegated to an orchestrator.
 Honesty about the data
 ----------------------
 The **library** side is real whenever ``database_file`` names a format MSMCP can
-read: an MSP/NIST-style text library is resolved through the same
+read: an MSP/NIST-style text or MGF library is resolved through the same
 :class:`~msmcp.security.SecurityPolicy` as acquisitions (allowed root, size
 limit, read-only) and searched for real — see :mod:`msmcp.library`.  A path with
 no reader falls back to a deterministic in-memory library seeded from the path
@@ -58,7 +58,6 @@ from msmcp.instruments import (
 from msmcp.library import LibraryInfo, LibraryProvider
 from msmcp.models import get_embedder
 from msmcp.models.backends import LSM_MS2_CKPT_ENV
-from msmcp.models.null_model import TailFit, fit_upper_tail
 from msmcp.models.scoring import ClassicalScorer, SpectrumScorer, get_scorer
 from msmcp.mzml import Spectrum
 from msmcp.provenance import ModelInfo, Provenance, SourceRef, provenance_for
@@ -137,20 +136,9 @@ class PollInput(BaseModel):
 
 
 # ======================================================================
-# Null model — how significance is calibrated
+# Legacy decoy helpers retained for offline investigation and regression tests.
+# Production search does not call them: wrong-compound calibration is unvalidated.
 # ======================================================================
-# A FIXED number of decoy scores is drawn per query, independent of the library
-# size, and the upper tail of that sample is fitted with a generalised Pareto
-# distribution (see :mod:`msmcp.models.null_model`).
-#
-# This is roadmap #12.  The previous design drew 40 decoys per library spectrum,
-# so the statistical cost grew linearly with the library (2.9 s at 2,200
-# spectra, ~130 s at 10⁵ on the audit's measurement) and the empirical floor
-# 1/(n_null + 1) capped the smallest expressible q at ≈0.025.  A fitted tail has
-# no such floor, and the cost is constant because the sample size is.  Each
-# decoy is one scorer call against peaks already in memory; raising this sharpens
-# the tail estimate at that same linear cost, but it no longer tracks the
-# library.
 NULL_SAMPLE_SIZE: Final[int] = 20_000
 
 _NULL_BATCH: Final[int] = 5_000
@@ -507,11 +495,7 @@ def _peaks_from_reference(reference: str) -> list[tuple[float, float]]:
 
 
 def _reference_polarity(reference: str) -> str | None:
-    """Ion mode of a stored spectrum reference, or ``None`` when it has none.
-
-    A peak-list reference carries no ion mode, and a spectrum whose file did
-    not state one reports ``None``; either way no polarity is invented.
-    """
+    """Ion mode from a spectrum reference, or ``None`` when it is unstated."""
     try:
         spectrum = reference_store.resolve_spectrum(reference)
     except ReferenceKindError:
@@ -544,11 +528,10 @@ def _peaks_from_file(
 ) -> tuple[list[tuple[float, float]], str, str | None]:
     """Read one spectrum of *file_path* as a real experimental peak list.
 
-    Returns the peaks, a label naming the spectrum they came from, and the ion
-    mode when the file states one (``None`` otherwise).  The file is opened
-    through the ingestion layer, so the query of a search is always genuine data
-    and a missing or malformed file fails loudly instead of quietly producing a
-    synthetic stand-in.
+    Returns the peaks, a label naming their source and the stated ion mode. The file
+    is opened through the ingestion layer, so the query of a search is always
+    genuine data and a missing or malformed file fails loudly instead of quietly
+    producing a synthetic stand-in.
 
     The spectrum is selected by index **and reported**, because the first
     spectrum of a real LC-MS/MS file is normally an MS1 survey scan: a search
@@ -619,7 +602,7 @@ class SearchSummary:
     query_peaks: int
     query_source: str
     mode: str
-    threshold: float
+    threshold: float | None
     n_hits: int
     top_compound: str | None
     top_score: float | None
@@ -682,8 +665,8 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     library format (:mod:`msmcp.library`, routed through the security boundary);
     otherwise a deterministic synthetic library is generated and the report
     says so.  The query spectrum is real data resolved before dispatch.  The
-    chunked scan, scoring, FDR/p-value estimation and report formatting are the
-    same on either path.
+    chunked scan, similarity ranking and report formatting are the same on either
+    path. Significance is uncalibrated for every library size.
 
     This function is CPU-bound; the executor runs it on a worker thread so the
     MCP event loop stays responsive.
@@ -695,7 +678,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     ms2_tolerance_da = profile.ms2_tolerance_da
 
     scorer = _build_scorer(scoring_method, ms2_tolerance_da)
-    # A real library (MSP/NIST text) is read through the security boundary; a
+    # A real library (MSP/NIST text or MGF) is read through the security boundary; a
     # path with no reader falls back to the labelled synthetic library.
     provider = _library_provider_for(database_file)
     library_info: LibraryInfo | None = None
@@ -706,9 +689,6 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     else:
         n_spectra, library_seed = _library_spec(database_file)
         conn = _build_mock_database(n_spectra=n_spectra, seed=library_seed)
-    # The null draw is deterministic too, so a report is reproducible: same
-    # library path in, same p-values out.
-    rng = random.Random(_stable_seed(database_file) + 1)
     try:
         exp_peaks = list(request.experimental_peaks)
         if not exp_peaks:
@@ -718,33 +698,10 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             )
         logger.info("Scoring %d real query peaks", len(exp_peaks))
 
-        small_library_threshold = profile.small_library_threshold
-        use_fdr = n_spectra >= small_library_threshold
-
-        small_lib_warning = ""
-        if not use_fdr:
-            small_lib_warning = (
-                f"⚠️  **SCIENTIFIC WARNING**\n"
-                f"The spectral library contains only **{n_spectra}** spectra "
-                f"(< {small_library_threshold} threshold).\n"
-                f"Target-Decoy FDR estimation is unreliable with small "
-                f"libraries.\n"
-                f"→ Automatically switching to **empirical p-value** "
-                f"calculation instead.\n\n"
-            )
-
-        target_scores: list[float] = []
+        # Wrong-compound null admissibility is unvalidated. Return candidates
+        # by similarity without statistical discovery claims or filtering.
         target_meta: list[dict[str, Any]] = []
-        # Peaks of permutable library spectra, kept for the null model below so
-        # the decoy draws cost no further SQL.
-        peaks_cache: dict[Any, list[tuple[float, float]]] = {}
-
-        logger.info(
-            "Scanning %d spectra in chunks of %d (%s mode)",
-            n_spectra,
-            chunk_size,
-            "FDR" if use_fdr else "p-value",
-        )
+        logger.info("Scanning %d spectra in chunks of %d", n_spectra, chunk_size)
 
         def _chunks() -> Iterator[tuple[int, list[dict[str, Any]]]]:
             if provider is not None:
@@ -757,9 +714,6 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
         for chunk_id, chunk in _chunks():
             for spec in chunk:
                 score = scorer.score(exp_peaks, spec["peaks"])
-                target_scores.append(score)
-                if _permutable(spec["peaks"]):
-                    peaks_cache[spec["id"]] = list(spec["peaks"])
                 target_meta.append(
                     {
                         "id": spec["id"],
@@ -772,89 +726,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 )
             logger.debug("Chunk %d: processed %d spectra", chunk_id, len(chunk))
 
-        null_scores: list[float] = []
-        # Draw a FIXED number of decoys from the spectra already scored above —
-        # no extra SQL, and the same library the target scores came from.  The
-        # sample size is independent of the library size, so the null cost is
-        # constant rather than linear in the library (#12).
-        pool = [meta["id"] for meta in target_meta if peaks_cache.get(meta["id"])]
-        if pool:
-            logger.info(
-                "Null model: drawing %d decoy scores from %d permutable spectra",
-                NULL_SAMPLE_SIZE,
-                len(pool),
-            )
-            # Scored in batches: score_many is the interface's amortised path and
-            # keeps the query side prepared across a whole batch of decoys.
-            remaining = NULL_SAMPLE_SIZE
-            while remaining > 0:
-                batch = min(remaining, _NULL_BATCH)
-                decoys = [
-                    _decoy_spectrum(peaks_cache[pool[rng.randrange(len(pool))]], rng)
-                    for _ in range(batch)
-                ]
-                null_scores.extend(scorer.score_many(exp_peaks, decoys))
-                remaining -= batch
-        unpermutable = n_spectra - len(pool)
-        if unpermutable:
-            logger.debug(
-                "Null model: %d spectra have no permutable intensity pattern",
-                unpermutable,
-            )
-        if not null_scores:
-            logger.warning(
-                "Null model: no permutable spectra in a library of %d — "
-                "p-values cannot be calibrated and no hit can pass",
-                n_spectra,
-            )
-
-        n_null_actual = len(null_scores)
-        report_threshold = profile.fdr_threshold
-        null_fit: TailFit | None = (
-            fit_upper_tail(null_scores) if n_null_actual >= 2 else None
-        )
-
-        if use_fdr:
-            if null_fit is not None:
-                p_values = null_fit.p_values(target_scores)
-                q_floor = null_fit.smallest_attainable_q(n_spectra)
-                null_line = (
-                    f"Null model: {null_fit.describe()}.  Significance is read "
-                    f"from the fitted upper tail (no sampling floor); smallest "
-                    f"attainable q-value **{q_floor:.2e}**."
-                )
-            else:
-                # No permutable spectra, so no null could be calibrated: nothing
-                # can pass, and the report says why rather than inventing zeros.
-                p_values = [1.0] * len(target_scores)
-                null_line = (
-                    "Null model: **none** — no permutable decoy spectra, so "
-                    "significance cannot be calibrated and no hit can pass."
-                )
-            q_values = _benjamini_hochberg(p_values)
-            hits = [
-                {**meta, "q_value": qv}
-                for meta, qv in zip(target_meta, q_values, strict=True)
-                if qv <= report_threshold
-            ]
-            hits.sort(key=lambda h: h["score"], reverse=True)
-            method_line = f"FDR threshold (Benjamini-Hochberg): {report_threshold}"
-        else:
-            p_values = _estimate_empirical_p(target_scores, null_scores)
-            hits = [
-                {**meta, "p_value": pv}
-                for meta, pv in zip(target_meta, p_values, strict=True)
-                if pv <= report_threshold
-            ]
-            hits.sort(key=lambda h: h["score"], reverse=True)
-            method_line = f"Empirical p-value threshold: {report_threshold}"
-            p_floor = 1.0 / (n_null_actual + 1) if n_null_actual else 1.0
-            null_line = (
-                f"Null model: {n_null_actual:,} decoy scores from permuted-intensity "
-                f"library spectra; smallest attainable p-value **{p_floor:.2e}** "
-                f"(no multiplicity correction is applied in this mode)."
-            )
-
+        hits = sorted(target_meta, key=lambda h: h["score"], reverse=True)
         top_n = min(len(hits), 20)
         lines = _report_banner(request, database_file, n_spectra, library_info)
 
@@ -876,80 +748,53 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
         )
         lines.append(
             f"Instrument class: {profile.instrument_class} "
-            f"(MS2 window ±{ms2_tolerance_da:g} Da, "
-            f"significance threshold {report_threshold:g})"
+            f"(MS2 window ±{ms2_tolerance_da:g} Da)"
         )
         lines.append("")
 
-        if small_lib_warning:
-            lines.append(small_lib_warning)
-
-        lines.append(method_line)
-        lines.append(null_line)
-        lines.append("")
-
+        lines.extend(
+            [
+                "> ⚠️ **SIGNIFICANCE UNCALIBRATED.** Wrong-compound null "
+                "admissibility and false-discovery-rate control have not been validated. "
+                "These are similarity-ranked candidates; no p-values, q-values, "
+                "or 5% error-rate guarantee are provided.",
+                "",
+            ]
+        )
         if not hits:
-            lines.append(
-                "**No hits passed the significance threshold.**\n\n"
-                "Consider widening the precursor mass tolerance or "
-                "re-acquiring the spectrum with higher signal-to-noise."
-            )
+            lines.append("**No library candidates were available.**")
         else:
-            lines.append(f"Showing the top {top_n} of {len(hits)} hit(s):")
-            lines.append("")
-            if use_fdr:
+            lines.extend(
+                [
+                    f"Showing the top {top_n} of {len(hits)} candidate(s), "
+                    "ranked by similarity; no significance filter applied:",
+                    "",
+                    "| Rank | Compound | Score | Precursor m/z | Formula | Polarity |",
+                    "|------|----------|-------|---------------|---------|----------|",
+                ]
+            )
+            for i, h in enumerate(hits[:top_n], start=1):
                 lines.append(
-                    "| Rank | Compound         | Score  | FDR (q-value) | Precursor m/z | Formula    | Polarity   |"
+                    f"| {i} | {h['compound_name']} | {h['score']:.4f} | "
+                    f"{_cell_precursor(h['precursor_mz'])} | "
+                    f"{_cell_formula(h['formula'])} | "
+                    f"{_cell_polarity(h.get('polarity'), request.query_polarity)} |"
                 )
-                lines.append(
-                    "|------|-----------------|--------|---------------|---------------|------------|------------|"
-                )
-                for i, h in enumerate(hits[:top_n], start=1):
-                    lines.append(
-                        f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | "
-                        f"{h['q_value']:.4f}       | "
-                        f"{_cell_precursor(h['precursor_mz']):>13} | "
-                        f"{_cell_formula(h['formula']):<10} | "
-                        f"{_cell_polarity(h.get('polarity'), request.query_polarity):<10} |"
-                    )
-            else:
-                lines.append(
-                    "| Rank | Compound         | Score  | p-value   | Precursor m/z | Formula    | Polarity   |"
-                )
-                lines.append(
-                    "|------|-----------------|--------|-----------|---------------|------------|------------|"
-                )
-                for i, h in enumerate(hits[:top_n], start=1):
-                    lines.append(
-                        f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | "
-                        f"{h['p_value']:.4f}   | "
-                        f"{_cell_precursor(h['precursor_mz']):>13} | "
-                        f"{_cell_formula(h['formula']):<10} | "
-                        f"{_cell_polarity(h.get('polarity'), request.query_polarity):<10} |"
-                    )
-
-            lines.append("")
-            total_passing = len(hits)
-            if total_passing > top_n:
-                lines.append(
-                    f"{total_passing} hits passed the threshold ({top_n} shown above)."
-                )
-            else:
-                lines.append(f"{total_passing} hit(s) passed the threshold.")
             mismatch = [
-                h
-                for h in hits[:top_n]
+                hit
+                for hit in hits[:top_n]
                 if request.query_polarity
-                and h.get("polarity")
-                and h["polarity"] != request.query_polarity
+                and hit.get("polarity")
+                and hit["polarity"] != request.query_polarity
             ]
             if mismatch:
-                lines.append("")
-                lines.append(
-                    f"⚠ {len(mismatch)} of the hits shown declare the opposite "
-                    f"ion mode to the query (query: {request.query_polarity}).  "
-                    f"Polarity is reported, not filtered — an opposite-polarity "
-                    f"match is unlikely to be the same compound."
+                lines.extend(
+                    [
+                        "",
+                        f"⚠ {len(mismatch)} of the hits shown declare the opposite "
+                        f"ion mode to the query (query: {request.query_polarity}). "
+                        "Polarity is reported, not filtered.",
+                    ]
                 )
 
         provenance = _search_provenance(
@@ -958,9 +803,6 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             len(exp_peaks),
             library_info,
             profile,
-            null_fit,
-            n_null_actual,
-            use_fdr,
         )
         lines.append("")
         lines.append("---")
@@ -985,7 +827,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             "_run_scan(db=%r, n=%d, mode=%s) -> %d hits (top %.4f)",
             database_file,
             n_spectra,
-            "FDR" if use_fdr else "p-value",
+            "uncalibrated similarity ranking",
             len(hits),
             hits[0]["score"] if hits else 0.0,
         )
@@ -997,16 +839,12 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             query_source=request.spectrum_reference
             or request.experimental_file
             or "unknown",
-            mode="FDR" if use_fdr else "empirical p-value",
-            threshold=report_threshold,
+            mode="uncalibrated similarity ranking",
+            threshold=None,
             n_hits=len(hits),
             top_compound=hits[0]["compound_name"] if hits else None,
             top_score=hits[0]["score"] if hits else None,
-            top_significance=(
-                hits[0]["q_value"]
-                if hits and use_fdr
-                else (hits[0]["p_value"] if hits else None)
-            ),
+            top_significance=None,
         )
         return SearchOutcome(
             report="\n".join(lines), provenance=provenance, summary=summary
@@ -1037,8 +875,8 @@ def _report_banner(
             ">",
             f"> The library below was read from disk as {library_info.format} "
             f"({library_info.version or 'text'}) and searched for real.  Hits are "
-            f"candidate library matches ranked by the stated scorer and "
-            f"significance model, not validated compound identifications.",
+            f"candidate library matches ranked by the stated scorer, "
+            f"not validated compound identifications.",
             ">",
             f"> Library digest: `{digest}`",
             "",
@@ -1054,8 +892,8 @@ def _report_banner(
         "searched against is synthetic: no reader recognises this library path, "
         "so it was not opened and the library was generated in memory.",
         ">",
-        "> Treat this as a demonstration of the scanning, scoring and FDR "
-        "machinery applied to a real query.  Do not report these compounds "
+        "> Treat this as a demonstration of scanning and similarity ranking "
+        "applied to a real query.  Do not report these compounds "
         "as findings.",
         "",
         "## Spectral Library Search Results",
@@ -1072,17 +910,12 @@ def _search_provenance(
     n_query_peaks: int,
     library_info: LibraryInfo | None,
     profile: InstrumentProfile,
-    null_fit: TailFit | None,
-    n_null: int,
-    use_fdr: bool,
 ) -> Provenance:
     """Build the provenance record for one search.
 
-    The record carries the experimental thresholds the scan actually applied —
-    the MS2 window, the significance threshold and the small-library floor —
-    together with the instrument class they were defaulted from and that class's
-    documented provenance, so a report can be read back against the assumption
-    it was produced under (audit F7).
+    Record the applied scoring window and uncalibrated status. The historical
+    FDR threshold and small-library floor remain profile metadata for backwards
+    compatibility; neither is applied as a filter or a calibration criterion.
     """
     sources = []
     if request.experimental_file:
@@ -1105,21 +938,16 @@ def _search_provenance(
         "fdr_threshold": profile.fdr_threshold,
         "small_library_threshold": profile.small_library_threshold,
         "instrument_defaults_provenance": profile.provenance,
-        "null_decoy_scores": n_null,
+        "null_decoy_scores": 0,
+        "null_model": "none (uncalibrated; similarity ranking only)",
+        "search_result_contract": "msmcp.search.similarity.v1",
+        "significance_status": "uncalibrated",
+        "significance_threshold": None,
+        "multiple_testing_method": None,
+        "fdr_control_validated": False,
+        "significance_filter_applied": False,
+        "candidate_ranking": "descending similarity score",
     }
-    if null_fit is not None:
-        parameters["null_model"] = null_fit.model
-        parameters["null_threshold"] = null_fit.threshold
-        parameters["null_shape_xi"] = null_fit.xi
-        parameters["null_scale_sigma"] = null_fit.sigma
-        parameters["null_smallest_attainable_q"] = null_fit.smallest_attainable_q(
-            n_spectra
-        )
-    elif use_fdr:
-        # FDR mode with no permutable decoys: the null could not be calibrated.
-        parameters["null_model"] = "none (no permutable decoys; uncalibrated)"
-    else:
-        parameters["null_model"] = "empirical decoy sample (p-value mode)"
     if request.query_spectrum_index is not None:
         parameters["query_spectrum_index"] = request.query_spectrum_index
     if request.query_polarity is not None:
@@ -1194,24 +1022,19 @@ def _cell_formula(value: Any) -> str:
     return str(value) if value else "—"
 
 
-def _cell_polarity(value: Any, query_polarity: str | None) -> str:
-    """Render a hit's ion mode, flagging a mismatch with the query's.
-
-    A hit is flagged with a warning marker when it declares an ion mode opposite
-    to the query's; polarity is reported, never used to filter, so a caller
-    keeps every hit and decides for itself.
-    """
-    if not value:
-        return "—"
-    polarity = str(value)
-    if query_polarity and polarity != query_polarity:
-        return f"{polarity} ⚠"
-    return polarity
-
-
 def _cell_precursor(value: Any) -> str:
     """Render a precursor m/z cell, or an em dash when it is unknown."""
     return f"{value:.4f}" if isinstance(value, int | float) else "—"
+
+
+def _cell_polarity(value: Any, query_polarity: str | None) -> str:
+    """Render a hit's stated ion mode, marking a mismatch without filtering."""
+    if not value:
+        return "—"
+    polarity = str(value)
+    return (
+        f"{polarity} ⚠" if query_polarity and polarity != query_polarity else polarity
+    )
 
 
 def _digest_lines(job_id: str, summary: SearchSummary) -> str:
@@ -1232,7 +1055,7 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
             else f"`{summary.top_compound}`, score {summary.top_score:.4f}"
         )
     else:
-        top = "none passed the threshold"
+        top = "no library candidates"
 
     if summary.library_synthetic:
         library_line = (
@@ -1256,7 +1079,8 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
             "",
             library_line,
             f"- Query: {summary.query_peaks} real peaks from `{summary.query_source}`",
-            f"- {summary.mode} threshold {summary.threshold}: {summary.n_hits} hit(s)",
+            f"- {summary.mode}: {summary.n_hits} candidate(s)",
+            "> ⚠️ **SIGNIFICANCE UNCALIBRATED.** No error-rate guarantee.",
             f"- Top hit: {top}",
             "",
             "Poll again with `full_report=True` to fetch the full report; other "
@@ -1314,7 +1138,7 @@ def register_tools(mcp: Any) -> None:
             Field(
                 min_length=1,
                 description="Path to the spectral library.  MSP/NIST-style "
-                "text (.msp, .msp.gz) is read from disk through the security "
+                "text (.msp, .msp.gz) and MGF (.mgf, .mgf.gz) are read from disk through the security "
                 "boundary; any other path falls back to a labelled synthetic "
                 "library.",
             ),
@@ -1369,8 +1193,7 @@ def register_tools(mcp: Any) -> None:
                 description=(
                     "Instrument class whose documented defaults set the "
                     "experimental thresholds this scan applies — the MS2 m/z "
-                    "window, the significance threshold and the small-library "
-                    f"FDR floor (default '{DEFAULT_INSTRUMENT_CLASS}').  The "
+                    f"window (default '{DEFAULT_INSTRUMENT_CLASS}').  The "
                     "class and the values used are recorded in the report and "
                     "its provenance.  One of: "
                     + ", ".join(INSTRUMENT_CLASS_NAMES)
@@ -1382,7 +1205,7 @@ def register_tools(mcp: Any) -> None:
         """Start a background spectral-library search and return a job ID.
 
         The **library** is read for real when `database_file` names a format
-        MSMCP can read (MSP/NIST-style text, `.msp` / `.msp.gz`).  The path is
+        MSMCP can read (MSP/NIST-style text and MGF, `.msp` / `.msp.gz` / `.mgf` / `.mgf.gz`).  The path is
         resolved through the same security boundary as acquisitions — allowed
         root, size limit, read-only — so a library outside the allowed root, a
         missing file or an unsupported format is refused before a job is
@@ -1397,13 +1220,12 @@ def register_tools(mcp: Any) -> None:
         because the first spectrum of a real LC/MS run is normally an MS1 survey
         scan, and searching that against an MS2 library means nothing.  A
         spectrum with no peaks is refused rather than dispatched.  The chunked
-        scan, scoring and FDR estimation are real in every case.
+        scan and similarity ranking use the selected library in every case.
+        Significance is uncalibrated; no statistical error-rate claim is made.
 
-        The experimental thresholds the scan applies — the MS2 m/z window, the
-        significance threshold and the small-library FDR floor — come from the
-        named `instrument_class` (default 'generic', MSMCP's v1.0 values) rather
-        than from literals, and the class plus the values used are stated in the
-        report and recorded in its provenance.
+        The MS2 m/z matching window comes from the named `instrument_class`
+        (default 'generic'). The class and matching window are stated in the
+        report and recorded in provenance. No significance threshold is applied.
 
         Returns immediately with a job ID, because the scan takes far longer
         than a request timeout.  Poll `check_search_status` with that ID to
@@ -1481,7 +1303,6 @@ def register_tools(mcp: Any) -> None:
                 "experimental_file": validated.experimental_file,
                 "instrument_class": validated.instrument_class,
                 "spectrum_index": validated.spectrum_index,
-                "query_polarity": query_polarity,
             },
         )
 

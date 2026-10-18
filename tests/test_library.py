@@ -195,7 +195,10 @@ class TestRealLibrarySearch:
 
         assert "REAL LIBRARY" in report
         assert "SYNTHETIC LIBRARY" not in report
-        assert "No hits passed the significance threshold" in report
+        assert "No library candidates were available." in report
+        assert "SIGNIFICANCE UNCALIBRATED" in report
+        assert outcome.summary.n_hits == 0
+        assert outcome.summary.threshold is None
         parameters = outcome.provenance.to_dict()["parameters"]
         assert parameters["library_synthetic"] is False
         assert parameters["library_spectra"] == 0
