@@ -40,6 +40,11 @@ def test_tolerance_bounds_use_ppm_and_da() -> None:
     assert tolerance_bounds(200.0, 0.01, "Da") == pytest.approx((199.99, 200.01))
 
 
+def test_tolerance_bounds_reject_non_finite_calculated_windows() -> None:
+    with pytest.raises(ValueError, match="non-finite m/z window"):
+        tolerance_bounds(1e308, 1e308, "Da")
+
+
 def test_mzml_reader_reports_centroid_profile_and_unknown(
     mzml_with_representation_metadata,
 ) -> None:
@@ -110,6 +115,20 @@ def test_empty_valid_scan_is_zero_but_invalid_arrays_are_missing() -> None:
     assert result.chromatograms.tic_intensities == [0.0, None]
     assert result.chromatograms.bpc_intensities == [None, None]
     assert result.missing_observations[0].source_spectrum_index == 2
+
+
+def test_overflowed_aggregates_are_reported_as_missing() -> None:
+    result = extract_chromatograms(
+        [_spectrum(8, 1, 1.0, [100.0, 100.0], [1e308, 1e308])],
+        targets_mz=[100.0],
+        tolerance=0.0,
+        tolerance_unit="Da",
+        max_spectra=1,
+    )
+    assert result.chromatograms.tic_intensities == [None]
+    assert result.chromatograms.bpc_intensities == [None]
+    assert result.chromatograms.xic[0].intensities == [None]
+    assert result.missing_observations[0].reason == "non_finite_aggregate"
 
 
 def test_missing_rt_is_not_replaced_or_emitted_as_zero() -> None:

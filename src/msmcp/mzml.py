@@ -24,6 +24,7 @@ import binascii
 import gzip
 import importlib
 import logging
+import math
 import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Iterator
@@ -381,20 +382,32 @@ def _parse_binary_data_array(
 
 
 def _extract_scan_start_time(elem: ET.Element) -> float | None:
+    # Unit accession, not a display name or a guessed default, defines the value.
+    # Retention times are exposed in minutes throughout the Spectrum API.
+    seconds_per_minute = 60.0
+    to_minutes = {
+        "UO:0000031": 1.0,  # minute
+        "MS:1000038": 1.0 / seconds_per_minute,  # second (PSI-MS unit)
+        "UO:0000010": 1.0 / seconds_per_minute,  # second
+        "UO:0000028": 1.0 / 60_000.0,  # millisecond
+        "UO:0000029": 1.0 / 60_000_000.0,  # microsecond
+        "UO:0000032": 60.0,  # hour
+    }
     for scan in elem:
         if _local(scan.tag) != "scan":
             continue
         for cv in scan:
             if (
-                _local(cv.tag) == "cvParam"
-                and cv.get("accession") == _ACC_SCAN_START_TIME
+                _local(cv.tag) != "cvParam"
+                or cv.get("accession") != _ACC_SCAN_START_TIME
             ):
-                value = _to_float_or_none(cv.get("value"))
-                if value is None:
-                    return None
-                unit = (cv.get("unitName") or "").lower()
-                # Normalise to minutes for the summary; the mzML default is seconds.
-                return value / 60.0 if "second" in unit else value
+                continue
+            value = _to_float_or_none(cv.get("value"))
+            factor = to_minutes.get(cv.get("unitAccession", ""))
+            if value is None or factor is None:
+                return None
+            retention_time = value * factor
+            return retention_time if math.isfinite(retention_time) else None
     return None
 
 

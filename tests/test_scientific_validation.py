@@ -673,6 +673,8 @@ def test_full_mcp_workflow_over_stdio(tmp_path: Path) -> None:
         precursor_mz=195.0877,
         polarity="positive",
     )
+    writer.add_spectrum([100.0], [2.0], ms_level=1, rt_seconds=60.0)
+    writer.add_spectrum([100.0], [3.0], ms_level=1)
     mzml_path = writer.write(tmp_path / "caffeine.mzML")
     expected_digest = _sha256(mzml_path)
 
@@ -692,8 +694,18 @@ def test_full_mcp_workflow_over_stdio(tmp_path: Path) -> None:
             "load_spectrum",
             {"file_path": str(mzml_path), "spectrum_index": 0},
         )
+        chromatogram_id = host.call_tool(
+            "extract_chromatograms",
+            {
+                "file_path": str(mzml_path),
+                "targets_mz": [100.0],
+                "tolerance": 0.0,
+                "tolerance_unit": "Da",
+                "ms_level": 1,
+            },
+        )
 
-        first_responses = host.responses({init_id, load_id})
+        first_responses = host.responses({init_id, load_id, chromatogram_id})
         init_resp, load_resp = first_responses[init_id], first_responses[load_id]
         assert init_resp["result"]["serverInfo"]["name"] == "MSMCP-MassFlow-Adapter"
 
@@ -709,6 +721,24 @@ def test_full_mcp_workflow_over_stdio(tmp_path: Path) -> None:
         assert loaded["ms_level"] == 2
         assert loaded["precursor_mz"] == pytest.approx(195.0877)
         assert loaded["retention_time"] == pytest.approx(2.0)
+
+        # The structured chromatogram call preserves a missing observation over
+        # MCP JSON-RPC instead of turning a Pydantic conversion error into an
+        # opaque tool failure.
+        chromatogram = _tool_payload(first_responses[chromatogram_id])
+        traces = chromatogram["chromatograms"]
+        assert traces["retention_times_min"] == [1.0, None]
+        assert traces["tic_intensities"] == [2.0, None]
+        assert traces["xic"][0]["intensities"] == [2.0, None]
+        assert chromatogram["missing_observations"] == [
+            {
+                "scan_ordinal": 2,
+                "source_spectrum_index": 2,
+                "ms_level": 1,
+                "retention_time_min": None,
+                "reason": "retention_time_unavailable",
+            }
+        ]
 
         # Provenance must name the operation and carry an *independently
         # computed* content digest of the exact file that was read.

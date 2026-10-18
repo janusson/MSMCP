@@ -33,7 +33,10 @@ def tolerance_bounds(
         half_width = tolerance
     else:
         raise ValueError("tolerance_unit must be 'ppm' or 'Da'")
-    return target_mz - half_width, target_mz + half_width
+    lower, upper = target_mz - half_width, target_mz + half_width
+    if not all(math.isfinite(bound) for bound in (half_width, lower, upper)):
+        raise ValueError("tolerance produces a non-finite m/z window")
+    return lower, upper
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,11 +250,38 @@ def extract_chromatograms(
             )
             continue
 
-        tic_values.append(float(np.sum(intensity, dtype=np.float64)))
-        bpc_values.append(float(np.max(intensity)) if intensity.size else None)
-        for values, (lower, upper) in zip(xic_values, bounds, strict=True):
-            in_window = (mz >= lower) & (mz <= upper)
-            values.append(float(np.sum(intensity[in_window], dtype=np.float64)))
+        with np.errstate(over="ignore", invalid="ignore"):
+            tic = float(np.sum(intensity, dtype=np.float64))
+            bpc = float(np.max(intensity)) if intensity.size else None
+            xic_scan_values = [
+                float(
+                    np.sum(intensity[(mz >= lower) & (mz <= upper)], dtype=np.float64)
+                )
+                for lower, upper in bounds
+            ]
+        aggregates = [tic, *xic_scan_values]
+        if bpc is not None:
+            aggregates.append(bpc)
+        if not all(math.isfinite(value) for value in aggregates):
+            tic_values.append(None)
+            bpc_values.append(None)
+            for values in xic_values:
+                values.append(None)
+            missing.append(
+                MissingObservation(
+                    ordinal,
+                    spectrum.index,
+                    spectrum.ms_level,
+                    rt_value,
+                    "non_finite_aggregate",
+                )
+            )
+            continue
+
+        tic_values.append(tic)
+        bpc_values.append(bpc)
+        for values, xic_value in zip(xic_values, xic_scan_values, strict=True):
+            values.append(xic_value)
 
     rt_coverage: dict[str, float | None] = {
         "start_min": min(all_retention_times) if all_retention_times else None,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Annotated, Any, Literal
 
 from mcp.types import ToolAnnotations
@@ -25,13 +26,15 @@ class ChromatogramInput(BaseModel):
     """Validated arguments for ``extract_chromatograms``."""
 
     file_path: str = Field(..., min_length=1)
-    targets_mz: list[float] = Field(default_factory=list, max_length=MAX_XIC_TARGETS)
-    tolerance: float = Field(default=5.0, ge=0.0)
+    targets_mz: list[Annotated[float, Field(gt=0.0, allow_inf_nan=False)]] = Field(
+        default_factory=list, max_length=MAX_XIC_TARGETS
+    )
+    tolerance: float = Field(default=5.0, ge=0.0, allow_inf_nan=False)
     tolerance_unit: Literal["ppm", "Da"] = "ppm"
     ms_level: int = Field(default=1, ge=1, le=10)
-    retention_time_range_min: list[float] | None = Field(
-        default=None, min_length=2, max_length=2
-    )
+    retention_time_range_min: (
+        list[Annotated[float, Field(allow_inf_nan=False)]] | None
+    ) = Field(default=None, min_length=2, max_length=2)
     max_spectra: int = Field(
         default=MAX_CHROMATOGRAM_SPECTRA,
         ge=1,
@@ -265,7 +268,7 @@ def register_tools(mcp: Any) -> None:
             ),
             completeness=ChromatogramCompleteness.model_validate(result.completeness),
             missing_observations=[
-                MissingScanObservation.model_validate(item)
+                MissingScanObservation.model_validate(asdict(item))
                 for item in result.missing_observations
             ],
             warnings=[
