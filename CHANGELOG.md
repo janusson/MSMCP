@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **Reject spectra outside cosine's numeric domain.** Classical and embedding
+  scorers now reject non-finite m/z/intensity values and negative intensities;
+  `compute_cosine` validates inline inputs, and `search_library` rejects an
+  invalid real query before dispatch. Raw file ingestion is unchanged: signed
+  baseline-corrected data is not clipped and cannot be passed to these cosine
+  scorers without an explicit upstream transform.
+
 ### Added
 
 - **`list_spectra` — a discovery step before loading or searching.** The new

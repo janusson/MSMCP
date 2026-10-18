@@ -86,6 +86,31 @@ class TestContract:
         assert scorer.score(peaks, [(100.0, 0.0)]) == 0.0
         assert scorer.score_many(peaks, [[]]) == [0.0]
 
+    @pytest.mark.parametrize(
+        "invalid_peak",
+        [
+            (100.0, -1.0),
+            (float("nan"), 1.0),
+            (100.0, float("nan")),
+            (float("inf"), 1.0),
+            (100.0, float("inf")),
+        ],
+    )
+    def test_invalid_peak_values_are_rejected(
+        self, scorer: ClassicalScorer, invalid_peak: tuple[float, float]
+    ) -> None:
+        valid_peak = [(100.0, 1.0)]
+        with pytest.raises(ValueError):
+            scorer.score([invalid_peak], valid_peak)
+        with pytest.raises(ValueError):
+            scorer.score(valid_peak, [invalid_peak])
+        with pytest.raises(ValueError):
+            scorer.score_many(valid_peak, [[invalid_peak]])
+
+    def test_extreme_finite_intensities_do_not_overflow(self) -> None:
+        peaks = [(100.0, 1e308), (200.0, 1e308)]
+        assert ClassicalScorer().score(peaks, peaks) == pytest.approx(1.0)
+
     def test_score_is_bounded(self, scorer: ClassicalScorer) -> None:
         rng = np.random.default_rng(7)
         for _ in range(50):

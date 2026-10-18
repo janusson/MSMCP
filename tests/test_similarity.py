@@ -254,6 +254,23 @@ class TestComputeCosine:
         )
         assert out.startswith("ERROR: Query peak [0] has negative intensity (-1.0)")
 
+    @pytest.mark.parametrize(
+        ("mz", "intensity", "message"),
+        [
+            (float("nan"), 1.0, "non-finite m/z"),
+            (100.0, float("nan"), "non-finite intensity"),
+            (float("inf"), 1.0, "non-finite m/z"),
+            (100.0, float("inf"), "non-finite intensity"),
+        ],
+    )
+    def test_non_finite_inline_peaks_return_validation_error(
+        self, sim_tools, mz: float, intensity: float, message: str
+    ) -> None:
+        out = sim_tools["compute_cosine"](
+            query_peaks=[[mz, intensity]], reference_peaks=[[100.0, 1.0]]
+        )
+        assert message in out
+
     def test_empty_peak_list_raises_validation_error(
         self, sim_tools: dict[str, Callable[..., str]]
     ) -> None:

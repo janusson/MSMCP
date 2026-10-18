@@ -29,6 +29,7 @@ from msmcp.instruments import (
     get_profile,
 )
 from msmcp.models import EmbeddingBackendUnavailable, get_embedder
+from msmcp.models.scoring import _validate_peak_list as _validate_score_peak_list
 from msmcp.state import store as reference_store
 
 logger = logging.getLogger("msmcp.tools.similarity")
@@ -101,11 +102,7 @@ def _validate_peak_list(
     """Convert a raw peak list into a float64 (N, 2) array, validating shape."""
     if not peaks:
         raise ValueError(f"{label} peak list must be non-empty.")
-    for i, p in enumerate(peaks):
-        if not isinstance(p, (list, tuple)) or len(p) != 2:
-            raise ValueError(f"{label} peak [{i}] must be [m/z, intensity]; got {p!r}")
-        if p[1] < 0:
-            raise ValueError(f"{label} peak [{i}] has negative intensity ({p[1]})")
+    _validate_score_peak_list(peaks, label)
     arr = np.asarray(peaks, dtype=np.float64)
     return arr
 

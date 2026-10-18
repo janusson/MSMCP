@@ -59,7 +59,14 @@ from msmcp.library import LibraryInfo, LibraryProvider
 from msmcp.models import get_embedder
 from msmcp.models.backends import LSM_MS2_CKPT_ENV
 from msmcp.models.null_model import TailFit, fit_upper_tail
-from msmcp.models.scoring import ClassicalScorer, SpectrumScorer, get_scorer
+from msmcp.models.scoring import (
+    ClassicalScorer,
+    SpectrumScorer,
+    get_scorer,
+)
+from msmcp.models.scoring import (
+    _validate_peak_list as _validate_score_peak_list,
+)
 from msmcp.mzml import Spectrum
 from msmcp.provenance import ModelInfo, Provenance, SourceRef, provenance_for
 from msmcp.state import store as reference_store
@@ -1403,7 +1410,9 @@ def register_tools(mcp: Any) -> None:
         significance threshold and the small-library FDR floor — come from the
         named `instrument_class` (default 'generic', MSMCP's v1.0 values) rather
         than from literals, and the class plus the values used are stated in the
-        report and recorded in its provenance.
+        report and recorded in its provenance. Scoring requires finite peak
+        coordinates and intensities, with non-negative intensities; signed
+        baseline-corrected peaks are not clipped or scored as cosine similarity.
 
         Returns immediately with a job ID, because the scan takes far longer
         than a request timeout.  Poll `check_search_status` with that ID to
@@ -1446,6 +1455,10 @@ def register_tools(mcp: Any) -> None:
             )
             exp_peaks = tuple(placed_peaks)
             query_label = f"`{validated.experimental_file}` {description}"
+
+        # Cosine scoring requires finite m/z/intensities and non-negative
+        # intensities. Refuse an invalid real query before scheduling a job.
+        _validate_score_peak_list(exp_peaks, "query")
 
         # Validate the library before dispatch — not just its path.  Resolving
         # it (allowed root, size, readability) makes an out-of-root or missing
