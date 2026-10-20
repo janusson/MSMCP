@@ -14,7 +14,11 @@ checkout and overlapping PRs; do not port their algorithms or safety changes.
 - [x] Capture fallback: explicitly record
   the capture blocker and provide a local Zed recipe, caption and conditional alt text.
 - [x] Run lint, types, unit tests, notebook evaluation and documentation checks.
-- [ ] Review the scoped diff; commit and push only this branch; create one draft PR.
+- [x] Review the scoped diff; commit and push only this branch; create one draft PR.
+
+Handoff: `codex/prepublication-scientific-demo`;
+[draft PR #66](https://github.com/janusson/MSMCP/pull/66), open and unmerged.
+Screenshot remains incomplete under the documented capture restriction.
 
 No algorithm changes, merges, releases or social publication. The script is a
 transport replay, not an invented AI conversation or scientific-validation claim.

@@ -1,6 +1,8 @@
 # Verification results — 2026-10-20
 
-**Verdict: NOT READY for the requested screenshot-led announcement.** The
+**Verdict: NOT READY for the requested screenshot-led announcement.**
+Handoff: [draft PR #66](https://github.com/janusson/MSMCP/pull/66), branch
+`codex/prepublication-scientific-demo`; open and unmerged. The
 experimental MCP demonstration and documentation repairs are verified. The
 genuine client screenshot remains incomplete because access to the actual
 Codex app was refused by the computer-use API. The local Zed reproduction,
