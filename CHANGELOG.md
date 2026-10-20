@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Dependency isolation
+
+- Move the lowercase imaging `massflow` distribution out of core dependencies
+  into `msmcp[imaging]` (`uv sync --extra imaging`). It is unrelated to the
+  analytical MassFlow engine despite sharing its distribution name; keep those
+  installations separate. Core mzML/MGF APIs and ingestion semantics are unchanged.
+- Keep imzML loading lazy and report missing/incompatible imaging imports with
+  source-install guidance. Preserve `ping`'s public fields and clarify that they
+  inventory distribution metadata, not backend compatibility; optional absence
+  is healthy. Real imaging integration tests skip in core-only environments.
+
 ### Added
 
 - **`list_spectra` — a discovery step before loading or searching.** The new

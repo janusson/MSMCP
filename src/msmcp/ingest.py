@@ -4,9 +4,9 @@ The architecture is::
 
     file -> (MassFlow | msmcp reader) -> MSMCP Spectrum -> DataReference -> tools
 
-MassFlow is the canonical layer for everything it supports (imzML, and its
-zarr/HDF5 stores); MSMCP owns small readers for the formats MassFlow does not
-cover (mzML, MGF).  :func:`resolve_source` picks the reader from the file
+MSMCP owns the core mzML/MGF readers.  Only imzML uses the optional lowercase
+``massflow`` imaging backend, installed with the ``imaging`` extra; this is
+not the analytical ``MassFlow`` engine.  zarr/HDF5 stores are not dispatched.  :func:`resolve_source` picks the reader from the file
 extension, records *which* reader it chose, and returns a :class:`Source` whose
 spectra are all the same :class:`~msmcp.mzml.Spectrum` type - so no downstream
 tool needs to know or care where the data came from.
@@ -34,7 +34,7 @@ from msmcp.security import DEFAULT_POLICY, SecurityPolicy
 __all__ = ["SUPPORTED_FORMATS", "VENDOR_FORMATS", "Source", "resolve_source"]
 
 SUPPORTED_FORMATS: Final[tuple[str, ...]] = ("mzML", "MGF", "imzML")
-"""Formats MSMCP can currently ingest."""
+"""Recognised input formats; imzML reading requires the ``imaging`` extra."""
 
 VENDOR_FORMATS: Final[dict[str, str]] = {
     ".raw": "Thermo",
@@ -46,7 +46,7 @@ VENDOR_FORMATS: Final[dict[str, str]] = {
 
 _VENDOR_GUIDANCE: Final[str] = (
     "convert it to .mzML with ProteoWizard MSConvert and retry (imzML imaging "
-    "data may be passed through directly as .imzML)"
+    "data may be passed through as .imzML with the optional imaging extra)"
 )
 
 
