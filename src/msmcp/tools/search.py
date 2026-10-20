@@ -92,7 +92,9 @@ class SearchInput(BaseModel):
     scoring_method: ScoringMethod = "classical"
     chunk_size: int = Field(default=2000, ge=100, le=10000)
     instrument_class: InstrumentClass | None = None
-    spectrum_index: int | None = Field(default=None, ge=0)
+    spectrum_index: int | None = Field(
+        default=None, ge=0, le=security.DEFAULT_POLICY.max_spectra - 1
+    )
 
     @model_validator(mode="after")
     def _exactly_one_query_source(self) -> SearchInput:
@@ -557,7 +559,14 @@ def _peaks_from_file(
     in real acquisitions — is refused rather than dispatched, since a search
     with no query peaks cannot return anything meaningful.
     """
-    source = ingest.resolve_source(file_path)
+    policy = ingest.DEFAULT_POLICY
+    if spectrum_index >= policy.max_spectra:
+        raise security.SpectrumCountExceededError(
+            f"spectrum_index={spectrum_index} requires reading {spectrum_index + 1} "
+            f"spectra, exceeding the configured max_spectra={policy.max_spectra} "
+            "request limit."
+        )
+    source = ingest.resolve_source(file_path, policy)
     for current, candidate in enumerate(source.iter_spectra()):
         if current != spectrum_index:
             continue
@@ -1331,6 +1340,7 @@ def register_tools(mcp: Any) -> None:
             int | None,
             Field(
                 ge=0,
+                le=ingest.DEFAULT_POLICY.max_spectra - 1,
                 description="Zero-based index of the spectrum to search inside "
                 "experimental_file (default 0).  A real LC-MS/MS file starts "
                 "with an MS1 survey scan, so check which spectrum you want with "
