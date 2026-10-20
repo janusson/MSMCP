@@ -91,7 +91,7 @@ class TestSearchComponents:
         # threshold-passing hits is not deterministic — assert the report is
         # well-formed in either outcome instead.
         assert ("| Rank | Compound" in report) or (
-            "No hits passed the significance threshold" in report
+            "No library candidates were available" in report
         )
 
     def test_scan_requires_a_non_empty_query(self) -> None:
@@ -287,7 +287,7 @@ class TestSearchDispatcherAndPoller:
         assert "## Spectral Library Search Results" in report
         assert "Scoring method: classical (greedy peak matching, ±0.02 Da)" in report
         assert ("| Rank | Compound" in report) or (
-            "No hits passed the significance threshold" in report
+            "No library candidates were available" in report
         )
 
     async def test_the_report_is_delivered_once_then_digested(

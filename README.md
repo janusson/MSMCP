@@ -47,9 +47,9 @@ Worse, the chemistry itself is largely unknown. In untargeted studies, the overw
 
 - **Exact-mass rigor** — rejecting plausible-sounding but physically impossible proposals (ppm validation, isotope arithmetic);
 - **Similarity at scale** — scanning huge libraries with classical peak matching *and* learned embeddings that generalise to spectra never seen before;
-- **Statistically honest scoring** — FDR control rather than "looks similar" vibes.
+- **Statistically honest scoring** — similarity ranking today; validated discovery statistics require independent calibration and are not currently claimed.
 
-All of that is deterministic, well-understood computation. **LLMs should reason about it; they should not perform it.**
+MSMCP makes deterministic calculations; statistical interpretation still depends on validated assumptions. **LLMs should reason about evidence, not manufacture it.**
 
 ## The solution: an MCP adapter with a data-reference store
 
@@ -79,7 +79,7 @@ for are these:
 | "I think this feature is caffeine — does the chemistry hold up?" | Check the adduct, isotope envelope and precursor mass error | `predict_adduct_offset`, `annotate_isotopes`, `validate_precursor` |
 | "Is my measured precursor consistent with this formula?" | A ppm mass-error gate: pass or reject | `validate_precursor` |
 | "How similar are these two spectra — and what is unexplained?" | Cosine similarity, plus the query peaks with no match | `compute_cosine` |
-| "Search this spectrum against my spectral library." | A ranked, significance-scored hit table | `search_library`, `check_search_status` |
+| "Search this spectrum against my spectral library." | Similarity-ranked candidates; no p-values, q-values, or calibrated error-rate claim | `search_library`, `check_search_status` |
 
 The point is not that the agent *knows* the chemistry. It is that every answer
 comes from deterministic, unit-tested computation, and every answer carries
@@ -216,7 +216,8 @@ client](#connecting-an-llm-client) — then ask the agent:
 > `examples/caffeine_library.msp` with `instrument_class="orbitrap"`.
 
 You should get a **REAL LIBRARY — READ FROM DISK** banner with caffeine ranked
-first (the report also states the significance and the null model it used):
+first by similarity. This fabricated example demonstrates mechanics only; search
+significance is uncalibrated and the result is not a compound identification:
 
 | Rank | Compound | Score  | Precursor m/z | Formula   |
 |------|----------|--------|---------------|-----------|
@@ -291,7 +292,8 @@ Agent:   check_search_status(job_id="362c0267…")
 
 Agent:   check_search_status(job_id="362c0267…")
   → "## Spectral Library Search Results …
-     | Rank | Compound | Score | FDR (q-value) | Precursor m/z | Formula | …"
+     SIGNIFICANCE UNCALIBRATED
+     | Rank | Compound | Score | Precursor m/z | Formula | …"
 
 Agent:   validate_precursor(theoretical_mass=194.0804, experimental_mass=194.0831)
   → "VALIDATION REJECTED
@@ -329,7 +331,7 @@ Fourteen tools are exposed to the model: compact Markdown (or a single sentence)
 | `validate_precursor` | `tools/similarity.py` | Mass-error gate at the instrument class's precursor tolerance (5.0 ppm for the default `generic` class) |
 | `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference). The matching window comes from `ms2_tolerance`, or the instrument class when it is unset |
 | `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file, using the instrument class's diagnostic-ion window and SNR bands |
-| `search_library` | `tools/search.py` | Asynchronous library search (job executor; classical or real-embedding scoring). MSP/NIST text and MGF libraries are read from disk through the security boundary; unsupported formats use a labelled synthetic fallback. Significance uses a fitted decoy tail, but its q-floor can suppress hits at library scale; reports disclose the model and floor. The **query** is always real data.
+| `search_library` | `tools/search.py` | Asynchronous similarity-ranked library search (job executor; classical or real-embedding scoring). MSP/NIST text and MGF libraries are read from disk through the security boundary; unsupported formats use a labelled synthetic fallback. Statistical significance is uncalibrated: production search applies no significance filter and reports no p-values or q-values. The **query** is always real data.
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID. The report is delivered once; later polls return a short digest, and `full_report=True` re-requests it |
 | `cancel_search` | `tools/search.py` | Cancel a pending or running search job |
 
@@ -338,12 +340,11 @@ Only `cancel_search` and `release_reference` mutate server state, and both adver
 ## Instrument classes
 
 Several tools apply an experimental threshold: `validate_precursor`'s precursor
-gate, `compute_cosine`'s and `search_library`'s m/z matching window,
-`generate_qc_summary`'s diagnostic-ion window and SNR bands, and
-`search_library`'s significance threshold and small-library floor. None of
-these is a bare literal. Each is resolved from the `instrument_class` argument
-(default `generic`), which names a documented profile in
-`src/msmcp/instruments.py`:
+gate, `compute_cosine`'s and `search_library`'s m/z matching window, and
+`generate_qc_summary`'s diagnostic-ion window and SNR bands. Each is resolved
+from the `instrument_class` argument (default `generic`), which names a
+documented profile in `src/msmcp/instruments.py`. Search has no significance
+threshold; historical profile values are metadata only and are not applied:
 
 | Class | Precursor gate | MS2 / diagnostic-ion window | SNR bands |
 |---|---|---|---|
@@ -356,9 +357,9 @@ these is a bare literal. Each is resolved from the `instrument_class` argument
 Accurate-mass classes express the precursor gate in ppm; unit-resolution
 classes (`ion_trap`, `triple_quad`) use a Da window, because a ppm gate shrinks
 below one nominal mass at a few kDa and is meaningless on an instrument that
-cannot resolve fractions of a nominal mass. The FDR threshold (0.05) and the
-small-library floor (2000) are shared across classes — they are properties of
-the statistics, not of the mass analyser.
+cannot resolve fractions of a nominal mass. The older profile's FDR threshold
+and small-library floor do not affect production search; significance is
+uncalibrated. See [VALIDATION_SIGNIFICANCE.md](VALIDATION_SIGNIFICANCE.md).
 
 The class and the values actually applied are always stated in the result: in
 the report body for `validate_precursor`, `compute_cosine` and
@@ -416,8 +417,8 @@ jargon.
 | **Spectral library** | A collection of reference spectra to search against; MSMCP reads MSP/NIST-style text (`.msp`, `.msp.gz`). |
 | **MSP / NIST text** | The plain-text interchange format most public libraries ship as. |
 | **imzML** | An open format for mass-spectrometry **imaging** data; MSMCP reads it via MassFlow. |
-| **p-value / q-value / FDR** | Significance of a hit, and the false-discovery-rate control across hits. |
-| **Decoy** | A shuffled, non-matching spectrum used to estimate the false-positive background. |
+| **p-value / q-value / FDR** | Statistical significance and false-discovery-rate concepts. MSMCP does not currently report calibrated search significance. |
+| **Decoy** | A constructed non-matching spectrum sometimes used to estimate a null background; the retained experimental decoy helpers are not used for production search. |
 | **Embedding / foundation model** | A learned vector representation of a spectrum; optional, and requires real model weights. |
 | **Instrument class** | A named assumption set (orbitrap, tof, ion_trap, …) that supplies the default thresholds a scan applies. |
 | **Allowed root** | The single directory subtree every file-reading tool is confined to. |
