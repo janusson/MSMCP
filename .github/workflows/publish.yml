@@ -1,0 +1,130 @@
+# Release path: gate the tag, build it, upload it.  Nothing is published by a push to
+# `main`; a publish happens only when a version tag is pushed, or when someone dispatches
+# this workflow at an existing version tag.
+#
+# Authentication is PyPI's Trusted Publishing (OIDC).  That is why this file contains no
+# secret and no token: the `pypi` GitHub environment must be registered on PyPI as a
+# publisher for project `msmcp` with this workflow's filename and environment name.  It
+# can be registered as a *pending* publisher before the project exists, in which case the
+# first successful run creates it.
+name: Publish to PyPI
+
+on:
+  push:
+    tags: ["[0-9]*"]
+  # A tag push can only happen once per tag, so an existing tag needs this path.  It
+  # takes the tag's *name* rather than relying on the dispatch ref, because the workflow
+  # definition is read from the ref being dispatched and a tag that predates this file
+  # therefore cannot run it.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Name of the existing version tag to build and publish, e.g. 1.0.0.  It must
+          match the version declared in that tree's pyproject.toml.
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: gate and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # A tag push names its own tag; a dispatch names the one that was typed.
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: The dispatch input must be a version tag name
+        if: ${{ inputs.tag != '' }}
+        run: |
+          case "${RELEASE_TAG}" in
+            [0-9]*[!0-9A-Za-z.+_-]*) echo "::error::'${RELEASE_TAG}' is not a version tag name"; exit 1 ;;
+            [0-9]*) : ;;
+            *) echo "::error::'${RELEASE_TAG}' is not a version tag name"; exit 1 ;;
+          esac
+          echo "releasing tag ${RELEASE_TAG}"
+
+      - uses: actions/checkout@v5
+        with:
+          # `refs/tags/<name>` cannot resolve to a branch, so the version check below
+          # compares the tag that produced this tree and not an arbitrary ref.
+          ref: ${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install the interpreter named in .python-version
+        run: uv python install
+
+      - name: Sync dependencies from the lockfile (dev extras)
+        run: uv sync --extra dev --locked
+
+      - name: Format check (ruff format --check)
+        run: uv run ruff format --check .
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Types (mypy)
+        run: uv run mypy
+
+      - name: Types (basedpyright)
+        run: uv run basedpyright
+
+      - name: Tests (fast suite; the eval notebook is deselected)
+        run: uv run pytest
+
+      - name: Evaluation notebook (make eval)
+        run: uv run pytest tests/test_eval_notebook.py -m eval -s -q
+
+      # The packaged version is the authority, and the tag must name it.  Without this,
+      # a tag could publish a version that no longer reproduces any tag.
+      - name: The tag must name the version being published
+        run: |
+          version="$(uv run python -c "import importlib.metadata as md; print(md.version('msmcp'))")"
+          echo "tag:              ${RELEASE_TAG}"
+          echo "packaged version: ${version}"
+          if [ "${RELEASE_TAG}" != "${version}" ]; then
+            echo "::error::tag '${RELEASE_TAG}' does not name the packaged version '${version}'"
+            exit 1
+          fi
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Upload the distributions for the publish job
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: upload to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # The environment is what PyPI's publisher is configured against; it is also where
+    # GitHub-side protection (required reviewers) would be attached if wanted.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/msmcp
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
