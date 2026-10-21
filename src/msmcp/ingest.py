@@ -58,6 +58,8 @@ class Source:
     format: str
     backend: str
     """Identifier of the parsing implementation, recorded in provenance."""
+    policy: SecurityPolicy = DEFAULT_POLICY
+    """Effective security policy used to validate and read this source."""
 
     def iter_spectra(self) -> Iterator[Spectrum]:
         """Stream this source's spectra, one at a time."""
@@ -65,7 +67,7 @@ class Source:
             return massflow_io.iter_spectra(self.path)
         if self.backend == "msmcp.mgf":
             return _iter_mgf_spectra(self.path)
-        return mzml.iter_spectra(self.path)
+        return mzml.iter_spectra(self.path, policy=self.policy)
 
     def declared_spectrum_count(self) -> int:
         """Return the source's total spectrum count, as cheaply as possible."""
@@ -124,4 +126,4 @@ def resolve_source(
     else:
         resolved = mzml.resolve_mzml_path(path, effective)
 
-    return Source(path=resolved, format=fmt, backend=backend)
+    return Source(path=resolved, format=fmt, backend=backend, policy=effective)

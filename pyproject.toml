@@ -25,6 +25,7 @@ Changelog = "https://github.com/janusson/MSMCP/blob/main/CHANGELOG.md"
 test = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
+    "pynumpress>=0.1.5",
 ]
 dev = [
     "msmcp[test]",
@@ -37,6 +38,10 @@ dev = [
 # without it, the tool falls back to a small static lookup table).
 chem = [
     "rdkit>=2024.3",
+]
+# Optional MS-Numpress decoder for mzML binary arrays.
+numpress = [
+    "pynumpress>=0.1.5",
 ]
 # Optional ML extras: real spectral foundation-model inference.  The DreaMS
 # package itself is not on PyPI (the `dreams` name is an unrelated
