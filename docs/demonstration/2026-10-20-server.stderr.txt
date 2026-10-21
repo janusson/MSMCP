@@ -1,0 +1,17 @@
+2026-10-20 18:24:13,032 [INFO] msmcp: Starting MSMCP-MassFlow-Adapter v1.0.0 on stdio transport
+2026-10-20 18:24:13,041 [INFO] msmcp.tools.io: load_mzml_summary(file='32Mix_Phala_Tyr_1ugml_1.mzML', spectra=2, total=4747, noise=0.00)
+2026-10-20 18:24:13,172 [INFO] msmcp.tools.io: load_spectrum(file='32Mix_Phala_Tyr_1ugml_1.mzML', index=590) -> ptr:spectrum:01192582a19b3e6d15057cd2 (18 peaks)
+2026-10-20 18:24:13,179 [INFO] msmcp.tools.io: summarise_reference(ptr:spectrum:01192582a19b3e6d15057cd2)
+2026-10-20 18:24:13,180 [INFO] msmcp.tools.chem: annotate_isotopes('C11H12N2O2', smiles=False) → 3 isotopologues
+2026-10-20 18:24:13,182 [INFO] msmcp.tools.chem: predict_adduct_offset('[M+H]+') → +1.007276 Da (charge +1)
+2026-10-20 18:24:13,183 [INFO] msmcp.tools.similarity: validate_precursor(theo=205.0972, exp=724.7224, class=orbitrap) → 2533556.65 ppm (REJECT)
+2026-10-20 18:24:13,186 [INFO] msmcp.tools.io: load_spectrum(file='favipiravir.mgf', index=0) -> ptr:spectrum:04015d4707540bf96d30820c (8 peaks)
+2026-10-20 18:24:13,187 [INFO] msmcp.execution: Submitted job 01d223d397c649d8922d68640f3d3a5e (search_library)
+2026-10-20 18:24:13,187 [INFO] msmcp.tools.search: Dispatched search job 01d223d397c649d8922d68640f3d3a5e (db='favipiravir.msp', method=classical, query_peaks=8)
+2026-10-20 18:24:13,188 [INFO] msmcp.tools.search: Scoring 8 real query peaks
+2026-10-20 18:24:13,188 [INFO] msmcp.tools.search: Scanning 1 spectra in chunks of 2000 (p-value mode)
+2026-10-20 18:24:13,188 [INFO] msmcp.tools.search: Null model: drawing 20000 decoy scores from 1 permutable spectra
+2026-10-20 18:24:13,384 [INFO] msmcp.tools.search: _run_scan(db='favipiravir.msp', n=1, mode=p-value) -> 1 hits (top 1.0000)
+2026-10-20 18:24:13,580 [INFO] msmcp.tools.search: check_search_status(01d223d397c649d8922d68640f3d3a5e): returning the full report (first delivery)
+2026-10-20 18:24:13,583 [INFO] msmcp.tools.io: release_reference(ptr:spectrum:01192582a19b3e6d15057cd2): released
+2026-10-20 18:24:13,586 [INFO] msmcp.tools.io: release_reference(ptr:spectrum:04015d4707540bf96d30820c): released

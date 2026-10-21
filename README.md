@@ -95,19 +95,22 @@ ptr:spectrum:9f3c1a4e7b2d...
 
 The flow is what keeps spectral data out of the context window:
 
+Illustrative API flow (paths and handles are placeholders, not recorded output):
+
 ```text
-load_spectrum(file_path="run42.mzML", spectrum_index=0)
-  -> {"reference": "ptr:spectrum:9f3c…", "n_peaks": 100000,
-      "mz_range": [50.0, 2000.0], "tic": 1.7e9,
-      "provenance": {"operation": "load_spectrum", …}}
+load_spectrum(file_path="acquisition.mzML", spectrum_index=590)
+  -> a server-side spectrum reference and metadata
 
-search_library(spectrum_reference="ptr:spectrum:9f3c…",
-               database_file="libraries/metabolomics.db")
-  -> returns a job ID immediately; the peaks never left the server
+search_library(spectrum_reference="<reference returned above>",
+               database_file="libraries/reference.msp",
+               scoring_method="classical")
+  -> a job ID; poll check_search_status(job_id=...) for the result
 
-release_reference(reference="ptr:spectrum:9f3c…")
-  -> freed now instead of waiting for the retention period
+release_reference(reference="<reference returned above>")
 ```
+
+Use an appropriate measured MSP or MGF reference library inside the allowed root.
+The executable public-data workflow below records the actual inputs and outputs.
 
 The properties that make it safe to rely on:
 
@@ -181,7 +184,7 @@ Prerequisites: [uv](https://docs.astral.sh/uv/) and Python 3.13 (managed automat
 
 ```bash
 # 1. Clone and sync (creates the venv, installs runtime + dev dependencies)
-git clone <repository-url> msmcp && cd msmcp
+git clone https://github.com/janusson/MSMCP msmcp && cd msmcp
 uv sync --extra dev
 
 # 2. Launch the server on stdio, then connect a host (see the next section).
@@ -197,30 +200,40 @@ uv run pytest       # fast unit suite (the eval notebook is deselected)
 make all
 ```
 
-The repository ships a **synthetic worked example**, so you can see a real
-library search without sourcing any data of your own:
+### Reproduce the public-data demonstration
 
-- `examples/caffeine_library.msp` — a 5-compound MSP/NIST text library.
-- `examples/caffeine_spectrum.mgf` — one MS2 spectrum whose peaks duplicate the
-  caffeine record, so the top hit is deterministic.
+This example uses an experimental Q Exactive HF mzML acquisition from
+[Giovanni Andrea Vitale, Zenodo 10043877](https://doi.org/10.5281/zenodo.10043877)
+(CC BY 4.0), plus a measured MassBank spectrum converted to supported MSP/MGF
+formats for a separate library-transport smoke check. Checksums, attribution,
+conversion details, exact MCP calls, and limitations are in the
+[demonstration record](docs/demonstration/README.md).
 
-These are fabricated demonstration spectra, not measured data: the example
-exercises the search mechanics, not a chemical identification. (MGF libraries
-are read too, through the same `LibraryProvider` interface.)
+```bash
+# Download and hash-check the public inputs outside the repository (~40 MB).
+uv run python examples/public_demo.py prepare --data-dir /tmp/msmcp-public-demo
 
-Connect your MCP host — Zed is already configured by this repository's
-`.zed/settings.json`; for other hosts see [Connecting an LLM
-client](#connecting-an-llm-client) — then ask the agent:
+# Start an actual stdio server, call its tools, check the calculation independently,
+# and save a transcript in a new directory (the script does not generate LLM replies).
+uv run python examples/public_demo.py replay --data-dir /tmp/msmcp-public-demo \
+  --output "$(mktemp -d /tmp/msmcp-capture.XXXXXX)/run"
+```
 
-> Load `examples/caffeine_spectrum.mgf` and search it against
-> `examples/caffeine_library.msp` with `instrument_class="orbitrap"`.
+The acquisition workflow selects the later spectrum at index 590 and tests the
+prospectively fixed protonated C11H12N2O2 (tryptophan) hypothesis at the Orbitrap
+profile's 5 ppm window. **The hypothesis is rejected; this does not identify the
+ion or establish absence elsewhere.**
+The profile window is a documented default, not an empirical calibration of this run.
 
-You should get a **REAL LIBRARY — READ FROM DISK** banner with caffeine ranked
-first (the report also states the significance and the null model it used):
+The separate library check loads the measured `favipiravir.mgf`, searches
+`favipiravir.msp` with classical scoring and the `tof` profile, and polls the
+job. Both files retain the same measured source peaks, so this is an explicitly
+labelled **self-match for software verification**, not independent identification
+recovery. The **REAL LIBRARY — READ FROM DISK** banner establishes the input route;
+it does not certify experimental origin, library quality or an identification.
 
-| Rank | Compound | Score  | Precursor m/z | Formula   |
-|------|----------|--------|---------------|-----------|
-| 1    | Caffeine | 1.0000 | 195.0877      | C8H10N4O2 |
+The older `examples/caffeine_*` files remain labelled synthetic fixtures. They
+are not the public-data demonstration and supply no experimental evidence.
 
 `uv` is the canonical tool — every command runs through it:
 
@@ -242,7 +255,7 @@ Re-run `uv sync --extra dev` after changing `pyproject.toml`. The optional `repo
 
 MSMCP keeps its *scientific* claims, its software tests and its identification confidence as separate things, and documents the evidence for each:
 
-- [`SCIENTIFIC_VALIDATION.md`](SCIENTIFIC_VALIDATION.md) — per capability: the claim, the evidence, the tolerances and their justification, and an explicit **VALIDATED / PARTIAL / NOT VALIDATED** status. Isotopes and mzML ingestion are validated against independent references; **similarity is PARTIAL**; **statistical significance/FDR is NOT VALIDATED**.
+- [`SCIENTIFIC_VALIDATION.md`](SCIENTIFIC_VALIDATION.md) — per capability: the claim, the evidence, the tolerances and their justification, and an explicit **VALIDATED / PARTIAL / NOT VALIDATED** status. The isotope algorithm is validated within its stated scope; **mzML ingestion and similarity are PARTIAL**; **statistical significance/FDR is NOT VALIDATED**.
 - [`VALIDATION_SIMILARITY.md`](VALIDATION_SIMILARITY.md) — one bounded experiment comparing MSMCP's scorer against `matchms` on a pinned MassBank release and measuring library recovery on held-out spectra, with its limitations stated plainly.
 
 `make validate-similarity` runs that experiment **opt-in**: it needs the external dataset (`MSMCP_VALIDATION_DATA`) and supplies `matchms` for the one command, so neither the runtime nor the fast test suite depends on it. With no dataset it skips cleanly and downloads nothing.
@@ -269,48 +282,38 @@ Example configuration for **Zed** (`.zed/settings.json`):
 
 ## An agent working through MSMCP
 
-```text
-User:    "What's in run42/experiment.mzML? Then search it."
+[The verified demonstration](docs/demonstration/README.md) separates the AI's
+hypothesis, actual scientific tool outputs, and the limits of the evidence.
+It includes a replayable MCP transcript and exact instructions for a real client.
+The reproducible stdio replay is the computational deliverable; capture at a
+real MCP client is pending on Eric. The [numbered capture runbook](docs/demonstration/CAPTURE.md)
+is ready for him to follow.
 
-Agent:   load_spectrum(file_path="run42/experiment.mzML", spectrum_index=0)
-  → {"reference": "ptr:spectrum:9f3c…", "format": "mzML",
-     "n_peaks": 842, "mz_range": [50.0, 900.1], "tic": 4.1e7,
-     "provenance": {"operation": "load_spectrum", …}}
+An example question for that acquisition (a prompt, not a recorded conversation):
 
-Agent:   summarise_reference(reference="ptr:spectrum:9f3c…")
-  → "Spectrum #0 | MS2 | RT: 2.00 min … Top 10 peaks …
-     Provenance: load_spectrum … source: run42/experiment.mzML"
+> Use MSMCP to inspect the prospectively selected later MS/MS scan 591.
+> Is its precursor consistent with protonated C11H12N2O2 at the Orbitrap
+> profile's 5 ppm tolerance? State the observed and expected m/z, the ppm error,
+> provenance, the verdict and the limits of the evidence.
 
-Agent:   search_library(spectrum_reference="ptr:spectrum:9f3c…",
-                        database_file="libraries/metabolomics.db",
-                        scoring_method="dreams")
-  → "Job ID: 362c0267… (the peaks never entered the conversation)"
+The client should call `load_mzml_summary`, `load_spectrum` at index 590,
+`summarise_reference`, `annotate_isotopes`, `predict_adduct_offset`, and
+`validate_precursor`. Use the full-precision independently calculated ion m/z
+from the demonstration record: the formula tool's text rounds neutral masses
+to four decimal places. For singly charged [M+H]+, add a proton to neutral M;
+compare the resulting ion m/z with observed precursor m/z.
 
-Agent:   check_search_status(job_id="362c0267…")
-  → "🔄 Running — scanning the spectral library …"
+**Search warning:** `.msp`, `.msp.gz`, `.mgf`, and `.mgf.gz` are supported
+library suffixes. An unsupported suffix, including `.db`, substitutes a labelled
+synthetic library without opening that path. A missing or malformed file with a
+supported suffix raises an error. Check the dispatch banner and final provenance;
+never use an unsupported suffix for experimental work.
 
-Agent:   check_search_status(job_id="362c0267…")
-  → "## Spectral Library Search Results …
-     | Rank | Compound | Score | FDR (q-value) | Precursor m/z | Formula | …"
-
-Agent:   validate_precursor(theoretical_mass=194.0804, experimental_mass=194.0831)
-  → "VALIDATION REJECTED
-     Mass error:        13.91 ppm
-     Instrument class:  generic (precursor tolerance 5.0 ppm)
-     … This is physically invalid for the hypothesised compound under the
-     generic class assumption. Reconsider the molecular formula, adduct
-     assignment, or instrument calibration."
-
-Agent:   release_reference(reference="ptr:spectrum:9f3c…")
-  → "Released. The stored peaks are no longer available."
-
-Agent:   "The top hit is caffeine, but the precursor mass error (13.91 ppm)
-         fails validation — likely a sodiated adduct. Let me check…"
-```
-
-The agent carries references, job IDs and verdicts — never spectra.
-
-> **Note on this walkthrough:** the *query* spectrum is genuinely read from `experiment.mzML`. The **library** depends on the path: an MSP/NIST-style text library (`.msp`, `.msp.gz`) or an MGF library (`.mgf`, `.mgf.gz`) is read from disk through the same security boundary as the query, while a path with no reader (such as the `metabolomics.db` string above) falls back to a synthetic library of 500–5,000 spectra seeded from that string. Either way the dispatch reply and the final report carry a banner naming which library actually answered the query, ahead of any hit table. Treat the hits as scoring results, never as identifications. See *Known limitations & roadmap*.
+**Scientific limit:** the shipped search still applies p/q-based filtering whose
+wrong-compound error calibration is NOT VALIDATED. Such values are not identity
+probabilities or established FDR control. Empty filtered output does not establish
+absence. The public acquisition demonstration therefore uses precursor arithmetic
+and spectrum inspection, without claiming a library identification.
 
 ## Tool reference
 
@@ -416,7 +419,7 @@ jargon.
 | **Spectral library** | A collection of reference spectra to search against; MSMCP reads MSP/NIST-style text (`.msp`, `.msp.gz`). |
 | **MSP / NIST text** | The plain-text interchange format most public libraries ship as. |
 | **imzML** | An open format for mass-spectrometry **imaging** data; MSMCP reads it via MassFlow. |
-| **p-value / q-value / FDR** | Significance of a hit, and the false-discovery-rate control across hits. |
+| **p-value / q-value / FDR** | Statistical quantities intended to describe error under a null model. MSMCP's wrong-compound calibration and FDR control are **NOT VALIDATED**. |
 | **Decoy** | A shuffled, non-matching spectrum used to estimate the false-positive background. |
 | **Embedding / foundation model** | A learned vector representation of a spectrum; optional, and requires real model weights. |
 | **Instrument class** | A named assumption set (orbitrap, tof, ion_trap, …) that supplies the default thresholds a scan applies. |
@@ -424,7 +427,9 @@ jargon.
 
 ## Provenance
 
-Every significant object MSMCP derives carries a structured, immutable provenance record:
+Stored spectra and search outcomes carry structured, immutable provenance.
+The following is an illustrative schema example, not a recorded result (paths,
+handles, timestamp and software versions are placeholders):
 
 ```json
 {
@@ -445,25 +450,17 @@ It is deliberately not a provenance framework: no graph, no query language, no s
 
 ### Example: exact-mass chemistry
 
+Illustrative API calls for theoretical chemistry, not a recorded AI conversation:
+
 ```text
-LLM calls: predict_adduct_offset(adduct_string="[M+H]+")
-→ "Adduct: [M+H]+
-   Polarity: positive
-   Charge state: +1
-   Exact mass shift (Δ): +1.007276 Da
-   m/z offset for neutral M: M + 1.007276 Da"
-
-LLM calls: annotate_isotopes(identifier="C6H12O6")
-→ "Monoisotopic mass: 180.0634 Da
-   | M   | 180.0634 | 1.0000 |
-   | M+1 | 181.0668 | 0.0686 |
-   | M+2 | 182.0680 | 0.0143 |"
-
-LLM calls: validate_precursor(theoretical_mass=180.0634, experimental_mass=180.0628)
-→ "VALIDATION PASSED
-   Mass error:        3.33 ppm
-   Instrument class:  generic (precursor tolerance 5.0 ppm)"
+predict_adduct_offset(adduct_string="[M+H]+")
+annotate_isotopes(identifier="C6H12O6")
 ```
+
+For an experimental comparison, compute the expected ion m/z for the assumed
+adduct and charge before calling `validate_precursor`. The
+[public-data example](docs/demonstration/README.md) executes that comparison and
+records the actual numeric result.
 
 The isotope envelope is the exact multinomial expansion of each element's
 isotopes, not a first-order approximation.  That is what makes a halogen-rich
@@ -477,15 +474,10 @@ SMILES → formula conversion uses RDKit when available (`uv sync --extra chem`)
 
 ### Example: spectral similarity (classical → embeddings)
 
-```text
-LLM calls: compute_cosine(
-    query_peaks=[[110.07, 40.0], [120.08, 100.0], [136.08, 60.0]],
-    reference_peaks=[[110.07, 40.0], [120.08, 100.0], [136.08, 60.0], [500.10, 55.0]],
-    scoring_method="dreams"
-)
-→ "Cosine Similarity (DreaMS): 0.8838
-   Scoring method: DreaMS deep embedding (1024-d, L2-normalised)"
-```
+Embedding similarity requires actual model inference and installed weights.
+No example embedding score is claimed here. The
+[measured MSP/MGF replay](docs/demonstration/README.md#supported-format-library-check-kept-separate)
+uses classical scoring; its labelled self-match verifies software mechanics.
 
 `scoring_method` accepts `"classical"` (greedy peak matching within a Da tolerance, with unmatched-peak reporting), `"dreams"`, or `"lsm-ms2"`. The embedding methods require real inference: if the corresponding model is unavailable in production, the tool raises `EmbeddingBackendUnavailable` rather than returning a value that looks learned. Embeddings matter for the Dark Metabolome: learned representations express *structural* similarity, so a spectrum with no library twin can still rank meaningfully against its nearest chemical neighbours — something raw peak alignment cannot do.
 

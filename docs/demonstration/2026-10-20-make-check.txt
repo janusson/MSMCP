@@ -1,0 +1,93 @@
+/Library/Developer/CommandLineTools/usr/bin/make lint
+uv sync --extra dev
+Resolved 113 packages in 3ms
+Audited 82 packages in 5ms
+uv run ruff format --check .
+83 files already formatted
+uv run ruff check .
+All checks passed!
+uv run mypy
+Success: no issues found in 59 source files
+uv run basedpyright
+0 errors, 0 warnings, 0 notes
+/Library/Developer/CommandLineTools/usr/bin/make test
+uv sync --extra dev
+Resolved 113 packages in 4ms
+Audited 82 packages in 2ms
+uv run pytest
+============================= test session starts ==============================
+platform darwin -- Python 3.13.12, pytest-9.1.1, pluggy-1.6.0
+rootdir: <REPO_DIR>
+configfile: pyproject.toml
+testpaths: tests
+plugins: asyncio-1.4.0, anyio-4.14.2, zarr-3.3.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 614 items / 1 deselected / 613 selected
+
+tests/test_chem.py ..................................................... [  8%]
+.....                                                                    [  9%]
+tests/test_embeddings.py ..........................................      [ 16%]
+tests/test_eval_notebook.py .                                            [ 16%]
+tests/test_executor.py ........................                          [ 20%]
+tests/test_ingest.py ..........................                          [ 24%]
+tests/test_instruments.py ...................                            [ 27%]
+tests/test_io.py ..........                                              [ 29%]
+tests/test_library.py .................................                  [ 34%]
+tests/test_library_benchmark.py ..........                               [ 36%]
+tests/test_mgf.py .......................                                [ 40%]
+tests/test_mzml.py ............................                          [ 44%]
+tests/test_null_model.py ...............                                 [ 47%]
+tests/test_pointers.py ................................................. [ 55%]
+..                                                                       [ 55%]
+tests/test_provenance.py ..................                              [ 58%]
+tests/test_qc.py ...                                                     [ 58%]
+tests/test_quickstart_example.py ..                                      [ 59%]
+tests/test_scientific_validation.py .................................... [ 65%]
+                                                                         [ 65%]
+tests/test_scoring.py ..................                                 [ 68%]
+tests/test_search.py .................................................   [ 76%]
+tests/test_security.py ............................                      [ 80%]
+tests/test_server_contract.py ....                                       [ 81%]
+tests/test_similarity.py ............................................... [ 88%]
+...........                                                              [ 90%]
+tests/test_smoke_stdio.py .                                              [ 90%]
+tests/test_spearman.py .......                                           [ 92%]
+tests/test_tool_schemas.py ..................                            [ 94%]
+tests/test_validation_harness.py ............                            [ 96%]
+tests/test_workflow.py ................                                  [ 99%]
+tests/test_zed_config.py ...                                             [100%]
+
+====================== 613 passed, 1 deselected in 31.82s ======================
+/Library/Developer/CommandLineTools/usr/bin/make eval
+uv sync --extra dev
+Resolved 113 packages in 3ms
+Audited 82 packages in 2ms
+uv run pytest tests/test_eval_notebook.py -m eval -s -q
+
+tool                     cases  pass  fail  skip   total_ms    max_ms
+---------------------------------------------------------------------
+DreaMSInferenceEmbedder      4     3     0     1        0.6       0.3
+LSMMS2InferenceEmbedder      1     1     0     0        0.1       0.1
+annotate_isotopes            2     2     0     0        0.1       0.1
+cancel_search                3     3     0     0        1.5       1.2
+check_search_status          8     8     0     0        0.2       0.1
+compute_cosine               8     8     0     0        1.6       0.5
+embed                       14    14     0     0       17.1       8.2
+generate_qc_summary          1     1     0     0        0.5       0.5
+get_embedder                 2     2     0     0        0.1       0.1
+list_spectra                 1     1     0     0        0.3       0.3
+load_mzml_summary            4     4     0     0        3.0       1.7
+load_spectrum                2     2     0     0        2.7       2.0
+ping                         1     1     0     0        0.3       0.3
+predict_adduct_offset       12    12     0     0        0.5       0.3
+release_reference            2     2     0     0        0.0       0.0
+search_library              19    19     0     0    25966.9   16867.3
+summarise_reference          2     2     0     0        0.7       0.6
+tools/list                  17    17     0     0        0.1       0.0
+validate_precursor          16    16     0     0        1.5       1.0
+---------------------------------------------------------------------
+TOTAL                      119   118     0     1
+verdict: PASSED | notebook wall clock 26.06 s | report: <REPO_DIR>/notebooks/.eval_artifacts/eval_report.json
+  skipped: [DreaMSInferenceEmbedder] real 1024-d embedding of the caffeine spectrum — requires the optional `dreams` package
+.
+1 passed, 1 deselected in 26.07s

@@ -1,0 +1,23 @@
+{
+  "retrieved_at_utc": "2026-10-20T23:18:58.327697+00:00",
+  "source_api": "https://zenodo.org/api/records/10043877",
+  "doi": "10.5281/zenodo.10043877",
+  "title": "ChemM_AQC_32mix_raw and mzml",
+  "creators": [
+    {
+      "name": "Vitale, Giovanni Andrea",
+      "affiliation": "University of T\u00fcbingen"
+    }
+  ],
+  "license": {
+    "id": "cc-by-4.0"
+  },
+  "description": "<p>Qexactive HF. Treated and &nbsp;Untreated mixtures</p>",
+  "file": {
+    "name": "32Mix_Phala_Tyr_1ugml_1.mzML",
+    "bytes": 40179684,
+    "checksum": "md5:49f99a6bf111b45c6dabdba12867f118",
+    "url": "https://zenodo.org/api/records/10043877/files/32Mix_Phala_Tyr_1ugml_1.mzML/content"
+  },
+  "sha256": "7536385fb4ba7203aa39cc9874efcb3e0c4d7e92e2dec9b3958b7ddaba7d66c4"
+}
