@@ -224,6 +224,23 @@ def test_resource_limit_counts_scanned_spectra_not_selected_points() -> None:
         )
 
 
+def test_extraction_accepts_the_documented_ten_thousand_scan_bound() -> None:
+    spectra = (
+        _spectrum(index, 1, index / 60.0, [100.0], [1.0]) for index in range(5_001)
+    )
+    result = extract_chromatograms(
+        spectra,
+        targets_mz=[100.0],
+        tolerance=0.0,
+        tolerance_unit="Da",
+        max_spectra=10_000,
+    )
+
+    assert result.completeness["scanned_spectra"] == 5_001
+    assert result.completeness["full_acquisition_processed"] is True
+    assert len(result.chromatograms.xic[0].intensities) == 5_001
+
+
 def test_results_are_deterministic_and_include_calculation_provenance() -> None:
     spectra = [_spectrum(0, 1, 1.0, [100.0], [2.0])]
     first = extract_chromatograms(

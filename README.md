@@ -539,7 +539,7 @@ MSMCP is a **local, single-user server**: the MCP host spawns it as a child proc
 | `MSMCP_LSM_MS2_CKPT` | unset | Path to a bring-your-own LSM-MS2 checkpoint |
 | `MSMCP_LSM_MS2_ALLOW_UNSAFE` | unset | `1` opts into full-pickle checkpoint loading (unsafe) |
 
-`extract_chromatograms` has a separate per-call `max_spectra` ceiling of 5,000;
+`extract_chromatograms` has a separate per-call `max_spectra` ceiling of 10,000;
 it does not change `MSMCP_MAX_SPECTRA` for other tools. The parameter counts
 every source spectrum scanned, including other MS levels and scans outside an
 RT filter. A call that would exceed it fails without returning a partial trace.

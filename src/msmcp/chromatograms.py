@@ -15,7 +15,7 @@ from msmcp.provenance import Provenance, SourceRef, provenance_for
 from msmcp.security import SpectrumCountExceededError
 
 ToleranceUnit = Literal["ppm", "Da"]
-MAX_CHROMATOGRAM_SPECTRA = 5_000
+MAX_CHROMATOGRAM_SPECTRA = 10_000
 MAX_XIC_TARGETS = 20
 
 

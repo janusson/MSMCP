@@ -99,7 +99,7 @@ array-length disagreement remains visible in server logs.
 
 ## Resource bounds
 
-The tool has a per-call `max_spectra` default and hard maximum of 5,000. This is
+The tool has a per-call `max_spectra` default and hard maximum of 10,000. This is
 separate from `MSMCP_MAX_SPECTRA` and does not change limits for other tools.
 It counts **all source spectra scanned**, including unselected MS levels and
 scans outside the RT filter; it does not count selected scans or returned
@@ -116,7 +116,7 @@ trace arrays are bounded by the scan limit.
    existing file-size policy in force.
 2. Call `extract_chromatograms` separately for the sample and blank with the
    four targets above, `tolerance=5.0`, `tolerance_unit="ppm"`, `ms_level=1`,
-   and `max_spectra=5000`.
+   and `max_spectra=10000`.
 3. Read `structuredContent.chromatograms.retention_times_min` as the shared
    coordinate vector and use the corresponding `tic_intensities`,
    `bpc_intensities`, and each `xic[i].intensities`. Use the XIC's

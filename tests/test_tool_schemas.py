@@ -227,6 +227,15 @@ async def test_chromatogram_tool_publishes_a_structured_output_schema() -> None:
     assert set(tool.input_schema.get("required", [])) == {"file_path"}
 
 
+async def test_chromatogram_tool_advertises_ten_thousand_scan_bound() -> None:
+    tool = next(t for t in await _tools() if t.name == "extract_chromatograms")
+    assert tool.input_schema["properties"]["max_spectra"]["maximum"] == 10_000
+    assert (
+        ChromatogramInput(file_path="sample.mzML", max_spectra=10_000).max_spectra
+        == 10_000
+    )
+
+
 async def test_compute_cosine_advertises_one_peak_source_per_side() -> None:
     """Both spellings of each side reach the wire, and the exclusion is stated.
 
