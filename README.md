@@ -98,7 +98,7 @@ The flow is what keeps spectral data out of the context window:
 Illustrative API flow (paths and handles are placeholders, not recorded output):
 
 ```text
-load_spectrum(file_path="acquisition.mzML", spectrum_index=8)
+load_spectrum(file_path="acquisition.mzML", spectrum_index=590)
   -> a server-side spectrum reference and metadata
 
 search_library(spectrum_reference="<reference returned above>",
@@ -211,17 +211,18 @@ conversion details, exact MCP calls, and limitations are in the
 
 ```bash
 # Download and hash-check the public inputs outside the repository (~40 MB).
-uv run python examples/public_demo.py prepare --data-dir /tmp/msmcp-demo-data
+uv run python examples/public_demo.py prepare --data-dir /tmp/msmcp-public-demo
 
 # Start an actual stdio server, call its tools, check the calculation independently,
 # and save a transcript in a new directory (the script does not generate LLM replies).
-uv run python examples/public_demo.py replay --data-dir /tmp/msmcp-demo-data \
-  --output /tmp/msmcp-demo-run
+uv run python examples/public_demo.py replay --data-dir /tmp/msmcp-public-demo \
+  --output "$(mktemp -d /tmp/msmcp-capture.XXXXXX)/run"
 ```
 
-The acquisition workflow inspects spectrum index 8 and tests the protonated
-C6H18O3Si3 hypothesis at the Orbitrap profile's 5 ppm window. **Passing this
-arithmetic check establishes mass consistency, not structural identification.**
+The acquisition workflow selects the later spectrum at index 590 and tests the
+prospectively fixed protonated C11H12N2O2 (tryptophan) hypothesis at the Orbitrap
+profile's 5 ppm window. **The hypothesis is rejected; this does not identify the
+ion or establish absence elsewhere.**
 The profile window is a documented default, not an empirical calibration of this run.
 
 The separate library check loads the measured `favipiravir.mgf`, searches
@@ -284,17 +285,18 @@ Example configuration for **Zed** (`.zed/settings.json`):
 [The verified demonstration](docs/demonstration/README.md) separates the AI's
 hypothesis, actual scientific tool outputs, and the limits of the evidence.
 It includes a replayable MCP transcript and exact instructions for a real client.
-Screenshot capture remains incomplete; no mock conversation or generated screenshot
-is presented as evidence.
+The reproducible stdio replay is the computational deliverable; capture at a
+real MCP client is pending on Eric. The [numbered capture runbook](docs/demonstration/CAPTURE.md)
+is ready for him to follow.
 
 An example question for that acquisition (a prompt, not a recorded conversation):
 
-> Use MSMCP to inspect the first MS/MS spectrum in the public acquisition.
-> Is its precursor consistent with protonated C6H18O3Si3 at the Orbitrap
+> Use MSMCP to inspect the prospectively selected later MS/MS scan 591.
+> Is its precursor consistent with protonated C11H12N2O2 at the Orbitrap
 > profile's 5 ppm tolerance? State the observed and expected m/z, the ppm error,
-> provenance, and what a passing result does and does not establish.
+> provenance, the verdict and the limits of the evidence.
 
-The client should call `load_mzml_summary`, `load_spectrum` at index 8,
+The client should call `load_mzml_summary`, `load_spectrum` at index 590,
 `summarise_reference`, `annotate_isotopes`, `predict_adduct_offset`, and
 `validate_precursor`. Use the full-precision independently calculated ion m/z
 from the demonstration record: the formula tool's text rounds neutral masses

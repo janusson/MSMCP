@@ -12,6 +12,7 @@ import base64
 import hashlib
 import json
 import math
+import os
 import re
 import struct
 import subprocess
@@ -109,23 +110,8 @@ def prepare(directory: Path) -> None:
     print("Verified public acquisition and converted measured MassBank record.")
 
 
-def independent_check(directory: Path) -> dict[str, Any]:
-    """Read original XML and binary arrays without importing MSMCP's readers."""
-    document = ET.fromstring(verified_bytes(directory / ACQUISITION, ACQUISITION_SHA))
-    spectra = document.findall(".//m:spectrum", NS)
-    spectrum = spectra[8]
-    cv = {e.attrib["accession"]: e for e in spectrum.findall(".//m:cvParam", NS)}
-    observed = Decimal(cv["MS:1000744"].attrib["value"])
-    # NIST neutral isotope masses and CODATA 2022 proton mass, independently
-    # transcribed; do not import the constants or formula parser under test.
-    neutral = (
-        6 * Decimal("12")
-        + 18 * Decimal("1.00782503223")
-        + 3 * Decimal("15.99491461957")
-        + 3 * Decimal("27.97692653465")
-    )
-    expected = neutral + Decimal("1.0072764665789")
-    ppm = (observed - expected) / expected * 10**6
+def decode_arrays(spectrum: ET.Element) -> dict[str, tuple[float, ...]]:
+    """Decode this pinned acquisition without MSMCP's ingestion implementation."""
     arrays: dict[str, tuple[float, ...]] = {}
     for array in spectrum.findall(".//m:binaryDataArray", NS):
         accessions = {e.attrib["accession"] for e in array.findall("m:cvParam", NS)}
@@ -137,6 +123,43 @@ def independent_check(directory: Path) -> dict[str, Any]:
             "<" + code * (len(payload) // struct.calcsize(code)), payload
         )
         arrays["mz" if "MS:1000514" in accessions else "intensity"] = values
+    return arrays
+
+
+def independent_check(directory: Path) -> dict[str, Any]:
+    """Apply the recorded prospective rule, then independently test the hypothesis."""
+    document = ET.fromstring(verified_bytes(directory / ACQUISITION, ACQUISITION_SHA))
+    spectra = document.findall(".//m:spectrum", NS)
+    for _index, spectrum in enumerate(spectra):
+        cv = {e.attrib["accession"]: e for e in spectrum.findall(".//m:cvParam", NS)}
+        if cv["MS:1000511"].attrib["value"] != "2":
+            continue
+        if Decimal(cv["MS:1000016"].attrib["value"]) < 2:
+            continue
+        arrays = decode_arrays(spectrum)
+        if len(arrays["mz"]) < 10:
+            continue
+        observed = Decimal(cv["MS:1000744"].attrib["value"])
+        base_index = max(
+            range(len(arrays["intensity"])), key=arrays["intensity"].__getitem__
+        )
+        base_peak_mz = arrays["mz"][base_index]
+        if base_peak_mz <= float(observed) - 0.02:
+            break
+    else:
+        raise ValueError(
+            "No spectrum meets the prospective demonstration selection rule"
+        )
+    # Independently transcribed NIST isotope masses and CODATA 2022 proton mass.
+    # The tryptophan formula/adduct were fixed before replacement-scan inspection.
+    neutral = (
+        11 * Decimal("12")
+        + 12 * Decimal("1.00782503223")
+        + 2 * Decimal("14.00307400443")
+        + 2 * Decimal("15.99491461957")
+    )
+    expected = neutral + Decimal("1.0072764665789")
+    ppm = (observed - expected) / expected * 10**6
     levels = Counter(
         e.attrib["value"]
         for s in spectra
@@ -148,11 +171,14 @@ def independent_check(directory: Path) -> dict[str, Any]:
         "bytes": (directory / ACQUISITION).stat().st_size,
         "total_spectra": len(spectra),
         "ms_levels": dict(levels),
-        "index": 8,
+        "selection_rule": "First MS2 at RT >= 2 min, >= 10 peaks, base peak <= precursor - 0.02 m/z; no mass-error selection",
+        "hypothesis": "C11H12N2O2 [M+H]+ (tryptophan candidate, fixed before selection)",
+        "index": _index,
         "native_id": spectrum.attrib["id"],
         "positive_polarity": "MS:1000130" in cv,
         "retention_time_min": cv["MS:1000016"].attrib["value"],
         "n_peaks": len(arrays["mz"]),
+        "base_peak_mz": base_peak_mz,
         "tic": math.fsum(arrays["intensity"]),
         "observed_mz": str(observed),
         "neutral_mass_da": str(neutral),
@@ -161,6 +187,15 @@ def independent_check(directory: Path) -> dict[str, Any]:
         "tolerance_ppm": 5,
         "mass_consistent": abs(ppm) <= 5,
         "identification_established": False,
+    }
+
+
+def server_environment(directory: Path) -> dict[str, str]:
+    return {
+        "MSMCP_ALLOWED_ROOT": str(directory),
+        "MSMCP_MAX_SPECTRA": "5000",
+        "MSMCP_MAX_FILE_SIZE_BYTES": "524288000",
+        "PYTHONPATH": str(ROOT / "src"),
     }
 
 
@@ -173,14 +208,9 @@ async def replay(directory: Path, output: Path) -> None:
     entries: list[dict[str, Any]] = []
     parameters = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "msmcp.server"],
+        args=[str(Path(__file__).resolve()), "serve", "--data-dir", str(directory)],
         cwd=str(directory),
-        env={
-            "MSMCP_ALLOWED_ROOT": str(directory),
-            "MSMCP_MAX_SPECTRA": "5000",
-            "MSMCP_MAX_FILE_SIZE_BYTES": "524288000",
-            "PYTHONPATH": str(ROOT / "src"),
-        },
+        env=server_environment(directory),
     )
     with (output / "server.stderr.txt").open("w") as errlog:
         async with stdio_client(parameters, errlog=errlog) as (reader, writer):
@@ -201,7 +231,9 @@ async def replay(directory: Path, output: Path) -> None:
 
                 await call("load_mzml_summary", file_path=ACQUISITION, max_spectra=2)
                 loaded = await call(
-                    "load_spectrum", file_path=ACQUISITION, spectrum_index=8
+                    "load_spectrum",
+                    file_path=ACQUISITION,
+                    spectrum_index=check["index"],
                 )
                 structured = loaded["structuredContent"]
                 if structured["precursor_mz"] != float(check["observed_mz"]):
@@ -219,7 +251,7 @@ async def replay(directory: Path, output: Path) -> None:
                     raise ValueError("Tool provenance digest differs")
                 await call("summarise_reference", reference=structured["reference"])
                 await call(
-                    "annotate_isotopes", identifier="C6H18O3Si3", isotopologues=3
+                    "annotate_isotopes", identifier="C11H12N2O2", isotopologues=3
                 )
                 await call("predict_adduct_offset", adduct_string="[M+H]+")
                 validated = await call(
@@ -228,7 +260,12 @@ async def replay(directory: Path, output: Path) -> None:
                     experimental_mass=structured["precursor_mz"],
                     instrument_class="orbitrap",
                 )
-                if "VALIDATION PASSED" not in json.dumps(validated):
+                verdict = (
+                    "VALIDATION PASSED"
+                    if check["mass_consistent"]
+                    else "VALIDATION REJECTED"
+                )
+                if verdict not in json.dumps(validated):
                     raise ValueError(
                         "Tool verdict differs from independent calculation"
                     )
@@ -301,13 +338,39 @@ async def replay(directory: Path, output: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["prepare", "replay"])
+    parser.add_argument(
+        "operation", choices=["prepare", "replay", "serve", "client-config"]
+    )
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     directory = args.data_dir.expanduser().resolve()
     if args.operation == "prepare":
         prepare(directory)
+    elif args.operation == "serve":
+        os.chdir(directory)
+        os.environ.update(server_environment(directory))
+        os.execv(sys.executable, [sys.executable, "-m", "msmcp.server"])
+    elif args.operation == "client-config":
+        print(
+            json.dumps(
+                {
+                    "context_servers": {
+                        "msmcp-public-demo": {
+                            "command": sys.executable,
+                            "args": [
+                                str(Path(__file__).resolve()),
+                                "serve",
+                                "--data-dir",
+                                str(directory),
+                            ],
+                            "env": {},
+                        }
+                    }
+                },
+                indent=2,
+            )
+        )
     else:
         if args.output is None:
             parser.error("replay requires --output (a new directory)")

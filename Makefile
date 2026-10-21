@@ -5,7 +5,7 @@
 # .python-version.  The `repomix` target additionally requires the `repomix`
 # CLI (https://repomix.com/, Node-based).
 
-.PHONY: install format lint test eval run repomix all validate-similarity
+.PHONY: install format lint test eval check run repomix all validate-similarity
 
 install:            ## Create/update the virtualenv and sync all deps (incl. dev extras)
 	uv sync --extra dev
@@ -25,6 +25,11 @@ test: install       ## Run the fast pytest suite (the eval notebook is deselecte
 
 eval: install       ## Execute notebooks/eval_msmcp.ipynb end to end and report
 	uv run pytest tests/test_eval_notebook.py -m eval -s -q
+
+check:              ## Run the CI gate without formatting or packaging writes
+	$(MAKE) lint
+	$(MAKE) test
+	$(MAKE) eval
 
 run:                ## Launch the MCP server on the stdio transport
 	uv run msmcp

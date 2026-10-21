@@ -72,4 +72,13 @@ record's individual dl-de/by-2-0 attribution are retained in the
 [demonstration record](README.md). Do not infer individual record rights from
 an aggregate library's licence: the first MassBank entry inspected had a
 different licence. No binary datasets, private paths, credentials or GUI mockups
-are included. Screenshot capture remains incomplete.
+are included. The reproducible replay is the agent deliverable; capture at a real client is pending on Eric.
+
+## Hero-example revision
+
+A question and source-order selection rule were recorded before replacement
+scan inspection in [SCAN-SELECTION.md](SCAN-SELECTION.md). The selected later
+MS/MS scan rejects the fixed tryptophan hypothesis; no post-result formula
+substitution was made. [CAPTURE.md](CAPTURE.md) carries the updated numeric
+values and privacy requirements. Prior-head successful CI is cited in
+[RESULTS.md](RESULTS.md). Capture is a human presentation task.

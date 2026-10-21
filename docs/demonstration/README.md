@@ -1,8 +1,10 @@
 # Experimental MCP demonstration — 2026-10-20
 
-**Status: verified computation and MCP replay; screenshot INCOMPLETE.** This is
-a demonstration of traceable mass-consistency checking, not compound
-identification, a performance benchmark, or end-to-end scientific validation.
+**State: verified computation and reproducible stdio replay; capture pending on Eric.**
+The replay is the agent deliverable. A human at a real MCP client performs the
+capture using the [numbered runbook](CAPTURE.md). This is a demonstration of
+traceable hypothesis rejection, not compound identification, a performance
+benchmark, or end-to-end scientific validation.
 No scientific algorithms were changed to obtain these results.
 
 ## Public acquisition and attribution
@@ -42,14 +44,14 @@ uv sync --locked --extra dev
 ```bash
 # Fetch the unchanged public mzML and a small measured MassBank record.
 # Existing files must match the pinned hashes; differing files are refused.
-uv run python examples/public_demo.py prepare --data-dir /tmp/msmcp-demo-data
+uv run python examples/public_demo.py prepare --data-dir /tmp/msmcp-public-demo
 ```
 
 ```bash
 # Spawn this checkout's actual server and save a new, independently checked run.
 # Choose a different output directory for each run; existing runs are preserved.
-uv run python examples/public_demo.py replay --data-dir /tmp/msmcp-demo-data \
-  --output /tmp/msmcp-demo-run
+uv run python examples/public_demo.py replay --data-dir /tmp/msmcp-public-demo \
+  --output "$(mktemp -d /tmp/msmcp-capture.XXXXXX)/run"
 ```
 
 The replay uses the installed MCP SDK over stdio, with the data directory as
@@ -72,78 +74,93 @@ stay outside Git.
 
 ## Actual acquisition workflow and evidence
 
+The [prospective selection record](SCAN-SELECTION.md) fixes both the question
+and the scan-selection rule before replacement-candidate inspection. The first
+MS2 spectrum at or after 2.0 min with at least ten peaks and a base peak at
+least 0.02 m/z below its precursor is selected. No candidate mass-error result
+is used in selection. The fixed question is: **Does protonated tryptophan,
+C11H12N2O2 [M+H]+, explain this later MS/MS precursor at 5.0 ppm?**
+
 The main workflow calls these tools on a new server:
 
 1. `load_mzml_summary(file_path="32Mix_Phala_Tyr_1ugml_1.mzML", max_spectra=2)`.
-2. `load_spectrum(..., spectrum_index=8)` followed by `summarise_reference`
-   using the returned reference. Index 8 is the first MS/MS spectrum, native
-   ID `controllerType=0 controllerNumber=1 scan=9`.
-3. `annotate_isotopes(identifier="C6H18O3Si3", isotopologues=3)` and
+2. `load_spectrum(..., spectrum_index=590)` followed by `summarise_reference`
+   using the returned reference. Zero-based index 590 is native scan 591.
+3. `annotate_isotopes(identifier="C11H12N2O2", isotopologues=3)` and
    `predict_adduct_offset(adduct_string="[M+H]+")`.
-4. `validate_precursor(theoretical_mass=223.0636505093789,
-   experimental_mass=223.063531641103, instrument_class="orbitrap")`.
-5. Release the reference after inspection.
+4. `validate_precursor(theoretical_mass=205.0971541013389,
+   experimental_mass=724.722412109375, instrument_class="orbitrap")`.
+5. Release the reference after inspection (in the replay; capture it before
+   releasing in the interactive client).
 
 Recorded values from `load_spectrum`:
 
 | Observation | Value |
 |---|---|
+| Native scan / zero-based index | 591 / 590 |
 | MS level / polarity from XML | MS2 / positive |
-| Retention time | 0.041191289 min |
-| Selected-ion m/z | 223.063531641103 |
-| Stored peaks | 51; 816 bytes |
-| Sum of stored intensities (TIC) | 14,912,669.678710938 |
-| Strongest MS/MS peak (tool text) | m/z 225.0424 |
+| Retention time | 2.0017699 min |
+| Selected-ion m/z | 724.722412109375 |
+| Stored peaks | 18; 288 bytes |
+| Sum of stored intensities (TIC) | 58,098.39074707031 |
+| Strongest MS/MS peak | m/z 100.1124267578125 |
 | Provenance | `load_spectrum`, `msmcp.mzml`, file SHA-256 and software versions |
 
-**LLM proposal:** in the real Codex interaction during this task, the assistant
-proposed testing protonated C6H18O3Si3 after observing the precursor. This was
-exploratory, not a blinded identity test or a prespecified validation experiment.
-The connected MSMCP tools returned the summary, stored-spectrum metadata,
-isotope/adduct text and precursor verdict. That already-running server's source
-revision was not independently bound to the new branch; the separate recorded
-stdio replay binds the same numeric result to the documented checkout.
+**Proposed hypothesis:** protonated tryptophan was fixed before evaluating the
+replacement scan. It is a candidate test, not an annotation supplied by the
+deposit. The [actual replay](2026-10-20-transcript.json) is an MCP transport
+record, not an invented LLM conversation. The capture runbook starts a new
+human-driven interaction and makes no claim that its assistant wording already
+exists.
 
-**Tool calculation:** `validate_precursor` reports **VALIDATION PASSED**,
-theoretical 223.063651, observed 223.063532 and **0.53 ppm**, with the
-Orbitrap class default **5.0 ppm**. Its error is absolute. This verdict tests
-an arithmetic window, not analytical-method validation or instrument calibration.
+**Tool calculation:** `validate_precursor` reports **VALIDATION REJECTED**,
+expected **205.097154**, observed **724.722412**, absolute error
+**2533556.65 ppm**, Orbitrap profile window **5.0 ppm**. The independent signed
+error is **+2533556.65 ppm**; the positive sign belongs in the assistant's
+interpretation because the existing tool returns only absolute error.
+This is a large mismatch, not a near-threshold accuracy example.
 
-**Evidence established:** the selected precursor is mass-consistent with this
-formula/adduct assumption. C6H18O3Si3 is compatible with the formula of
-[hexamethylcyclotrisiloxane](https://pubchem.ncbi.nlm.nih.gov/compound/10914),
-but the observation does not identify that structure. No isotope-envelope fit,
-isolation-purity assessment, fragmentation assignment, matched reference standard,
-blank comparison or retention-time confirmation was performed. The strongest
-MS/MS peak lies above the selected precursor; the simple formula test does not
-explain the spectrum. No background-source or contamination claim is justified.
+**Evidence established:** this selected precursor is inconsistent with singly
+protonated C11H12N2O2 under the stated assumption. Nothing identifies the selected
+ion, determines its actual charge/adduct, or establishes whether tryptophan is
+present elsewhere in the run. No isolation-purity assessment, diagnostic-fragment
+assignment, isotope-envelope fit, reference-standard comparison or retention-time
+confirmation was performed. The profile window is a documented default, not
+empirical calibration of this acquisition.
+
+**Why the hero changed:** the earlier near-void scan 9 had a siloxane-formula
+mass match and its strongest MS/MS peak above the selected precursor. That
+combination made an ambiguous public example. The independent selection rule
+moves the demonstration later in the run with a dominant lower-mass product ion;
+the rejection is retained rather than substituting a formula to obtain a pass.
+This selection does not claim statistical representativeness of all spectra.
 
 ## Independent numerical calculation
 
 The script's decoder uses only standard-library XML, base64, zlib and struct;
 it does not import MSMCP's parsers, formula parser or physical constants.
-It independently counts MS levels and decodes scan 9's original binary arrays.
-`math.fsum` reproduces the stored-array TIC and the peak count is 51.
+It independently counts MS levels and decodes scan 591's original binary arrays.
+`math.fsum` reproduces the stored-array TIC and the peak count is 18.
 
 For a singly charged protonated neutral, expected m/z = M + proton mass.
 Using 12C = 12 exactly, [1H = 1.00782503223](https://pml.nist.gov/cgi-bin/Compositions/stand_alone.pl?ele=H),
 [16O = 15.99491461957](https://pml.nist.gov/cgi-bin/Compositions/stand_alone.pl?ele=O),
-[28Si = 27.97692653465](https://pml.nist.gov/cgi-bin/Compositions/stand_alone.pl?ele=Si),
+[14N = 14.00307400443](https://pml.nist.gov/cgi-bin/Compositions/stand_alone.pl?ele=N),
 and [CODATA 2022 proton mass = 1.0072764665789 u](https://physics.nist.gov/cgi-bin/cuu/Value?mpu%7Csearch_for=proton+mass):
 
 ```text
-M = 6×12 + 18×1.00782503223 + 3×15.99491461957 + 3×27.97692653465
-  = 222.056374042800 Da
-expected [M+H]+ m/z = 223.0636505093789
+M = 11×12 + 12×1.00782503223 + 2×14.00307400443 + 2×15.99491461957
+  = 204.089877634760 Da
+expected [M+H]+ m/z = 205.0971541013389
 signed ppm = (observed - expected) / expected × 10^6
-           = -0.5328894942 ppm
-5 ppm half-window = 0.001115318253 Da
+           = +2533556.6467747683 ppm
+5 ppm half-window = 0.001025485771 Da
 ```
 
 The tool's formula/adduct text rounds to four/six decimal places; do not add
 those rounded strings and pretend they preserve the independent precision.
 The independent full-precision ion value is supplied explicitly to the precursor
-tool. This checks the mass-error arithmetic and verdict; it does not independently
+tool. This checks the mass-error arithmetic and rejection verdict; it does not independently
 validate every isotope/adduct path. Source constant rounding and editions make a
 negligible difference at this 5 ppm window; no experimental uncertainty was estimated.
 
@@ -175,77 +192,27 @@ The one-record library uses the p-value path; its statistics are excluded from
 the publication claim. Read [the audit](AUDIT.md) and
 [scientific validation](../../SCIENTIFIC_VALIDATION.md) before interpreting search.
 
-## Real-client reproduction and screenshot specification
+## Human capture handoff
 
-**Screenshot deliverable: INCOMPLETE.** The computer-use API refused access to
-the actual Codex app (`com.openai.codex`) for safety reasons. No alternate capture
-mechanism was used to bypass that restriction. Zed was open on unrelated work;
-no screenshot of that work was taken, no fabricated conversation was composed,
-and no screenshot file is claimed to exist.
+**Verified computation and reproducible stdio replay; capture pending on Eric.**
+The replay is the completed computational deliverable. Capturing the real client
+requires a human at a real MCP client and is Eric's remaining presentation task.
+Codex's computer-use policy correctly refused capture of its own interface;
+that refusal is not a computational failure or a readiness blocker.
 
-To obtain a real capture locally, use the actual branch and prepared data above.
-In Zed, open Settings → AI → MCP Servers → Add Server → Add Local Server (see
-[Zed's documentation](https://zed.dev/docs/ai/mcp)). Use an absolute checkout path
-and this configuration, replacing the two placeholders locally:
-
-```json
-{
-  "context_servers": {
-    "msmcp-public-demo": {
-      "command": "uv",
-      "args": ["run", "--directory", "<ABSOLUTE_CHECKOUT>", "msmcp"],
-      "env": {
-        "MSMCP_ALLOWED_ROOT": "/tmp/msmcp-demo-data",
-        "MSMCP_MAX_SPECTRA": "5000"
-      }
-    }
-  }
-}
-```
-
-Confirm the server is active. In a fresh Zed Agent conversation with the user's
-existing model connection, send this **prompt for a new real interaction**:
-
-> Use MSMCP to summarize `/tmp/msmcp-demo-data/32Mix_Phala_Tyr_1ugml_1.mzML`
-> (two spectra), load spectrum index 8 and summarize its returned reference.
-> Is this precursor consistent with protonated C6H18O3Si3? Call the formula
-> and adduct tools. Independently calculated [M+H]+ m/z is 223.0636505093789
-> from the cited NIST/CODATA constants. Use the observed full-precision
-> precursor and `validate_precursor` with `instrument_class="orbitrap"`.
-> Show observed/expected m/z, ppm error, 5 ppm window, source hash, and a
-> concise explanation that passing mass consistency does not identify a
-> structure. Do not perform a library search or infer a contamination source.
-
-Approve the tool calls in the real client. Check them against the recorded run;
-do not paste a prewritten assistant answer into the conversation. The LLM's
-wording can differ; its numeric claims must agree with its actual tool results.
-
-Capture one window at approximately 1600×900 with the prompt, expanded real
-`validate_precursor` result and the model's interpretation visible together.
-Use readable text, hide unrelated sidebars/tabs and keep paths under `/tmp`.
-Include the provenance hash or a shortened hash visibly linked to this record.
-Inspect the image at desktop size and a 390-pixel-wide preview before acceptance.
-Save the actual PNG as `docs/assets/msmcp-real-mzml-precursor-check.png` only
-after verifying no user paths, private files or credentials appear. A crop for
-framing is acceptable if disclosed; never replace, redraw or splice tool results.
-
-**Caption draft:** A real acquisition, a chemical hypothesis, and a traceable
-calculation. MSMCP reads scan 9 and checks a protonated-formula hypothesis:
-0.53 ppm mass error within a 5 ppm window. This establishes mass consistency;
-it does not identify the compound. Data: G. A. Vitale, Zenodo
-10.5281/zenodo.10043877, CC BY 4.0; derived summaries and calculations.
-
-**Alt text draft — use only after the capture matches:** Real AI-client
-conversation showing an MSMCP mzML spectrum inspection and precursor check:
-observed m/z 223.063532, expected 223.063651, absolute error 0.53 ppm,
-5 ppm Orbitrap profile, and a statement that mass agreement does not establish
-structural identity.
+Follow [CAPTURE.md](CAPTURE.md) in order. It supplies the exact preparation,
+replay and client-configuration commands, the prompt, required tool sequence,
+visible values, pane layout, privacy checks, caption and alt text. The same
+`serve` launcher is exercised by the replay and used in the generated Zed config;
+it starts this checkout's real server in the data directory so prompts use only
+the acquisition basename. Absolute paths can still occur in full tool provenance:
+keep `load_spectrum` and `summarise_reference` result bodies collapsed for capture.
 
 ## Readiness
 
-**NOT READY for the requested screenshot-led LinkedIn announcement.** The
-experimental arithmetic demonstration and supported-format replay are available;
-the authentic screenshot still requires local capture and visual verification.
-Similarity validation remains partial and wrong-compound significance/FDR remains
-unvalidated. No release, merge, social post, identification claim or deployment is
-implied. See [verification results](RESULTS.md) for the checks actually run.
+**READY FOR ERIC TO CAPTURE.** Computation and replay are verified; capture is
+pending on a human. Similarity validation remains partial and wrong-compound
+significance/FDR remains unvalidated. Those scientific boundaries remain in the
+caption and supporting record; the screenshot is not a new validation experiment.
+See [verification results](RESULTS.md), including the successful prior-head CI
+check run and the rerun of the current gate.

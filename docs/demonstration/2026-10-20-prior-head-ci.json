@@ -1,0 +1,68 @@
+{
+  "id": 118943803756,
+  "name": "gate",
+  "head_sha": "c0416dcd7965b1ccddefc86399a42a65b9f26f04",
+  "html_url": "https://github.com/janusson/MSMCP/actions/runs/39514511771/job/118943803756",
+  "started_at": "2026-10-20T23:23:14Z",
+  "completed_at": "2026-10-20T23:25:31Z",
+  "conclusion": "success",
+  "duration_seconds": 137,
+  "steps": [
+    {
+      "name": "Set up job",
+      "conclusion": "success"
+    },
+    {
+      "name": "Run actions/checkout@v5",
+      "conclusion": "success"
+    },
+    {
+      "name": "Install uv",
+      "conclusion": "success"
+    },
+    {
+      "name": "Install the interpreter named in .python-version",
+      "conclusion": "success"
+    },
+    {
+      "name": "Sync dependencies from the lockfile (dev extras)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Format check (ruff format --check)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Lint (ruff)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Types (mypy)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Types (basedpyright)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Tests (fast suite; the eval notebook is deselected)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Evaluation notebook (make eval)",
+      "conclusion": "success"
+    },
+    {
+      "name": "Post Install uv",
+      "conclusion": "success"
+    },
+    {
+      "name": "Post Run actions/checkout@v5",
+      "conclusion": "success"
+    },
+    {
+      "name": "Complete job",
+      "conclusion": "success"
+    }
+  ]
+}
