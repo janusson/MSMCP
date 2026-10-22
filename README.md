@@ -252,6 +252,11 @@ docker run --rm -i \
   msmcp:local
 ```
 
+When using the worked example above with this container, ask MSMCP to load
+`/data/caffeine_spectrum.mgf` and search it against
+`/data/caffeine_library.msp`; the container sees the mounted directory at
+`/data`, not at the checkout's `examples/` path.
+
 This image is a reproducible container starting point, not a published release
 or registry entry. Package publication, registry metadata, and release signing
 remain separate work under issue #19.
@@ -521,7 +526,7 @@ user- and agent-facing story.
 
 - **Search names which library answered it**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. A library path in a readable format (MSP/NIST text or MGF, `.msp`/`.msp.gz`/`.mgf`/`.mgf.gz`) is read from disk through the same `SecurityPolicy` as acquisitions — allowed root, size limit, read-only — and is refused with `PathEscapeError` if it resolves outside the allowed root. A path with no reader still falls back to a synthetic library, and the report says which path was used, in a banner ahead of any hit table. Still to come is the local SQLite peak store.
 - **In-process job state**: jobs live in server memory and do not survive a restart; the poller reports a lost job as failed rather than pending. A durable executor is a drop-in `JobExecutor` implementation.
-- **MCP Tasks are not dispatchable by the installed SDK**: the pinned `mcp` 2.1.1 ships the Tasks types but omits `tasks/get`, `tasks/result` and `tasks/cancel` from its request unions, so no server can answer them. The structural regression check in `tests/test_server_contract.py` is the readiness signal for #7; if it fails after an SDK upgrade, revisit the adapter before release. MSMCP keeps its snapshots in the MCP `Task` shape and exposes the semantics through `check_search_status` instead of inventing a protocol.
+- **MCP Tasks are not implemented by MSMCP**: the pinned `mcp` 2.1.1 exposes generic extension request registration and capability advertisement, but does not provide a Tasks-specific adapter. The contract test verifies those extension hooks rather than inspecting core request unions, where Tasks are intentionally absent. MSMCP keeps snapshots in the MCP `Task` shape and exposes the semantics through `check_search_status`; implementing the Tasks extension remains roadmap issue #7.
 - **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself, because the pinned MassFlow 0.1.x line is imaging-only. `.imzML` goes through MassFlow. Vendor formats are refused with conversion guidance. Revisit issue #10 when the installed MassFlow line exposes an mzML or MGF reader; the ingestion table and provenance backend must be updated together.
 - **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 has no public weights wired into this repository; its bring-your-own-checkpoint adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`real` / `mock`). Neither is required for core MSMCP to run or to be tested. Revisit issue #9 when upstream publishes usable inference weights.
 - **Whole-slide images**: MassFlow materialises one placeholder per pixel when loading an imzML acquisition, so very large images are bounded by MassFlow's own behaviour.

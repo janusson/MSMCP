@@ -1,0 +1,24 @@
+# Git history and isolated agent worktrees can dwarf the source build context.
+.git/
+.worktrees/
+
+# Local environments and generated Python artifacts.
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.basedpyright/
+.coverage*
+htmlcov/
+notebooks/.eval_artifacts/
+
+# Local agent state and build outputs.
+.hermes/
+.cache/
+build/
+dist/
+*.egg-info/

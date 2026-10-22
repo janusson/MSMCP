@@ -289,16 +289,14 @@ Statuses use the MCP vocabulary (`mcp.types.TaskStatus`), and
 `Task` (`task_id`, `status`, `status_message`, `created_at`,
 `last_updated_at`, `ttl`, `poll_interval`).
 
-**The installed SDK does not dispatch Tasks.** `mcp` 2.1.1 defines the Tasks
-types but documents them as types-only: `tasks/get`, `tasks/result` and
-`tasks/cancel` are absent from the request unions, so a server cannot answer
-them regardless of what it implements. MSMCP therefore exposes the same
-semantics through its own polling tool (`check_search_status`) and keeps the
-wire representation aligned with the specification.
-
-The alternative — inventing an application-level task protocol — would be
-incompatible with the spec, and is deliberately not done. When the transport
-dispatches Tasks, the mapping is mechanical rather than a redesign.
+The pinned `mcp` 2.1.1 SDK exposes generic extension request registration and
+capability advertisement, but does not provide a Tasks-specific adapter. The
+contract test exercises those extension hooks; it does not inspect core request
+unions, since Tasks are intentionally outside the core protocol. MSMCP has not
+registered the Tasks extension methods, so it exposes job semantics through its
+own polling tool (`check_search_status`) and keeps the wire representation
+aligned with the MCP `Task` shape. Implementing the Tasks extension remains
+roadmap issue #7.
 
 ## Security and limits
 
