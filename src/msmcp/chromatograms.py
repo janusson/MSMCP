@@ -49,6 +49,7 @@ class XICTrace:
 
 @dataclass(frozen=True, slots=True)
 class ChromatogramTraces:
+    native_scan_ids: list[str | None]
     scan_indices: list[int]
     scan_ordinals: list[int]
     source_spectrum_indices: list[int | None]
@@ -112,9 +113,9 @@ def extract_chromatograms(
     additional spectrum exists after the limit, the operation raises instead
     of returning a partial acquisition.
     """
-    if not 1 <= ms_level <= 10:
+    if type(ms_level) is not int or not 1 <= ms_level <= 10:
         raise ValueError("ms_level must be between 1 and 10")
-    if not 1 <= max_spectra <= MAX_CHROMATOGRAM_SPECTRA:
+    if type(max_spectra) is not int or not 1 <= max_spectra <= MAX_CHROMATOGRAM_SPECTRA:
         raise ValueError(
             f"max_spectra must be between 1 and {MAX_CHROMATOGRAM_SPECTRA}"
         )
@@ -135,6 +136,8 @@ def extract_chromatograms(
                 "retention_time_range must be finite, non-negative, and ordered"
             )
 
+    native_ids: list[str | None] = []
+    source_warning_counts: Counter[str] = Counter()
     scanned = 0
     selected_level_count = 0
     level_counts: Counter[str] = Counter()
@@ -164,6 +167,7 @@ def extract_chromatograms(
                 "partial result was returned."
             )
         scanned += 1
+        source_warning_counts.update(spectrum.source_warnings)
         level_key = (
             str(spectrum.ms_level) if spectrum.ms_level is not None else "unknown"
         )
@@ -214,6 +218,7 @@ def extract_chromatograms(
             )
             continue
 
+        native_ids.append(spectrum.native_id)
         source_index = spectrum.index
         scan_indices.append(source_index if source_index is not None else ordinal)
         scan_ordinals.append(ordinal)
@@ -288,6 +293,7 @@ def extract_chromatograms(
         "end_min": max(all_retention_times) if all_retention_times else None,
     }
     traces = ChromatogramTraces(
+        native_scan_ids=native_ids,
         scan_indices=scan_indices,
         scan_ordinals=scan_ordinals,
         source_spectrum_indices=source_indices,
@@ -353,6 +359,11 @@ def extract_chromatograms(
         )
     if scanned == 0:
         warnings.append("The source contained no spectra.")
+
+    warnings.extend(
+        f"Source reader warning {reason}: {count} scanned spectrum/spectra."
+        for reason, count in sorted(source_warning_counts.items())
+    )
 
     provenance = provenance_for(
         "extract_chromatograms",

@@ -17,7 +17,7 @@ from msmcp.chromatograms import (
 from msmcp.chromatograms import (
     extract_chromatograms as calculate_chromatograms,
 )
-from msmcp.errors import UnsupportedFormatError
+from msmcp.errors import MalformedFileError, MsmcpError, UnsupportedFormatError
 from msmcp.provenance import SourceRef
 from msmcp.security import DEFAULT_POLICY
 
@@ -31,11 +31,12 @@ class ChromatogramInput(BaseModel):
     )
     tolerance: float = Field(default=5.0, ge=0.0, allow_inf_nan=False)
     tolerance_unit: Literal["ppm", "Da"] = "ppm"
-    ms_level: int = Field(default=1, ge=1, le=10)
+    ms_level: int = Field(default=1, ge=1, le=10, strict=True)
     retention_time_range_min: (
         list[Annotated[float, Field(allow_inf_nan=False)]] | None
     ) = Field(default=None, min_length=2, max_length=2)
     max_spectra: int = Field(
+        strict=True,
         default=MAX_CHROMATOGRAM_SPECTRA,
         ge=1,
         le=MAX_CHROMATOGRAM_SPECTRA,
@@ -73,6 +74,7 @@ class ChromatogramXIC(BaseModel):
 
 
 class ChromatogramData(BaseModel):
+    native_scan_ids: list[str | None]
     scan_indices: list[int]
     scan_ordinals: list[int]
     source_spectrum_indices: list[int | None]
@@ -118,7 +120,7 @@ class ChromatogramCompleteness(BaseModel):
 
 
 class ChromatogramToolResult(BaseModel):
-    schema_version: str
+    schema_version: Literal["1.0"]
     source: ChromatogramSource
     acquisition: ChromatogramAcquisition
     chromatograms: ChromatogramData
@@ -165,6 +167,7 @@ def register_tools(mcp: Any) -> None:
         ms_level: Annotated[
             int,
             Field(
+                strict=True,
                 ge=1,
                 le=10,
                 description="MS level included in the chromatogram traces; defaults to MS1.",
@@ -183,6 +186,7 @@ def register_tools(mcp: Any) -> None:
             Field(
                 ge=1,
                 le=MAX_CHROMATOGRAM_SPECTRA,
+                strict=True,
                 description=f"Maximum source spectra to scan, across all MS levels and retention times; hard maximum {MAX_CHROMATOGRAM_SPECTRA}.",
             ),
         ] = MAX_CHROMATOGRAM_SPECTRA,
@@ -213,11 +217,20 @@ def register_tools(mcp: Any) -> None:
             raise UnsupportedFormatError(
                 "extract_chromatograms supports mzML and mzML.gz files only."
             )
+        before = source.path.stat()
         source_ref = SourceRef.from_path(
             source.path,
             format=source.format,
             backend=source.backend,
+            digest_limit_bytes=DEFAULT_POLICY.max_file_size_bytes,
         )
+        if source_ref.digest is None:
+            raise MsmcpError(
+                "Source authentication failed within the configured file-size budget; no chromatogram returned."
+            )
+        declared_count = source.declared_spectrum_count()
+        if declared_count < 0:
+            raise MalformedFileError("Negative declared spectrum count.")
         retention_time_range = validated.retention_time_range_min
         rt_range = (
             (float(retention_time_range[0]), float(retention_time_range[1]))
@@ -234,8 +247,23 @@ def register_tools(mcp: Any) -> None:
             max_spectra=validated.max_spectra,
             source=source_ref,
         )
+        if result.acquisition["scanned_spectra"] != declared_count:
+            raise MalformedFileError(
+                "Declared spectrum count disagrees with the scanned acquisition; no partial result returned."
+            )
+        # Recheck both the policy boundary and identity after reading. A local
+        # source must stay immutable throughout authentication and extraction.
+        ingest.resolve_source(validated.file_path, DEFAULT_POLICY)
+        after = source.path.stat()
+        if any(
+            getattr(before, key) != getattr(after, key)
+            for key in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        ):
+            raise MsmcpError(
+                "Source changed during extraction; no chromatogram returned."
+            )
         return ChromatogramToolResult(
-            schema_version=result.schema_version,
+            schema_version="1.0",
             source=ChromatogramSource(
                 file_path=source_ref.path,
                 format=source_ref.format or "unknown",
@@ -245,6 +273,7 @@ def register_tools(mcp: Any) -> None:
             ),
             acquisition=ChromatogramAcquisition.model_validate(result.acquisition),
             chromatograms=ChromatogramData(
+                native_scan_ids=result.chromatograms.native_scan_ids,
                 scan_indices=result.chromatograms.scan_indices,
                 scan_ordinals=result.chromatograms.scan_ordinals,
                 source_spectrum_indices=result.chromatograms.source_spectrum_indices,
@@ -271,15 +300,6 @@ def register_tools(mcp: Any) -> None:
                 MissingScanObservation.model_validate(asdict(item))
                 for item in result.missing_observations
             ],
-            warnings=[
-                *result.warnings,
-                *(
-                    [
-                        "Source digest was not computed because the file exceeds the provenance digest size limit or could not be read."
-                    ]
-                    if source_ref.digest is None
-                    else []
-                ),
-            ],
+            warnings=result.warnings,
             provenance=result.provenance.to_dict(),
         )

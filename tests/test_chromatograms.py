@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -314,3 +314,300 @@ def test_tool_refuses_to_return_a_partial_acquisition(
             targets_mz=[],
             max_spectra=2,
         )
+
+
+def test_tool_authenticates_file_above_legacy_digest_ceiling(
+    chromatogram_tools, valid_mzml, monkeypatch
+) -> None:
+    import hashlib
+
+    from msmcp.provenance import DEFAULT_DIGEST_LIMIT_BYTES
+
+    with valid_mzml.open("ab") as handle:
+        for _ in range(65):
+            handle.write(b" " * (1024 * 1024))
+    assert valid_mzml.stat().st_size > DEFAULT_DIGEST_LIMIT_BYTES
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(allowed_root=valid_mzml.parent),
+    )
+    with valid_mzml.open("rb") as handle:
+        expected = "sha256:" + hashlib.file_digest(handle, "sha256").hexdigest()
+    result = chromatogram_tools["extract_chromatograms"](file_path=str(valid_mzml))
+    assert result.source.digest == expected
+    assert result.provenance["sources"][0]["digest"] == expected
+
+
+def test_tool_preserves_native_scan_ids(
+    chromatogram_tools, valid_mzml, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(allowed_root=valid_mzml.parent),
+    )
+    result = chromatogram_tools["extract_chromatograms"](file_path=str(valid_mzml))
+    assert result.chromatograms.native_scan_ids == ["scan=0", "scan=1", "scan=2"]
+
+
+def test_tool_rejects_declared_scan_count_mismatch(
+    chromatogram_tools, valid_mzml, monkeypatch
+) -> None:
+    from msmcp.errors import MalformedFileError
+
+    valid_mzml.write_text(
+        valid_mzml.read_text().replace(
+            'spectrumList count="3"', 'spectrumList count="4"'
+        )
+    )
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(allowed_root=valid_mzml.parent),
+    )
+    with pytest.raises(MalformedFileError, match="count"):
+        chromatogram_tools["extract_chromatograms"](file_path=str(valid_mzml))
+
+
+def test_tool_carries_reader_length_warning(
+    chromatogram_tools, valid_mzml, monkeypatch
+) -> None:
+    valid_mzml.write_text(
+        valid_mzml.read_text().replace(
+            'defaultArrayLength="3"', 'defaultArrayLength="4"'
+        )
+    )
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(allowed_root=valid_mzml.parent),
+    )
+    result = chromatogram_tools["extract_chromatograms"](file_path=str(valid_mzml))
+    assert any(
+        "declared_array_length_mismatch" in warning for warning in result.warnings
+    )
+    assert result.chromatograms.tic_intensities == [60.0, 10.0, 10.0]
+
+
+@pytest.mark.parametrize("field", ["ms_level", "max_spectra"])
+@pytest.mark.parametrize("value", [True, 1.5, "1"])
+def test_tool_rejects_non_integer_resource_and_level_arguments(
+    chromatogram_tools, valid_mzml, field, value
+) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        chromatogram_tools["extract_chromatograms"](
+            file_path=str(valid_mzml), **{field: value}
+        )
+
+
+def test_result_rejects_unsupported_schema(
+    chromatogram_tools, valid_mzml, monkeypatch
+) -> None:
+    from pydantic import ValidationError
+
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(allowed_root=valid_mzml.parent),
+    )
+    payload = chromatogram_tools["extract_chromatograms"](
+        file_path=str(valid_mzml)
+    ).model_dump()
+    payload["schema_version"] = "99.0"
+    with pytest.raises(ValidationError, match="schema_version"):
+        ChromatogramToolResult.model_validate(payload)
+
+
+def test_five_ppm_boundaries_and_adjacent_floats() -> None:
+    lower, upper = 199.999, 200.001
+    result = extract_chromatograms(
+        [
+            _spectrum(
+                0,
+                1,
+                1.0,
+                [
+                    np.nextafter(lower, -np.inf),
+                    lower,
+                    upper,
+                    np.nextafter(upper, np.inf),
+                ],
+                [100.0, 2.0, 3.0, 200.0],
+            )
+        ],
+        targets_mz=[200.0],
+        tolerance=5.0,
+        tolerance_unit="ppm",
+    )
+    assert result.chromatograms.xic[0].intensities == [5.0]
+
+
+@pytest.mark.parametrize(
+    "corruption", ["xml_truncated", "missing_arrays", "invalid_base64", "missing_list"]
+)
+def test_tool_rejects_malformed_acquisition(
+    chromatogram_tools, valid_mzml, monkeypatch, corruption
+) -> None:
+    from msmcp.errors import MalformedFileError
+
+    text = valid_mzml.read_text()
+    if corruption == "xml_truncated":
+        text = text[:-30]
+    elif corruption == "missing_arrays":
+        text = text.replace("binaryDataArrayList", "absentArrayList")
+    elif corruption == "invalid_base64":
+        text = text.replace("<binary>", "<binary>@@@")
+    else:
+        text = "<mzML/>"
+    valid_mzml.write_text(text)
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(allowed_root=valid_mzml.parent),
+    )
+    with pytest.raises(MalformedFileError):
+        chromatogram_tools["extract_chromatograms"](file_path=str(valid_mzml))
+
+
+def test_tool_refuses_missing_authentication(
+    chromatogram_tools, valid_mzml, monkeypatch
+) -> None:
+    from msmcp.errors import MsmcpError
+    from msmcp.provenance import SourceRef
+
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(allowed_root=valid_mzml.parent),
+    )
+    monkeypatch.setattr(
+        SourceRef, "from_path", lambda *args, **kwargs: SourceRef(path=str(valid_mzml))
+    )
+    with pytest.raises(MsmcpError, match="authentication failed"):
+        chromatogram_tools["extract_chromatograms"](file_path=str(valid_mzml))
+
+
+def test_tool_refuses_source_changed_during_extraction(
+    chromatogram_tools, valid_mzml, monkeypatch
+) -> None:
+    from msmcp import ingest
+    from msmcp.errors import MsmcpError
+
+    original = ingest.Source.iter_spectra
+
+    def changing_reader(source):
+        yield from original(source)
+        with source.path.open("ab") as handle:
+            handle.write(b" ")
+
+    monkeypatch.setattr(ingest.Source, "iter_spectra", changing_reader)
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(allowed_root=valid_mzml.parent),
+    )
+    with pytest.raises(MsmcpError, match="changed during extraction"):
+        chromatogram_tools["extract_chromatograms"](file_path=str(valid_mzml))
+
+
+def test_tool_cannot_override_file_size_policy(
+    chromatogram_tools, valid_mzml, monkeypatch
+) -> None:
+    from msmcp.security import FileSizeExceededError
+
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(
+            allowed_root=valid_mzml.parent,
+            max_file_size_bytes=valid_mzml.stat().st_size - 1,
+        ),
+    )
+    with pytest.raises(FileSizeExceededError):
+        chromatogram_tools["extract_chromatograms"](
+            file_path=str(valid_mzml), max_spectra=10000
+        )
+
+
+@pytest.mark.asyncio
+async def test_chromatogram_stdio_contract_and_failures(valid_mzml, tmp_path) -> None:
+    import gzip
+    import os
+    import sys
+
+    from mcp import ClientSession
+    from mcp.client.stdio import StdioServerParameters, stdio_client
+
+    original = valid_mzml.read_bytes()
+    compressed = tmp_path / "expanded.mzML.gz"
+    compressed.write_bytes(gzip.compress(original + b" " * 10000))
+    oversized = tmp_path / "oversized.mzML"
+    oversized.write_bytes(original + b" " * 10000)
+    truncated = tmp_path / "truncated.mzML"
+    truncated.write_bytes(original[:-30])
+    malformed = tmp_path / "bad.mzML"
+    malformed.write_text("<mzML/>")
+    env = dict(
+        os.environ,
+        MSMCP_ALLOWED_ROOT=str(tmp_path),
+        MSMCP_MAX_FILE_SIZE_BYTES=str(len(original) + 100),
+        MSMCP_EMBEDDING_BACKEND="mock",
+    )
+    server = StdioServerParameters(
+        command=sys.executable, args=["-m", "msmcp.server"], env=env
+    )
+    async with (
+        stdio_client(server) as (read, write),
+        ClientSession(read, write, read_timeout_seconds=30) as session,
+    ):
+        await session.initialize()
+        listing = await session.list_tools()
+        tool = next(t for t in listing.tools if t.name == "extract_chromatograms")
+        assert tool.output_schema is not None
+        assert tool.output_schema["properties"]["schema_version"]["const"] == "1.0"
+        ok = await session.call_tool(
+            "extract_chromatograms",
+            dict(file_path=str(valid_mzml), targets_mz=[200.0], tolerance=5.0),
+        )
+        assert not ok.is_error
+        payload = ok.structured_content
+        assert payload is not None
+        assert payload["chromatograms"]["tic_intensities"] == [60.0, 10.0, 10.0]
+        assert payload["chromatograms"]["native_scan_ids"] == [
+            "scan=0",
+            "scan=1",
+            "scan=2",
+        ]
+        assert payload["source"]["digest"].startswith("sha256:")
+        cases: list[dict[str, Any]] = [
+            dict(file_path=str(valid_mzml), max_spectra=2),
+            dict(file_path=str(valid_mzml), max_spectra=10001),
+            dict(file_path=str(valid_mzml), max_spectra=True),
+            dict(file_path=str(valid_mzml), ms_level=1.5),
+            dict(file_path=str(valid_mzml), ms_level=True),
+            dict(file_path=str(valid_mzml), targets_mz=[100.0] * 21),
+            dict(file_path=str(valid_mzml), tolerance_unit="da"),
+            dict(file_path=str(oversized)),
+            dict(file_path=str(compressed)),
+            dict(file_path=str(truncated)),
+            dict(file_path=str(malformed)),
+            dict(file_path=str(tmp_path.parent / "outside.mzML")),
+        ]
+        for arguments in cases:
+            failure = await session.call_tool("extract_chromatograms", arguments)
+            assert failure.is_error, (arguments, failure)
+            assert not failure.structured_content, failure
+        # A failed extraction must not poison the server or return cached traces.
+        after = await session.call_tool(
+            "extract_chromatograms", dict(file_path=str(valid_mzml))
+        )
+        assert not after.is_error
+        assert after.structured_content is not None
+        assert after.structured_content["chromatograms"]["tic_intensities"] == [
+            60.0,
+            10.0,
+            10.0,
+        ]

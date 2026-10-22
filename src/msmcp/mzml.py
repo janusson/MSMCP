@@ -104,6 +104,10 @@ class Spectrum:
     representation: str | None = None
     """``"centroid"`` or ``"profile"`` when stated by the spectrum CV terms."""
 
+    native_id: str | None = None
+    """Exact mzML spectrum/@id; never inferred from index or ordinal."""
+    source_warnings: tuple[str, ...] = ()
+
     @property
     def tic(self) -> float:
         """Total ion current: the exact sum of the intensity array."""
@@ -480,6 +484,11 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
 
     return Spectrum(
         index=index,
+        native_id=elem.get("id"),
+        source_warnings=("declared_array_length_mismatch",)
+        if declared_length is not None
+        and (mz.size != declared_length or intensity.size != declared_length)
+        else (),
         ms_level=ms_level,
         retention_time=retention_time,
         precursor_mz=precursor_mz,
