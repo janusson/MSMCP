@@ -161,6 +161,66 @@ def test_rt_range_is_inclusive_and_does_not_reorder_scans() -> None:
     assert result.chromatograms.retention_times_min == [1.5, 1.0]
 
 
+def test_selected_empty_scan_count_is_independent_of_rt_range() -> None:
+    result = extract_chromatograms(
+        [
+            _spectrum(1, 1, 0.5, [], []),
+            _spectrum(2, 1, 2.5, [100.0], [5.0]),
+        ],
+        targets_mz=[100.0],
+        tolerance=0.0,
+        tolerance_unit="Da",
+        retention_time_range=(2.0, 3.0),
+        max_spectra=5,
+    )
+
+    assert result.acquisition["selected_empty_peak_array_spectra"] == 1
+    assert result.chromatograms.scan_indices == [2]
+
+
+def test_mixed_polarity_is_preserved_for_each_returned_trace_point(
+    chromatogram_tools, mzml_with_polarity, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(allowed_root=mzml_with_polarity.parent),
+    )
+
+    result = chromatogram_tools["extract_chromatograms"](
+        file_path=str(mzml_with_polarity), ms_level=2, targets_mz=[]
+    )
+
+    assert result.chromatograms.polarities == ["positive", "negative"]
+    assert result.model_dump(mode="json")["chromatograms"]["polarities"] == [
+        "positive",
+        "negative",
+    ]
+
+
+def test_missing_observations_are_serialized_as_structured_data(
+    chromatogram_tools, valid_mzml, monkeypatch
+) -> None:
+    import re
+
+    text = valid_mzml.read_text(encoding="utf-8")
+    text = re.sub(r'<cvParam cvRef="MS" accession="MS:1000016"[^>]*/>', "", text)
+    valid_mzml.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(
+        chromatogram_module,
+        "DEFAULT_POLICY",
+        SecurityPolicy(allowed_root=valid_mzml.parent),
+    )
+
+    result = chromatogram_tools["extract_chromatograms"](
+        file_path=str(valid_mzml), targets_mz=[]
+    )
+
+    payload = result.model_dump(mode="json")
+    assert payload["missing_observations"][0]["reason"] == "retention_time_unavailable"
+    assert payload["missing_observations"][0]["source_spectrum_index"] == 0
+
+
 def test_representation_unknown_and_profile_are_reported() -> None:
     result = extract_chromatograms(
         [
@@ -588,6 +648,8 @@ async def test_chromatogram_stdio_contract_and_failures(valid_mzml, tmp_path) ->
             dict(file_path=str(valid_mzml), max_spectra=True),
             dict(file_path=str(valid_mzml), ms_level=1.5),
             dict(file_path=str(valid_mzml), ms_level=True),
+            dict(file_path=str(valid_mzml), targets_mz=[0.0]),
+            dict(file_path=str(valid_mzml), targets_mz=[-1.0]),
             dict(file_path=str(valid_mzml), targets_mz=[100.0] * 21),
             dict(file_path=str(valid_mzml), tolerance_unit="da"),
             dict(file_path=str(oversized)),

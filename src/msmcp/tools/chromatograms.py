@@ -78,6 +78,7 @@ class ChromatogramData(BaseModel):
     scan_indices: list[int]
     scan_ordinals: list[int]
     source_spectrum_indices: list[int | None]
+    polarities: list[Literal["positive", "negative"] | None]
     retention_times_min: list[float | None]
     tic_intensities: list[float | None]
     bpc_intensities: list[float | None]
@@ -145,10 +146,10 @@ def register_tools(mcp: Any) -> None:
             ),
         ],
         targets_mz: Annotated[
-            list[float] | None,
+            list[Annotated[float, Field(gt=0.0, allow_inf_nan=False)]] | None,
             Field(
                 max_length=MAX_XIC_TARGETS,
-                description=f"Target m/z values for simultaneous XICs; up to {MAX_XIC_TARGETS}. Use an empty list or null for TIC and BPC only.",
+                description=f"Finite positive target m/z values for simultaneous XICs; up to {MAX_XIC_TARGETS}. Use an empty list or null for TIC and BPC only.",
             ),
         ] = None,
         tolerance: Annotated[
@@ -195,7 +196,9 @@ def register_tools(mcp: Any) -> None:
 
         TIC is the sum of reported intensities per selected scan. BPC is its
         maximum reported intensity, or null for an empty scan. Each XIC sums
-        all reported points in the inclusive m/z window. Representation is
+        all reported points in the inclusive m/z window. Each returned point
+        carries the scan's stated polarity, or null when unavailable.
+        Representation is
         reported when the acquisition states centroid or profile; unknown
         representation remains unknown and is called out in warnings. No
         smoothing, normalization, alignment, baseline correction, blank
@@ -277,6 +280,7 @@ def register_tools(mcp: Any) -> None:
                 scan_indices=result.chromatograms.scan_indices,
                 scan_ordinals=result.chromatograms.scan_ordinals,
                 source_spectrum_indices=result.chromatograms.source_spectrum_indices,
+                polarities=result.chromatograms.polarities,
                 retention_times_min=result.chromatograms.retention_times_min,
                 tic_intensities=result.chromatograms.tic_intensities,
                 bpc_intensities=result.chromatograms.bpc_intensities,

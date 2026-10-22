@@ -101,25 +101,32 @@ class TestDecodeBinary:
 # ---------------------------------------------------------------------------
 class TestMzMLParser:
     @pytest.mark.parametrize(
-        ("value", "unit_accession", "unit_name"),
+        ("value", "unit_accession", "unit_name", "expected_minutes"),
         [
-            (120.0, "MS:1000038", "second"),
-            (120.0, "UO:0000010", "second"),
-            (2.0, "UO:0000031", "minute"),
-            (120_000.0, "UO:0000028", "millisecond"),
-            (120_000_000.0, "UO:0000029", "microsecond"),
-            (2.0 / 60.0, "UO:0000032", "hour"),
+            (120.0, "MS:1000038", "minute", 120.0),
+            (120.0, "MS:1000039", "second", 2.0),
+            (120.0, "UO:0000010", "second", 2.0),
+            (2.0, "UO:0000031", "minute", 2.0),
+            (120_000.0, "UO:0000028", "millisecond", 2.0),
+            (120_000_000.0, "UO:0000029", "microsecond", 2.0),
+            (2.0 / 60.0, "UO:0000032", "hour", 2.0),
         ],
     )
     def test_scan_start_time_is_normalized_from_unit_accession(
-        self, value: float, unit_accession: str, unit_name: str
+        self,
+        value: float,
+        unit_accession: str,
+        unit_name: str,
+        expected_minutes: float,
     ) -> None:
         xml = (
             '<scanList><scan><cvParam accession="MS:1000016" '
             f'value="{value}" unitAccession="{unit_accession}" '
             f'unitName="{unit_name}"/></scan></scanList>'
         )
-        assert _extract_scan_start_time(ET.fromstring(xml)) == pytest.approx(2.0)
+        assert _extract_scan_start_time(ET.fromstring(xml)) == pytest.approx(
+            expected_minutes
+        )
 
     @pytest.mark.parametrize(
         "unit_attributes",

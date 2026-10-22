@@ -258,7 +258,7 @@ def _mzml_xml(spectra: list[dict[str, Any]]) -> str:
             f"{representation_xml}"
             f'<scanList count="1"><scan>'
             f'<cvParam cvRef="MS" accession="MS:1000016" name="scan start time" '
-            f'value="{rt}" unitAccession="MS:1000038" unitName="second"/>'
+            f'value="{rt}" unitAccession="MS:1000039" unitName="second"/>'
             f"</scan></scanList>"
             f"{precursor_xml}"
             f'<binaryDataArrayList count="2">'

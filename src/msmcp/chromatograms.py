@@ -53,6 +53,7 @@ class ChromatogramTraces:
     scan_indices: list[int]
     scan_ordinals: list[int]
     source_spectrum_indices: list[int | None]
+    polarities: list[Literal["positive", "negative"] | None]
     retention_times_min: list[float | None]
     tic_intensities: list[float | None]
     bpc_intensities: list[float | None]
@@ -152,6 +153,7 @@ def extract_chromatograms(
     scan_indices: list[int] = []
     scan_ordinals: list[int] = []
     source_indices: list[int | None] = []
+    polarities: list[Literal["positive", "negative"] | None] = []
     retention_times: list[float | None] = []
     tic_values: list[float | None] = []
     bpc_values: list[float | None] = []
@@ -199,6 +201,19 @@ def extract_chromatograms(
         selected_level_count += 1
         selected_representation_counts[representation_key] += 1
         selected_polarity_counts[polarity_key] += 1
+
+        mz = np.asarray(spectrum.mz, dtype=np.float64)
+        intensity = np.asarray(spectrum.intensity, dtype=np.float64)
+        invalid_arrays = (
+            mz.ndim != 1
+            or intensity.ndim != 1
+            or mz.size != intensity.size
+            or not np.all(np.isfinite(mz))
+            or not np.all(np.isfinite(intensity))
+        )
+        if not invalid_arrays and mz.size == 0:
+            selected_empty_peak_spectra += 1
+
         if (
             retention_time_range is not None
             and valid_rt
@@ -223,19 +238,14 @@ def extract_chromatograms(
         scan_indices.append(source_index if source_index is not None else ordinal)
         scan_ordinals.append(ordinal)
         source_indices.append(source_index)
+        if spectrum.polarity == "positive":
+            polarities.append("positive")
+        elif spectrum.polarity == "negative":
+            polarities.append("negative")
+        else:
+            polarities.append(None)
         retention_times.append(rt_value)
 
-        mz = np.asarray(spectrum.mz, dtype=np.float64)
-        intensity = np.asarray(spectrum.intensity, dtype=np.float64)
-        invalid_arrays = (
-            mz.ndim != 1
-            or intensity.ndim != 1
-            or mz.size != intensity.size
-            or not np.all(np.isfinite(mz))
-            or not np.all(np.isfinite(intensity))
-        )
-        if not invalid_arrays and mz.size == 0:
-            selected_empty_peak_spectra += 1
         reason: str | None = "retention_time_unavailable" if not valid_rt else None
         if invalid_arrays:
             reason = "invalid_peak_arrays"
@@ -297,6 +307,7 @@ def extract_chromatograms(
         scan_indices=scan_indices,
         scan_ordinals=scan_ordinals,
         source_spectrum_indices=source_indices,
+        polarities=polarities,
         retention_times_min=retention_times,
         tic_intensities=tic_values,
         bpc_intensities=bpc_values,

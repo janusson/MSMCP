@@ -391,7 +391,8 @@ def _extract_scan_start_time(elem: ET.Element) -> float | None:
     seconds_per_minute = 60.0
     to_minutes = {
         "UO:0000031": 1.0,  # minute
-        "MS:1000038": 1.0 / seconds_per_minute,  # second (PSI-MS unit)
+        "MS:1000038": 1.0,  # minute (legacy PSI-MS unit)
+        "MS:1000039": 1.0 / seconds_per_minute,  # second
         "UO:0000010": 1.0 / seconds_per_minute,  # second
         "UO:0000028": 1.0 / 60_000.0,  # millisecond
         "UO:0000029": 1.0 / 60_000_000.0,  # microsecond

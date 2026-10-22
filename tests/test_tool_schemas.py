@@ -221,10 +221,17 @@ async def test_chromatogram_tool_publishes_a_structured_output_schema() -> None:
     definitions = schema["$defs"]
     chromatograms = definitions["ChromatogramData"]["properties"]
     assert "retention_times_min" in chromatograms
+    assert "polarities" in chromatograms
     assert "tic_intensities" in chromatograms
     assert "bpc_intensities" in chromatograms
     assert "xic" in chromatograms
     assert set(tool.input_schema.get("required", [])) == {"file_path"}
+    targets_mz = tool.input_schema["properties"]["targets_mz"]
+    while "items" not in targets_mz and "anyOf" in targets_mz:
+        targets_mz = next(
+            item for item in targets_mz["anyOf"] if item.get("type") == "array"
+        )
+    assert targets_mz["items"]["exclusiveMinimum"] == 0.0
 
 
 async def test_chromatogram_tool_advertises_ten_thousand_scan_bound() -> None:
