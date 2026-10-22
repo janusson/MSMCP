@@ -282,7 +282,7 @@ Agent:   summarise_reference(reference="ptr:spectrum:9f3c…")
      Provenance: load_spectrum … source: run42/experiment.mzML"
 
 Agent:   search_library(spectrum_reference="ptr:spectrum:9f3c…",
-                        database_file="libraries/metabolomics.db",
+                        database_file="libraries/metabolomics.library",
                         scoring_method="dreams")
   → "Job ID: 362c0267… (the peaks never entered the conversation)"
 
@@ -310,7 +310,7 @@ Agent:   "The top hit is caffeine, but the precursor mass error (13.91 ppm)
 
 The agent carries references, job IDs and verdicts — never spectra.
 
-> **Note on this walkthrough:** the *query* spectrum is genuinely read from `experiment.mzML`. The **library** depends on the path: an MSP/NIST-style text library (`.msp`, `.msp.gz`) or an MGF library (`.mgf`, `.mgf.gz`) is read from disk through the same security boundary as the query, while a path with no reader (such as the `metabolomics.db` string above) falls back to a synthetic library of 500–5,000 spectra seeded from that string. Either way the dispatch reply and the final report carry a banner naming which library actually answered the query, ahead of any hit table. Treat the hits as scoring results, never as identifications. See *Known limitations & roadmap*.
+> **Note on this walkthrough:** the *query* spectrum is genuinely read from `experiment.mzML`. The **library** depends on the path: an MSP/NIST-style text library (`.msp`, `.msp.gz`), an MGF library (`.mgf`, `.mgf.gz`), or a SQLite peak store (`.sqlite`, `.db`) is read from disk through the same security boundary as the query, while a path with no reader (such as the `metabolomics.library` string above) falls back to a synthetic library of 500–5,000 spectra seeded from that string. Either way the dispatch reply and the final report carry a banner naming which library actually answered the query, ahead of any hit table. Treat the hits as scoring results, never as identifications. See *Known limitations & roadmap*.
 
 ## Tool reference
 

@@ -5,30 +5,29 @@ synthetic in-memory library, so a path was never resolved and nothing validated
 it.  This module is the missing other half: it reads a spectral library that the
 user already has on disk, in a format they already have it in.
 
-The first (and, for now, only) reader is **MSP / NIST-style text**, the
-interchange format most commercial and public libraries ship as.  It is
-deliberately strict: a peak line that does not parse raises
+The readers include **MSP / NIST-style text**, the interchange format most
+commercial and public libraries ship as; MGF; and a read-only SQLite peak store.
+The text readers are deliberately strict: a peak line that does not parse raises
 :class:`~msmcp.errors.MalformedFileError` rather than being skipped, and a
 ``Num Peaks`` header that disagrees with the peak lines read is an error, because
 silently dropping or inventing peaks would change the science.
 
 Every path crosses the same :class:`~msmcp.security.SecurityPolicy` as
 acquisitions — allowed root (symlinks resolved), file-size limit — and is opened
-**read-only** (mode ``"rb"``); the reader never needs, or takes, write access to
-a library file.  That is the security criterion the audit attaches to this item:
-the moment a provider opens ``database_file``, an unvalidated path would be
-arbitrary file read from an MCP tool.
+read-only. Text readers use mode ``"rb"``; the SQLite reader uses a read-only,
+immutable URI and rejects SQLite sidecars. The reader never needs, or takes,
+write access to a library file. That is the security criterion the audit
+attaches to this item: the moment a provider opens ``database_file``, an
+unvalidated path would be arbitrary file read from an MCP tool.
 
 The provider shape mirrors :class:`~msmcp.models.embeddings.SpectralEmbedder`
 and :class:`~msmcp.execution.executor.JobExecutor` — the third use of the same
-pattern, as ARCHITECTURE.md plans it — so the scan is written against
-:class:`LibraryProvider` and a future SQLite peak store can be added without
-touching the search pipeline.
+pattern — so the scan is written against :class:`LibraryProvider` and additional
+readers can be added without touching the search pipeline.
 """
 
 from __future__ import annotations
 
-import contextlib
 import gzip
 import io
 import json
@@ -557,14 +556,49 @@ class SQLiteLibraryProvider(LibraryProvider):
 
     format = "SQLite"
 
+    _SIDECAR_SUFFIXES: Final[tuple[str, ...]] = ("-wal", "-shm", "-journal")
+
+    def _ensure_sidecar_free(self) -> None:
+        """Require a checkpointed, sidecar-free database for stable provenance.
+
+        SQLite may read committed rows from a WAL or recover a rollback journal
+        while opening a database. Those bytes are outside the validated file
+        size and the main-file digest, so accepting them would break both
+        boundaries. Reject even empty sidecars and open the main file as
+        immutable so SQLite will not create or consult sidecars.
+        """
+        for suffix in self._SIDECAR_SUFFIXES:
+            sidecar = Path(f"{self._path}{suffix}")
+            try:
+                sidecar.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise MalformedFileError(
+                    f"Cannot inspect SQLite sidecar for '{self._path}': {exc}"
+                ) from exc
+            raise MalformedFileError(
+                "SQLite libraries must be checkpointed and sidecar-free; "
+                f"found '{sidecar.name}'."
+            )
+
+    @staticmethod
+    def _validate_schema(conn: sqlite3.Connection) -> None:
+        """Validate required tables and columns, including for empty stores."""
+        conn.execute(
+            "SELECT id, compound_name, precursor_mz, formula, polarity, metadata "
+            "FROM spectra LIMIT 0"
+        )
+        conn.execute("SELECT spectrum_id, mz, intensity FROM peaks LIMIT 0")
+
     def _connect(self) -> sqlite3.Connection:
-        # uri=True allows read-only mode.
-        uri = f"file:{self._path.absolute().as_posix()}?mode=ro"
+        self._ensure_sidecar_free()
+        # as_uri percent-encodes ?, #, %, and other URI path delimiters.
+        # immutable=1 prevents SQLite from consulting or creating sidecars.
+        uri = f"{self._path.as_uri()}?mode=ro&immutable=1"
         conn = sqlite3.connect(uri, uri=True)
-        # Disable extensions
         conn.enable_load_extension(False)
 
-        # Refuse ATTACH
         def authorizer(action, arg1, arg2, dbname, source):
             if action == sqlite3.SQLITE_ATTACH:
                 return sqlite3.SQLITE_DENY
@@ -582,13 +616,20 @@ class SQLiteLibraryProvider(LibraryProvider):
             size = None
 
         n_spectra = 0
+        n_records_without_peaks = 0
         try:
             with self._connect() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM spectra")
-                row = cursor.fetchone()
+                self._validate_schema(conn)
+                row = conn.execute(
+                    "SELECT COUNT(*), "
+                    "SUM(CASE WHEN EXISTS ("
+                    "SELECT 1 FROM peaks WHERE peaks.spectrum_id = spectra.id"
+                    ") THEN 1 ELSE 0 END) FROM spectra"
+                ).fetchone()
                 if row is not None:
-                    n_spectra = row[0]
+                    total, with_peaks = row
+                    n_spectra = with_peaks or 0
+                    n_records_without_peaks = total - n_spectra
         except sqlite3.Error as e:
             raise MalformedFileError(f"Failed to read SQLite library: {e}") from e
 
@@ -600,7 +641,7 @@ class SQLiteLibraryProvider(LibraryProvider):
             n_spectra=n_spectra,
             digest=file_digest(self._path),
             size_bytes=size,
-            n_records_without_peaks=0,
+            n_records_without_peaks=n_records_without_peaks,
         )
 
     def iter_spectra(self, chunk_size: int = 2000) -> Iterator[list[LibrarySpectrum]]:
@@ -610,16 +651,28 @@ class SQLiteLibraryProvider(LibraryProvider):
 
         try:
             with self._connect() as conn:
+                self._validate_schema(conn)
                 cursor = conn.cursor()
 
-                # Fetch spectra
+                variable_limit = conn.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)
+                if variable_limit < 1:
+                    raise MalformedFileError(
+                        "SQLite reports an invalid SQL variable limit."
+                    )
+
+                # Records without peaks are deliberately excluded, matching
+                # the MSP provider's search and FDR semantics.
                 cursor.execute(
-                    "SELECT id, compound_name, precursor_mz, formula, polarity, metadata FROM spectra ORDER BY id"
+                    "SELECT id, compound_name, precursor_mz, formula, polarity, metadata "
+                    "FROM spectra WHERE EXISTS ("
+                    "SELECT 1 FROM peaks WHERE peaks.spectrum_id = spectra.id"
+                    ") ORDER BY id"
                 )
 
                 chunk: list[LibrarySpectrum] = []
                 while True:
-                    spectrum_rows = cursor.fetchmany(chunk_size - len(chunk))
+                    fetch_size = min(chunk_size - len(chunk), variable_limit)
+                    spectrum_rows = cursor.fetchmany(fetch_size)
                     if not spectrum_rows:
                         break
 
@@ -629,7 +682,9 @@ class SQLiteLibraryProvider(LibraryProvider):
 
                     peaks_cursor = conn.cursor()
                     peaks_cursor.execute(
-                        f"SELECT spectrum_id, mz, intensity FROM peaks WHERE spectrum_id IN ({placeholders}) ORDER BY mz",
+                        f"SELECT spectrum_id, mz, intensity FROM peaks "
+                        f"WHERE spectrum_id IN ({placeholders}) "
+                        "ORDER BY spectrum_id, mz",
                         spectrum_ids,
                     )
 
@@ -649,9 +704,22 @@ class SQLiteLibraryProvider(LibraryProvider):
                             polarity_str = "negative"
 
                         metadata: dict[str, str] = {}
-                        if metadata_json:
-                            with contextlib.suppress(TypeError, ValueError):
-                                metadata = json.loads(metadata_json)
+                        if metadata_json not in (None, ""):
+                            try:
+                                decoded = json.loads(metadata_json)
+                            except (TypeError, ValueError) as exc:
+                                raise MalformedFileError(
+                                    f"Invalid JSON metadata for SQLite spectrum {sid}."
+                                ) from exc
+                            if not isinstance(decoded, dict) or any(
+                                not isinstance(key, str) or not isinstance(value, str)
+                                for key, value in decoded.items()
+                            ):
+                                raise MalformedFileError(
+                                    "SQLite metadata must be a JSON object with "
+                                    f"string keys and values (spectrum {sid})."
+                                )
+                            metadata = cast(dict[str, str], decoded)
 
                         lib_spectrum = LibrarySpectrum(
                             index=sid,

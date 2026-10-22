@@ -983,3 +983,135 @@ class TestSQLiteLibraryProvider:
         )
         with pytest.raises(MalformedFileError, match="Failed to read SQLite library"):
             provider.describe()
+
+    def test_uri_delimiters_in_filename_are_encoded(self, tmp_path: Path) -> None:
+        from msmcp.library import get_library_provider
+        from msmcp.security import SecurityPolicy
+
+        path = tmp_path / "library?edition#1.sqlite"
+        self._create_db(path)
+
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+
+        assert provider.describe().n_spectra == 2
+        assert not (tmp_path / "library").exists()
+
+    def test_sidecars_are_rejected(self, tmp_path: Path) -> None:
+        from msmcp.errors import MalformedFileError
+        from msmcp.library import get_library_provider
+        from msmcp.security import SecurityPolicy
+
+        path = tmp_path / "test.sqlite"
+        self._create_db(path)
+        Path(f"{path}-wal").write_bytes(b"uncheckpointed WAL data")
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+
+        with pytest.raises(MalformedFileError, match="sidecar-free"):
+            provider.describe()
+
+    @pytest.mark.parametrize(
+        "metadata_json",
+        ["{", "[]", '"value"', '{"MSLEVEL": 2}'],
+    )
+    def test_invalid_metadata_is_a_typed_format_error(
+        self, tmp_path: Path, metadata_json: str
+    ) -> None:
+        import sqlite3
+
+        from msmcp.errors import MalformedFileError
+        from msmcp.library import get_library_provider
+        from msmcp.security import SecurityPolicy
+
+        path = tmp_path / "test.sqlite"
+        self._create_db(path)
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                "UPDATE spectra SET metadata = ? WHERE id = 1", (metadata_json,)
+            )
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+
+        with pytest.raises(MalformedFileError, match="metadata"):
+            list(provider.iter_spectra())
+
+    def test_empty_database_still_requires_peaks_table(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        from msmcp.errors import MalformedFileError
+        from msmcp.library import get_library_provider
+        from msmcp.security import SecurityPolicy
+
+        path = tmp_path / "empty.sqlite"
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                "CREATE TABLE spectra (id INTEGER PRIMARY KEY, compound_name TEXT, "
+                "precursor_mz REAL, formula TEXT, polarity INTEGER, metadata JSON)"
+            )
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+
+        with pytest.raises(MalformedFileError, match="Failed to read SQLite library"):
+            provider.describe()
+
+    def test_records_without_peaks_are_skipped_and_counted(
+        self, tmp_path: Path
+    ) -> None:
+        import sqlite3
+
+        from msmcp.library import get_library_provider
+        from msmcp.security import SecurityPolicy
+
+        path = tmp_path / "test.sqlite"
+        self._create_db(path)
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                "INSERT INTO spectra (id, compound_name) VALUES (3, 'No peaks')"
+            )
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+
+        info = provider.describe()
+        spectra = [s for chunk in provider.iter_spectra() for s in chunk]
+        assert info.n_spectra == 2
+        assert info.n_records_without_peaks == 1
+        assert [s.compound_name for s in spectra] == ["Compound A", "Compound B"]
+
+    def test_peak_batches_respect_sqlite_variable_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sqlite3
+
+        from msmcp.library import SQLiteLibraryProvider, get_library_provider
+        from msmcp.security import SecurityPolicy
+
+        path = tmp_path / "test.sqlite"
+        self._create_db(path)
+        with sqlite3.connect(path) as conn:
+            conn.execute(
+                "INSERT INTO spectra (id, compound_name) VALUES (3, 'Compound C')"
+            )
+            conn.execute(
+                "INSERT INTO peaks (spectrum_id, mz, intensity) VALUES (3, 80.0, 10.0)"
+            )
+        provider = get_library_provider(
+            str(path), SecurityPolicy(allowed_root=tmp_path)
+        )
+        assert isinstance(provider, SQLiteLibraryProvider)
+        original_connect = provider._connect
+
+        def connect_with_low_variable_limit() -> sqlite3.Connection:
+            conn = original_connect()
+            conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 2)
+            return conn
+
+        monkeypatch.setattr(provider, "_connect", connect_with_low_variable_limit)
+
+        spectra = [s for chunk in provider.iter_spectra(chunk_size=1000) for s in chunk]
+        assert len(spectra) == 3
