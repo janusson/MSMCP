@@ -1,0 +1,182 @@
+{
+  "input": "synthetic MGF, three records; not an identification benchmark",
+  "fixture_sha256": "104d227a485094f735ad5059859d32cc372fa5a17009b1097fedd95a3d474cc0",
+  "msmcp": {
+    "backend": "msmcp.mgf",
+    "rows": [
+      {
+        "index": 0,
+        "retention_time": 2.0,
+        "precursor_mz": 195.08765,
+        "mz": [
+          100.0,
+          150.0
+        ],
+        "intensity": [
+          10.0,
+          20.0
+        ],
+        "dtype": "float64",
+        "arrays_writeable": false
+      },
+      {
+        "index": 1,
+        "retention_time": 3.0,
+        "precursor_mz": null,
+        "mz": [
+          100.0,
+          150.0
+        ],
+        "intensity": [
+          10.0,
+          20.0
+        ],
+        "dtype": "float64",
+        "arrays_writeable": false
+      },
+      {
+        "index": 2,
+        "retention_time": 4.0,
+        "precursor_mz": 195.08765,
+        "mz": [
+          100.0,
+          150.0
+        ],
+        "intensity": [
+          0.0,
+          20.0
+        ],
+        "dtype": "float64",
+        "arrays_writeable": false
+      }
+    ],
+    "module_path": "src/msmcp/ingest.py",
+    "runtime": {
+      "python": "3.13.12",
+      "packages": {
+        "msmcp": "1.0.0",
+        "massflow": "0.1.2",
+        "numpy": "2.4.6"
+      }
+    },
+    "stdout_other_lines": 0,
+    "source_fingerprints": {
+      "src/msmcp/__init__.py": "e47a2b78d832d600685f241b2bf077359c60afc1bbbb31e93988c2d078724bb1",
+      "src/msmcp/errors.py": "6a2bccdd1356c95729425b5c87f873ec32959b74db1fd34f028bf7e6a4250c56",
+      "src/msmcp/execution/__init__.py": "2a9a90f213672cfeb8aa565fe6ab021371c997cbd3db662e04c03b022c4c609f",
+      "src/msmcp/execution/executor.py": "8ae86459a49388df73ad5cb57a142df006ee06b6212e7177c07c551dc2efe8d7",
+      "src/msmcp/ingest.py": "62e652429d9f5dcc3a1a72f81eee57abbe4966e5448dbf344d0b71ca99283248",
+      "src/msmcp/instruments.py": "75bf4b49ac1e5afeb78fdd3a37d4f75e91b13f141111d5de6ec0f1057b419259",
+      "src/msmcp/library.py": "3009c078b03b21c6bdd95b914b9e158b9c242db5f72316bf3f03acc5638e5c36",
+      "src/msmcp/massflow_io.py": "45a83223be04a81cdf29050a551dda7512db048abde49d2b74a00f5c13ecd9f3",
+      "src/msmcp/mgf.py": "c1b05788611f228df90268e1898a3fa9282afbc907a2bc82f236b277f85694e2",
+      "src/msmcp/models/__init__.py": "64710a1cab27e020d0564d9b88eeb4b98ca508a237a88c22363cd06fd2b0128b",
+      "src/msmcp/models/backends.py": "2fff9192a29b95a413accc1e2b2a01c9afaae1311c3978c96e2af1afe88ef3a4",
+      "src/msmcp/models/embeddings.py": "136823329361faacaafd99da95615522a0af801c26151c2a7561fee1abfeb0c6",
+      "src/msmcp/models/null_model.py": "87f23ce48146d5965402b42e3d87175dde1dd4dfcd1c0a5f70ff5c9646f592b9",
+      "src/msmcp/models/scoring.py": "0b1a50333248826c919819c97cb225f77008a65057048606f22582d6f9e8d04e",
+      "src/msmcp/mzml.py": "1407a69ae968fbf8b06dfbe00d5ac0077f6bfd8960825656aff07ec81722a71a",
+      "src/msmcp/provenance.py": "34aebe0a2cd05f7dd3119d66689968cae5b7c8e4b0e6c96f86cfd9ddfe5be889",
+      "src/msmcp/security.py": "67e6d7b8918a1ea8b42ccabe45491f6d7f2c1ac91311373d3f287339ec11840b",
+      "src/msmcp/server.py": "57228618a44f1bc1cc871c0db598f3110ae714ee48415a49c25e634f95f3bff2",
+      "src/msmcp/state/__init__.py": "b1368d6638b11799ee5775574f4a1587b4cd0acacf2f2d677fbf14430159ae8a",
+      "src/msmcp/state/pointers.py": "f9f8f0dbc272a69e0ccda0455e506f760c2aac34124893552af316b536697cfa",
+      "src/msmcp/state/store.py": "38baa13d37e15a8071c49e0b965ff043b343dbd7e99aac53b793b671b81f697c",
+      "src/msmcp/tools/__init__.py": "e9d2b4fc4c4db5fea089e7cef4f103db951d94084c79e01f65fb707c394c4a44",
+      "src/msmcp/tools/chem.py": "d8adf41d2a191752f320301e1b1a66ac85a965e7b7753d8031d5e3ff676afa9e",
+      "src/msmcp/tools/io.py": "a5d3d944fe5679459dc828ae93994c100ddda004407dace1e6274dfca7199212",
+      "src/msmcp/tools/qc.py": "1976a8009c31fcbb579c71820afce522e956441a259d79e25ecacb6d7d7cfc3f",
+      "src/msmcp/tools/search.py": "c0d013e6a919c827f15806f9fbf78034765e1672931cfa006624ad07c439474d",
+      "src/msmcp/tools/similarity.py": "89e82515c8e701963c5817f7e83ba1481e75740abb91ca8b8337ae141ac2d8e3",
+      "src/msmcp/tools/system.py": "5a4fc0d862e10667f4304ef508dccffc24f836c403992f22f07fd414fb507f1a"
+    }
+  },
+  "MassFlow": {
+    "backend": "MassFlow.io.load_spectra",
+    "rows": [
+      {
+        "retention_time": 120.0,
+        "precursor_mz": 195.08765,
+        "mz": [
+          100.0,
+          150.0
+        ],
+        "intensity": [
+          10.0,
+          20.0
+        ],
+        "dtype": "float64"
+      }
+    ],
+    "rejections": [
+      "Missing precursor_mz",
+      "Contains non-positive intensity values"
+    ],
+    "module_path": "src/MassFlow/io.py",
+    "runtime": {
+      "python": "3.13.12",
+      "packages": {
+        "massflow": "0.1.0",
+        "numpy": "2.2.6",
+        "matchms": "0.33.1"
+      }
+    },
+    "stdout_other_lines": 0,
+    "source_fingerprints": {
+      "src/MassFlow/__init__.py": "16e55c2801a0c203e7c278a6a53c1c434e7df6ebd5fcc38e181502dae1d8b04e",
+      "src/MassFlow/acceleration.py": "a89b884d35b2b4db40f0faa55b9f3e0535e5d8fe33b1cdde3e1a8ca83789c5b2",
+      "src/MassFlow/cheminformatics.py": "200c460496fd5eb03730e7678e244d1464c9770a9be03797ec3286d8e5fc544c",
+      "src/MassFlow/cli.py": "d28c90eff33f582d3119cad176f50397368cf6d4ecff1d36ca234875a864d106",
+      "src/MassFlow/config.py": "82c1c8fca94ea629644e8a749ff1fff667874a0aeafe4c4b769edbdeb986f8df",
+      "src/MassFlow/convert.py": "bd2b3bcdf078b2cc442abdd146a9413efd0ff885bf35aa6836f64d04eccfb332",
+      "src/MassFlow/database.py": "54621ff9f5b217013a5863cae46bb25b04b38c03c69c6866670881447d509400",
+      "src/MassFlow/generated/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "src/MassFlow/generated/massflow/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "src/MassFlow/generated/massflow/v1/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "src/MassFlow/generated/massflow/v1/ml_pb2.py": "a4c96fa2416251ed26ec8573bab4cc571f21cdf6221144221411973d9f8364ab",
+      "src/MassFlow/generated/massflow/v1/ml_pb2_grpc.py": "2e56c213d6395d4b4f40a7a5da42bd540e66ddd91efbfd2ac71d320c13c8ec39",
+      "src/MassFlow/hnsw.py": "0957427e1360a1070c70aca5c5f745a3c1367e63f59bb5bac66109ce2a2e9df6",
+      "src/MassFlow/io.py": "f9354ae80e3ce001530dec93627c218949d93a761f58f62cddc60c7ae53e7d99",
+      "src/MassFlow/library.py": "d3bb3b37c3481d21083c755a8a7b43e26efc3f615b7029875d8e525c7af41aca",
+      "src/MassFlow/log_config.py": "8db69f239f06cb33c96699fd634023b699ad537aa0976229d087f672c9453932",
+      "src/MassFlow/ml_client.py": "e01fb43c2a9b87f88050d61c05a8e113e26d10fdd0d7c4764cd6c1f977abacd6",
+      "src/MassFlow/models.py": "4e2c5495666958bfdd0a7984017531a2c830ccb26ed622521069cb0f04b5f5f6",
+      "src/MassFlow/processing.py": "64bcc25aa350b86d271c8930d93588f8a35864fc61f418a6469dde887f8832e3",
+      "src/MassFlow/protocols.py": "0073f7149c6bf8ff83d97e2610513f18622a8a035116c5fd6b7c35c3274aaffb",
+      "src/MassFlow/similarity.py": "9aa8c8e4ae3d78d7e559f8b33f98bd2b919e97b08e3ea9f088297f1d1d9f491a",
+      "src/MassFlow/storage.py": "73f3d8e3a56ffe5f8bff0d3f3e600a11069645a2b0f29c6600bf020ed65711a0",
+      "src/MassFlow/streaming/__init__.py": "14edcc3b46170399e79b20f6ee2edf5489bcf49c12ef33d2b32f629c20c53d44",
+      "src/MassFlow/streaming/engine.py": "b96ade3058290c9983842b46db92673a8d07bd22da1c10872b36b993187cf59a",
+      "src/MassFlow/streaming/generated/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "src/MassFlow/streaming/generated/massflow/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "src/MassFlow/streaming/generated/massflow/v1/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "src/MassFlow/streaming/generated/massflow/v1/streaming_pb2.py": "769d55fb3080a7089ce289baa8895e4b822cf4b58193972236387b303d51353b",
+      "src/MassFlow/streaming/generated/massflow/v1/streaming_pb2_grpc.py": "40fe082cd5977e75aedfb0eb68a68e515fa2467e1edbb58f1055879614ba51ca",
+      "src/MassFlow/streaming/queue.py": "ec4b42d03e5f6c3cf574dd9533d0fe2dcbe70e40b2cc54d78d0cb21f9a67daaf",
+      "src/MassFlow/streaming/server.py": "3bc0bb7c69774221ffff92de7aae7be5bbafde4c161acfa351c6c51ee1fb2a8d",
+      "src/MassFlow/tui/__init__.py": "a245d1035913160ee01514646244d005d43ee7cf693b8fa35edf803b4cbce5d9",
+      "src/MassFlow/tui/app.py": "2d9013fd5d30e0453cb87badab67d4752bf7e1b5e2776361b993fc65c70fd18d",
+      "src/MassFlow/tui/diagnostics.py": "2d3b162f6a42dee2b9a84efb008891b38313c400fcd8df5a77ff33f41acfb73e",
+      "src/MassFlow/tui/files.py": "e8100163fe5f999b47a5eeffc0b00bb3d16e04e0be1264bd0d6d811a82f4331c",
+      "src/MassFlow/tui/pipeline.py": "de5c41ca88249daaa4d95159bb92aa5adcaf23a8392c3a9f36844202e614141d",
+      "src/MassFlow/tui/plot.py": "6389994a0caee8f087b0f53c4ee1c6e6562e42668cc46b6f0a1e208d7667a3c3",
+      "src/MassFlow/tui/spectrum_data.py": "961dc13415a10947bb8696eb83b881b541ea78cb7fd6456cddb00a7992328017",
+      "src/MassFlow/tui/state.py": "d43ff6627be0fb9b592dccb98db0af626800e3f57b6c8a256eee116dbf743bb6",
+      "src/MassFlow/wizard.py": "a3b868cae78a786e14b96614c384668dce03bd5b0c8ea3b0877aa36459c92a89",
+      "src/MassFlow/workflow.py": "ea2bf440ab169a199d9547192c148c784e5f3ad4ab806b74a5ee023ae9a25c64",
+      "src/MassFlow/zarr_store.py": "13ff10819907e60c9e9c4800f8f9be9ef4c6993933bbb5049ff73ed12c75e5ce"
+    }
+  },
+  "checks": {
+    "msmcp_preserves_three_records": true,
+    "massflow_reports_two_rejections": true,
+    "shared_valid_peaks_unchanged": true,
+    "retention_units_require_conversion": true,
+    "precursor_not_invented": true,
+    "zero_intensity_not_erased": true,
+    "float64_arrays": true,
+    "msmcp_arrays_read_only": true,
+    "stdout_clean_in_this_probe": true
+  },
+  "all_checks_passed": true
+}
