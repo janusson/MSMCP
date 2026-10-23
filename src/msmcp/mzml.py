@@ -24,6 +24,7 @@ import binascii
 import gzip
 import importlib
 import logging
+import math
 import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Iterator
@@ -66,6 +67,8 @@ _ACC_SCAN_START_TIME = "MS:1000016"
 _ACC_SELECTED_ION_MZ = "MS:1000744"
 _ACC_POSITIVE_SCAN = "MS:1000130"
 _ACC_NEGATIVE_SCAN = "MS:1000129"
+_ACC_CENTROID_SPECTRUM = "MS:1000127"
+_ACC_PROFILE_SPECTRUM = "MS:1000128"
 
 _NUMPRESS_ACCESSIONS = frozenset({"MS:1002312", "MS:1002313", "MS:1002314"})
 
@@ -98,6 +101,12 @@ class Spectrum:
     spectrum that carries neither the positive- nor the negative-scan cvParam),
     so a tool never has to invent one.
     """
+    representation: str | None = None
+    """``"centroid"`` or ``"profile"`` when stated by the spectrum CV terms."""
+
+    native_id: str | None = None
+    """Exact mzML spectrum/@id; never inferred from index or ordinal."""
+    source_warnings: tuple[str, ...] = ()
 
     @property
     def tic(self) -> float:
@@ -377,20 +386,33 @@ def _parse_binary_data_array(
 
 
 def _extract_scan_start_time(elem: ET.Element) -> float | None:
+    # Unit accession, not a display name or a guessed default, defines the value.
+    # Retention times are exposed in minutes throughout the Spectrum API.
+    seconds_per_minute = 60.0
+    to_minutes = {
+        "UO:0000031": 1.0,  # minute
+        "MS:1000038": 1.0,  # minute (legacy PSI-MS unit)
+        "MS:1000039": 1.0 / seconds_per_minute,  # second
+        "UO:0000010": 1.0 / seconds_per_minute,  # second
+        "UO:0000028": 1.0 / 60_000.0,  # millisecond
+        "UO:0000029": 1.0 / 60_000_000.0,  # microsecond
+        "UO:0000032": 60.0,  # hour
+    }
     for scan in elem:
         if _local(scan.tag) != "scan":
             continue
         for cv in scan:
             if (
-                _local(cv.tag) == "cvParam"
-                and cv.get("accession") == _ACC_SCAN_START_TIME
+                _local(cv.tag) != "cvParam"
+                or cv.get("accession") != _ACC_SCAN_START_TIME
             ):
-                value = _to_float_or_none(cv.get("value"))
-                if value is None:
-                    return None
-                unit = (cv.get("unitName") or "").lower()
-                # Normalise to minutes for the summary; the mzML default is seconds.
-                return value / 60.0 if "second" in unit else value
+                continue
+            value = _to_float_or_none(cv.get("value"))
+            factor = to_minutes.get(cv.get("unitAccession", ""))
+            if value is None or factor is None:
+                return None
+            retention_time = value * factor
+            return retention_time if math.isfinite(retention_time) else None
     return None
 
 
@@ -419,6 +441,7 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
     retention_time: float | None = None
     precursor_mz: float | None = None
     polarity: str | None = None
+    representations: set[str] = set()
 
     for child in elem:
         tag = _local(child.tag)
@@ -428,6 +451,10 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
             polarity = "positive"
         elif tag == "cvParam" and child.get("accession") == _ACC_NEGATIVE_SCAN:
             polarity = "negative"
+        elif tag == "cvParam" and child.get("accession") == _ACC_CENTROID_SPECTRUM:
+            representations.add("centroid")
+        elif tag == "cvParam" and child.get("accession") == _ACC_PROFILE_SPECTRUM:
+            representations.add("profile")
         elif tag == "scanList":
             retention_time = _extract_scan_start_time(child)
         elif tag == "precursorList":
@@ -458,12 +485,20 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
 
     return Spectrum(
         index=index,
+        native_id=elem.get("id"),
+        source_warnings=("declared_array_length_mismatch",)
+        if declared_length is not None
+        and (mz.size != declared_length or intensity.size != declared_length)
+        else (),
         ms_level=ms_level,
         retention_time=retention_time,
         precursor_mz=precursor_mz,
         mz=mz,
         intensity=intensity,
         polarity=polarity,
+        representation=next(iter(representations))
+        if len(representations) == 1
+        else None,
     )
 
 

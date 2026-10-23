@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "dataset_accession": "MSV000089046",
+  "dataset_url": "https://massive.ucsd.edu/ProteoSAFe/dataset.jsp?task=98f9d86b80414ac991063bb460f78ab2",
+  "files": [
+    {
+      "path": "Orbi_P_E2_CS02A.mzML",
+      "source_accession": "MSV000089046",
+      "source_path": "raw/Orbi_CS_Metabolomics_Example_Set/Orbi_POS_DDA_MZML/Orbi_P_E2_CS02A.mzML",
+      "bytes": 66281658,
+      "sha256": "51e3055b6c36e6b1717e60dacca1e36d197c4ad1ffaa24a0a382bc31f0d26ee1"
+    },
+    {
+      "path": "Orbi_P_E2_CSSM10uMA.mzML",
+      "source_accession": "MSV000089046",
+      "source_path": "raw/Orbi_CS_Metabolomics_Example_Set/Orbi_POS_DDA_MZML/Orbi_P_E2_CSSM10uMA.mzML",
+      "bytes": 70767082,
+      "sha256": "91a112752847048be77dc07ad2550af7ada9e02bbfcf71d365593f3d7fe6989b"
+    },
+    {
+      "path": "Orbi_P_E2_CSSM10uMB.mzML",
+      "source_accession": "MSV000089046",
+      "source_path": "raw/Orbi_CS_Metabolomics_Example_Set/Orbi_POS_DDA_MZML/Orbi_P_E2_CSSM10uMB.mzML",
+      "bytes": 70373558,
+      "sha256": "edd212dc2b101ef6b37ae819b0091e277d3a76796064fa27cad4a50a5374ed9e"
+    },
+    {
+      "path": "Orbi_P_E2_EXBLANKA.mzML",
+      "source_accession": "MSV000089046",
+      "source_path": "raw/Orbi_CS_Metabolomics_Example_Set/Orbi_POS_DDA_MZML/Orbi_P_E2_EXBLANKA.mzML",
+      "bytes": 65242379,
+      "sha256": "93eddd49a943beed5c24dd3b96e1fa10fd2a1c85e17dec12532abffc5e8aa71f"
+    }
+  ]
+}

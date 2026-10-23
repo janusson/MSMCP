@@ -314,7 +314,7 @@ The agent carries references, job IDs and verdicts — never spectra.
 
 ## Tool reference
 
-Fourteen tools are exposed to the model: compact Markdown (or a single sentence) for human/LLM reading, and a structured object where a data reference is involved.
+Fifteen tools are exposed to the model: compact Markdown (or a single sentence) for human/LLM reading, and structured objects for data references and chromatograms.
 
 | Tool | Module | Purpose |
 |---|---|---|
@@ -322,6 +322,7 @@ Fourteen tools are exposed to the model: compact Markdown (or a single sentence)
 | `load_mzml_summary` | `tools/io.py` | First-*N*-spectra text summary of a local `.mzML` file |
 | `list_spectra` | `tools/io.py` | Index of a file's spectra — index, MS level, retention time, precursor m/z and peak count — for choosing one to load or search (`ms_level`/`min_peaks` filters, capped by `max_spectra`) |
 | `load_spectrum` | `tools/io.py` | Parse one spectrum from any supported format and register it server-side; returns a `DataReference` plus metadata and provenance |
+| `extract_chromatograms` | `tools/chromatograms.py` | One-pass structured TIC, BPC, and multiple XIC traces from a complete bounded mzML acquisition |
 | `summarise_reference` | `tools/io.py` | Read a referenced spectrum back from server memory (no file re-read) |
 | `release_reference` | `tools/io.py` | Free a reference immediately rather than waiting for expiry |
 | `predict_adduct_offset` | `tools/chem.py` | Exact mass shift for 14 canonical adducts |
@@ -537,6 +538,15 @@ MSMCP is a **local, single-user server**: the MCP host spawns it as a child proc
 | `MSMCP_EMBEDDING_BACKEND` | `real` | `real` requires real inference; `mock` selects the test/dev-only stand-ins |
 | `MSMCP_LSM_MS2_CKPT` | unset | Path to a bring-your-own LSM-MS2 checkpoint |
 | `MSMCP_LSM_MS2_ALLOW_UNSAFE` | unset | `1` opts into full-pickle checkpoint loading (unsafe) |
+
+`extract_chromatograms` has a separate per-call `max_spectra` ceiling of 10,000;
+it does not change `MSMCP_MAX_SPECTRA` for other tools. The parameter counts
+every source spectrum scanned, including other MS levels and scans outside an
+RT filter. A call that would exceed it fails without returning a partial trace.
+The existing allowed-root and 500 MiB file-size controls still apply.
+
+See [Chromatogram extraction](docs/chromatograms.md) for its structured response
+schema, calculation rules, limitations and MassPilot example.
 
 Instrument-specific thresholds are deliberately **not** environment variables:
 they are the per-call `instrument_class` argument described in

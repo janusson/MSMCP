@@ -6,6 +6,7 @@ import base64
 import zlib
 from collections.abc import Callable
 from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import numpy as np
 import pytest
@@ -18,6 +19,7 @@ from msmcp.errors import (
 )
 from msmcp.mzml import (
     _decode_binary,
+    _extract_scan_start_time,
     declared_spectrum_count,
     iter_spectra,
     resolve_mzml_path,
@@ -98,6 +100,47 @@ class TestDecodeBinary:
 # Parser: spectrum iteration and counts
 # ---------------------------------------------------------------------------
 class TestMzMLParser:
+    @pytest.mark.parametrize(
+        ("value", "unit_accession", "unit_name", "expected_minutes"),
+        [
+            (120.0, "MS:1000038", "minute", 120.0),
+            (120.0, "MS:1000039", "second", 2.0),
+            (120.0, "UO:0000010", "second", 2.0),
+            (2.0, "UO:0000031", "minute", 2.0),
+            (120_000.0, "UO:0000028", "millisecond", 2.0),
+            (120_000_000.0, "UO:0000029", "microsecond", 2.0),
+            (2.0 / 60.0, "UO:0000032", "hour", 2.0),
+        ],
+    )
+    def test_scan_start_time_is_normalized_from_unit_accession(
+        self,
+        value: float,
+        unit_accession: str,
+        unit_name: str,
+        expected_minutes: float,
+    ) -> None:
+        xml = (
+            '<scanList><scan><cvParam accession="MS:1000016" '
+            f'value="{value}" unitAccession="{unit_accession}" '
+            f'unitName="{unit_name}"/></scan></scanList>'
+        )
+        assert _extract_scan_start_time(ET.fromstring(xml)) == pytest.approx(
+            expected_minutes
+        )
+
+    @pytest.mark.parametrize(
+        "unit_attributes",
+        ["", 'unitAccession="UO:9999999" unitName="second"'],
+    )
+    def test_unknown_or_missing_rt_unit_is_not_guessed(
+        self, unit_attributes: str
+    ) -> None:
+        xml = (
+            '<scanList><scan><cvParam accession="MS:1000016" value="120" '
+            f"{unit_attributes}/></scan></scanList>"
+        )
+        assert _extract_scan_start_time(ET.fromstring(xml)) is None
+
     def test_declared_spectrum_count(self, valid_mzml: Path) -> None:
         assert declared_spectrum_count(valid_mzml) == 3
 

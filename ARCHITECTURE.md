@@ -117,7 +117,7 @@ Everything else is present in the released version.
 | MassFlow-backed ingestion | `massflow_io.py`, `ingest.py` | imzML imaging data, via MassFlow's own reader |
 | MSMCP-owned readers | `mzml.py`, `mgf.py` | formats MassFlow does not cover |
 | Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions (on `main`, unreleased) |
-| Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py` | exact mass, isotopes, ppm validation, cosine, QC |
+| Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py`, `tools/chromatograms.py` | exact mass, isotopes, ppm validation, cosine, QC and bounded scan-level TIC/BPC/XIC |
 | Spectral scoring contract | `models/scoring.py` | `SpectrumScorer`; classical (in-house, reference implementation) and embedding scorers behind one interface |
 | Instrument-class defaults | `instruments.py` | every experimental threshold, its default per instrument class, and the provenance of each default (on `main`, unreleased) |
 | Server-side data references | `state/pointers.py`, `state/store.py` | payloads never cross MCP/JSON |
@@ -309,6 +309,7 @@ Every limit is enforced at one place, and fails loudly rather than degrading sil
 | Filesystem root (symlinks resolved) | `security.resolve_path` | `MSMCP_ALLOWED_ROOT` |
 | Per-file size | `security.validate_file_size` | `MSMCP_MAX_FILE_SIZE_BYTES` |
 | Spectra per request | `security.validate_spectrum_count` (refuse) / `tools.qc.generate_qc_summary` (cap + disclose) | `MSMCP_MAX_SPECTRA` |
+| Chromatogram scans per request | `chromatograms.extract_chromatograms` (refuse, no partial result) | per-call `max_spectra`, hard ceiling 5,000 |
 | Live references | `state.pointers.PointerStore` | `MSMCP_MAX_REFERENCES` |
 | Reference bytes | `state.pointers.PointerStore` | `MSMCP_MAX_TOTAL_BYTES` |
 | Reference lifetime | `state.pointers.PointerStore` | `MSMCP_REFERENCE_TTL_SECONDS` |

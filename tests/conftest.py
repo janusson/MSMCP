@@ -26,7 +26,7 @@ import pytest
 # that exercise the real-inference pipeline inject stub models explicitly.
 os.environ["MSMCP_EMBEDDING_BACKEND"] = "mock"
 
-from msmcp.tools import chem, io, qc, search, similarity
+from msmcp.tools import chem, chromatograms, io, qc, search, similarity
 
 
 def _enforce_environment_isolation() -> None:
@@ -143,6 +143,14 @@ def qc_tools() -> dict[str, Callable[..., str]]:
     return mcp.tools
 
 
+@pytest.fixture(scope="session")
+def chromatogram_tools() -> dict[str, Callable[..., Any]]:
+    """Structured chromatogram tool keyed by ``extract_chromatograms``."""
+    mcp = FakeMCP[Any]()
+    chromatograms.register_tools(mcp)
+    return mcp.tools
+
+
 # ---------------------------------------------------------------------------
 # mzML fixtures — a valid file and a truncated/malformed file
 # ---------------------------------------------------------------------------
@@ -228,15 +236,29 @@ def _mzml_xml(spectra: list[dict[str, Any]]) -> str:
                 'name="negative scan" value=""/>'
             )
 
+        representation_xml = ""
+        representation = spec.get("representation")
+        if representation == "centroid":
+            representation_xml = (
+                '<cvParam cvRef="MS" accession="MS:1000127" '
+                'name="centroid spectrum" value=""/>'
+            )
+        elif representation == "profile":
+            representation_xml = (
+                '<cvParam cvRef="MS" accession="MS:1000128" '
+                'name="profile spectrum" value=""/>'
+            )
+
         spectrum_xml.append(
             f'<spectrum index="{index}" id="scan={index}" '
             f'defaultArrayLength="{spec.get("declared_length", len(spec["mz"]))}">'
             f'<cvParam cvRef="MS" accession="MS:1000511" name="ms level" '
             f'value="{ms_level}"/>'
             f"{polarity_xml}"
+            f"{representation_xml}"
             f'<scanList count="1"><scan>'
             f'<cvParam cvRef="MS" accession="MS:1000016" name="scan start time" '
-            f'value="{rt}" unitAccession="MS:1000038" unitName="second"/>'
+            f'value="{rt}" unitAccession="MS:1000039" unitName="second"/>'
             f"</scan></scanList>"
             f"{precursor_xml}"
             f'<binaryDataArrayList count="2">'
@@ -271,6 +293,23 @@ def valid_mzml(tmp_path: Path) -> Path:
         {"mz": [102.0, 202.0, 302.0, 402.0], "intensity": [1.0, 2.0, 3.0, 4.0]},
     ]
     path.write_text(_mzml_xml(spectra), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def mzml_with_representation_metadata(tmp_path: Path) -> Path:
+    """Centroid, profile and unknown representations in three spectra."""
+    path = tmp_path / "representations.mzML"
+    path.write_text(
+        _mzml_xml(
+            [
+                {"mz": [100.0], "intensity": [1.0], "representation": "centroid"},
+                {"mz": [100.0], "intensity": [2.0], "representation": "profile"},
+                {"mz": [100.0], "intensity": [3.0]},
+            ]
+        ),
+        encoding="utf-8",
+    )
     return path
 
 
