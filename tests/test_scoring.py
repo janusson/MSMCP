@@ -172,6 +172,36 @@ class TestAgreementWithTheToolScorer:
     quantity, and the scan and the tool are read by the same user.
     """
 
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_duplicate_reference_mz_keeps_intensity_tie_break(
+        self, reverse: bool
+    ) -> None:
+        query = [(100.0, 1.0)]
+        reference = [(100.0, 1.0), (100.0, 100.0)]
+        if reverse:
+            reference.reverse()
+        expected = 1.0 / np.sqrt(10001.0)
+        scorer = ClassicalScorer()
+        assert scorer.score(query, reference) == pytest.approx(expected)
+        assert scorer.score_many(query, [reference]) == pytest.approx([expected])
+        q, r = np.asarray(query), np.asarray(reference)
+        matched_q, matched_r, _ = _match_peaks(q, r, 0.02)
+        assert _cosine_over_all_peaks(matched_q, matched_r, q, r) == pytest.approx(
+            expected
+        )
+
+    @pytest.mark.parametrize("method", EMBEDDING_SCORER_METHODS)
+    @pytest.mark.parametrize("query", [[], [(100.0, 0.0)]])
+    @pytest.mark.parametrize(
+        "invalid", [(100.0, -1.0), (100.0, float("nan")), (float("inf"), 1.0)]
+    )
+    def test_embedding_zero_query_still_rejects_invalid_references(
+        self, method: str, query: Peaks, invalid: tuple[float, float]
+    ) -> None:
+        scorer = get_scorer(method)
+        with pytest.raises(ValueError, match="reference peak"):
+            scorer.score_many(query, iter([[(100.0, 1.0)], [invalid]]))
+
     def test_scores_agree_on_random_spectra(self) -> None:
         scorer = ClassicalScorer()
         rng = np.random.default_rng(23)

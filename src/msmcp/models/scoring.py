@@ -140,7 +140,7 @@ def _normalise_intensities(
 
 def _prepare_reference(peaks: PeakList) -> _PreparedReference:
     """Sort and L2-normalise a reference spectrum for window searches."""
-    pairs = _normalise_intensities(sorted(peaks, key=lambda peak: peak[0]))
+    pairs = _normalise_intensities(sorted(peaks))
     return _PreparedReference(
         mz=[mz for mz, _ in pairs],
         intensity=[intensity for _, intensity in pairs],
@@ -291,14 +291,15 @@ class EmbeddingScorer(SpectrumScorer):
     ) -> list[float]:
         _validate_peak_list(query, "query")
         query_vector = self._embed(query)
-        if query_vector is None:
-            return [0.0 for _ in references]
-        query_norm = float(np.linalg.norm(query_vector))
-        if query_norm == 0.0:
-            return [0.0 for _ in references]
+        query_norm = (
+            float(np.linalg.norm(query_vector)) if query_vector is not None else 0.0
+        )
         scores: list[float] = []
         for reference in references:
             _validate_peak_list(reference, "reference")
+            if query_vector is None or query_norm == 0.0:
+                scores.append(0.0)
+                continue
             reference_vector = self._embed(reference)
             if reference_vector is None:
                 scores.append(0.0)

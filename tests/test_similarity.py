@@ -229,6 +229,22 @@ class TestCosine:
 # compute_cosine — end-to-end
 # ---------------------------------------------------------------------------
 class TestComputeCosine:
+    @pytest.mark.parametrize("intensity", [1e308, 1e-308])
+    @pytest.mark.parametrize("extra_peak", [False, True])
+    def test_extreme_finite_intensities_preserve_full_vector_cosine(
+        self,
+        sim_tools: dict[str, Callable[..., str]],
+        intensity: float,
+        extra_peak: bool,
+    ) -> None:
+        query = [[100.0, intensity], [200.0, intensity]]
+        reference = [[100.0, intensity], [200.0, intensity]]
+        if extra_peak:
+            query.append([300.0, intensity])
+        out = sim_tools["compute_cosine"](query_peaks=query, reference_peaks=reference)
+        expected = math.sqrt(2.0 / 3.0) if extra_peak else 1.0
+        assert _displayed_score(out) == pytest.approx(expected, abs=5e-5)
+
     def test_identical_spectra(self, sim_tools: dict[str, Callable[..., str]]) -> None:
         peaks = [[100.0, 50.0], [200.0, 100.0], [300.0, 25.0]]
         out = sim_tools["compute_cosine"](query_peaks=peaks, reference_peaks=peaks)
