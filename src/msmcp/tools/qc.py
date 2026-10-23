@@ -253,6 +253,14 @@ def register_tools(mcp: Any) -> None:
         if n_total == 0:
             raise MalformedFileError(f"'{file_path}' contains no spectra to analyse.")
 
+        if source.format == "imzML" and not any(n_peaks_list):
+            raise MalformedFileError(
+                f"No peaks were readable in the {n_total:,} imzML pixels analysed "
+                f"within the {spectrum_limit:,}-spectrum limit. Cannot confirm "
+                "the paired .ibd payload is readable within this budget; later "
+                "pixels may contain signal. QC metrics are not reported."
+            )
+
         mean_tic = total_tic / n_total
         coverage = (
             f"**Coverage:** the {spectrum_limit:,}-spectrum processing limit was "
