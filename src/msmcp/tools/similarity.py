@@ -29,6 +29,7 @@ from msmcp.instruments import (
     get_profile,
 )
 from msmcp.models import EmbeddingBackendUnavailable, get_embedder
+from msmcp.models.scoring import _validate_peak_list as _validate_score_peak_list
 from msmcp.state import store as reference_store
 
 logger = logging.getLogger("msmcp.tools.similarity")
@@ -101,11 +102,7 @@ def _validate_peak_list(
     """Convert a raw peak list into a float64 (N, 2) array, validating shape."""
     if not peaks:
         raise ValueError(f"{label} peak list must be non-empty.")
-    for i, p in enumerate(peaks):
-        if not isinstance(p, (list, tuple)) or len(p) != 2:
-            raise ValueError(f"{label} peak [{i}] must be [m/z, intensity]; got {p!r}")
-        if p[1] < 0:
-            raise ValueError(f"{label} peak [{i}] has negative intensity ({p[1]})")
+    _validate_score_peak_list(peaks, label)
     arr = np.asarray(peaks, dtype=np.float64)
     return arr
 
@@ -158,8 +155,8 @@ def _match_peaks(
     r_intensities : (K,) float64  - intensity vector for matched ref peaks
     unmatched_q   : list[int]     - indices of query peaks with no match
     """
-    # Sort reference by m/z for binary-search acceleration
-    ref_order = np.argsort(reference[:, 0])
+    # Match the scorer's deterministic (m/z, intensity) tie-break.
+    ref_order = np.lexsort((reference[:, 1], reference[:, 0]))
     ref_sorted = reference[ref_order]
 
     matched_q_int: list[float] = []
@@ -244,11 +241,15 @@ def _cosine_over_all_peaks(
     """
     if matched_q.size == 0 or full_q.size == 0 or full_r.size == 0:
         return 0.0
-    norm_q = float(np.linalg.norm(full_q[:, 1]))
-    norm_r = float(np.linalg.norm(full_r[:, 1]))
-    if norm_q == 0.0 or norm_r == 0.0:
+    scale_q = float(np.max(full_q[:, 1]))
+    scale_r = float(np.max(full_r[:, 1]))
+    if scale_q == 0.0 or scale_r == 0.0:
         return 0.0
-    return float(np.dot(matched_q, matched_r) / (norm_q * norm_r))
+    norm_q = float(np.linalg.norm(full_q[:, 1] / scale_q))
+    norm_r = float(np.linalg.norm(full_r[:, 1] / scale_r))
+    normalised_q = (matched_q / scale_q) / norm_q
+    normalised_r = (matched_r / scale_r) / norm_r
+    return min(1.0, float(np.dot(normalised_q, normalised_r)))
 
 
 # ======================================================================
