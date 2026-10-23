@@ -40,7 +40,7 @@ from msmcp.tools.search import (
 )
 from msmcp.tools.similarity import _cosine as _vector_cosine
 
-DB_FILE = "library/test_library.db"
+DB_FILE = "library/test_library.txt"
 
 QUERY_PEAKS: list[tuple[float, float]] = [
     (110.0713, 40.0),
