@@ -7,6 +7,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **Bound full-acquisition QC scans.** `generate_qc_summary` now stops at
+  `MSMCP_MAX_SPECTRA` without recounting the full source. When the ceiling is
+  reached, the report says complete acquisition coverage is unconfirmed and
+  labels TIC as applying only to the analysed spectra.
+
 ### Added
 
 - **`list_spectra` — a discovery step before loading or searching.** The new
