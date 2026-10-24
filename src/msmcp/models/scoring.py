@@ -48,6 +48,25 @@ from msmcp.models.backends import get_embedder
 PeakList = Sequence[tuple[float, float]]
 """Peaks as ``(m/z, intensity)`` pairs.  Order is not significant."""
 
+
+def _validate_peak_list(peaks: Sequence[Sequence[float]], label: str) -> None:
+    """Reject values outside the non-negative finite cosine-score domain."""
+    for index, peak in enumerate(peaks):
+        if len(peak) != 2:
+            raise ValueError(f"{label} peak [{index}] must contain m/z and intensity")
+        mz, intensity = float(peak[0]), float(peak[1])
+        if not math.isfinite(mz):
+            raise ValueError(f"{label} peak [{index}] has non-finite m/z ({mz!r})")
+        if not math.isfinite(intensity):
+            raise ValueError(
+                f"{label} peak [{index}] has non-finite intensity ({intensity!r})"
+            )
+        if intensity < 0:
+            raise ValueError(
+                f"{label} peak [{index}] has negative intensity ({intensity})"
+            )
+
+
 DEFAULT_TOLERANCE: float = get_profile(None).ms2_tolerance_da
 """Default m/z matching window (Da) for the classical scorer.
 
@@ -99,25 +118,32 @@ class SpectrumScorer(ABC):
 # Classical: greedy one-to-one matching, normalised over all peaks
 # ---------------------------------------------------------------------------
 class _PreparedReference(NamedTuple):
-    """A reference spectrum prepared for repeated window searches."""
+    """A reference spectrum with its intensities L2-normalised."""
 
     mz: list[float]
     intensity: list[float]
-    norm: float
 
 
-def _intensity_norm(peaks: Iterable[tuple[float, float]]) -> float:
-    """Euclidean norm of an intensity sequence, deterministically summed."""
-    return math.sqrt(math.fsum(float(intensity) ** 2 for _mz, intensity in peaks))
+def _normalise_intensities(
+    peaks: Iterable[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """Scale intensities safely before computing their L2-normalised values."""
+    pairs = [(float(mz), float(intensity)) for mz, intensity in peaks]
+    scale = max((intensity for _mz, intensity in pairs), default=0.0)
+    if scale == 0.0:
+        return [(mz, 0.0) for mz, _intensity in pairs]
+    scaled_norm = math.sqrt(
+        math.fsum((intensity / scale) ** 2 for _mz, intensity in pairs)
+    )
+    return [(mz, (intensity / scale) / scaled_norm) for mz, intensity in pairs]
 
 
 def _prepare_reference(peaks: PeakList) -> _PreparedReference:
-    """Sort a reference spectrum by m/z and precompute its intensity norm."""
-    pairs = sorted((float(mz), float(intensity)) for mz, intensity in peaks)
+    """Sort and L2-normalise a reference spectrum for window searches."""
+    pairs = _normalise_intensities(sorted(peaks))
     return _PreparedReference(
         mz=[mz for mz, _ in pairs],
         intensity=[intensity for _, intensity in pairs],
-        norm=_intensity_norm(pairs),
     )
 
 
@@ -140,14 +166,15 @@ class ClassicalScorer(SpectrumScorer):
         self.name = "classical"
 
     def score(self, query: PeakList, reference: PeakList) -> float:
+        _validate_peak_list(query, "query")
+        _validate_peak_list(reference, "reference")
+        normalised_query = _normalise_intensities(query)
+        if not any(intensity for _mz, intensity in normalised_query):
+            return 0.0
         prepared = _prepare_reference(reference)
-        if prepared.norm == 0.0:
+        if not any(prepared.intensity):
             return 0.0
-        norm_query = _intensity_norm(query)
-        if norm_query == 0.0:
-            return 0.0
-        matched_dot = _matched_dot(query, prepared, self.tolerance)
-        return matched_dot / (norm_query * prepared.norm)
+        return min(1.0, _matched_dot(normalised_query, prepared, self.tolerance))
 
     def score_many(
         self,
@@ -155,19 +182,21 @@ class ClassicalScorer(SpectrumScorer):
         references: Iterable[PeakList],
     ) -> list[float]:
         """Score the query against many references, preparing it only once."""
-        norm_query = _intensity_norm(query)
-        if norm_query == 0.0:
-            return [0.0 for _ in references]
+        _validate_peak_list(query, "query")
+        normalised_query = _normalise_intensities(query)
+        query_has_signal = any(intensity for _mz, intensity in normalised_query)
         tolerance = self.tolerance
         scores: list[float] = []
         for reference in references:
-            prepared = _prepare_reference(reference)
-            if prepared.norm == 0.0:
+            _validate_peak_list(reference, "reference")
+            if not query_has_signal:
                 scores.append(0.0)
                 continue
-            scores.append(
-                _matched_dot(query, prepared, tolerance) / (norm_query * prepared.norm)
-            )
+            prepared = _prepare_reference(reference)
+            if not any(prepared.intensity):
+                scores.append(0.0)
+                continue
+            scores.append(min(1.0, _matched_dot(normalised_query, prepared, tolerance)))
         return scores
 
 
@@ -176,17 +205,19 @@ def _matched_dot(
     reference: _PreparedReference,
     tolerance: float,
 ) -> float:
-    """Dot product of the greedily matched intensities.
+    """Dot product of the greedily matched L2-normalised intensities.
 
     One-to-one matching, nearest reference peak first, each reference peak used at
-    most once.  Written with ``bisect`` and a byte array rather than array maths:
+    most once. Intensities are normalised before multiplication to avoid overflow
+    for finite values near the floating-point limit. Written with ``bisect`` and
+    a byte array rather than array maths:
     at MS2 peak counts (tens of peaks) the numpy call overhead dominates the
     arithmetic, and this function is called once per decoy.
     """
     ref_mz = reference.mz
     ref_intensity = reference.intensity
     used = bytearray(len(ref_mz))
-    matched_dot = 0.0
+    matched_products: list[float] = []
     for query_mz, query_intensity in query:
         lo = bisect_left(ref_mz, query_mz - tolerance)
         hi = bisect_right(ref_mz, query_mz + tolerance)
@@ -203,8 +234,8 @@ def _matched_dot(
                 best_index = index
         if best_index >= 0:
             used[best_index] = 1
-            matched_dot += float(query_intensity) * ref_intensity[best_index]
-    return matched_dot
+            matched_products.append(float(query_intensity) * ref_intensity[best_index])
+    return math.fsum(matched_products)
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +276,8 @@ class EmbeddingScorer(SpectrumScorer):
         return self._embedder.embed_spectrum(np.asarray(peaks, dtype=np.float64))
 
     def score(self, query: PeakList, reference: PeakList) -> float:
+        _validate_peak_list(query, "query")
+        _validate_peak_list(reference, "reference")
         query_vector = self._embed(query)
         reference_vector = self._embed(reference)
         if query_vector is None or reference_vector is None:
@@ -256,14 +289,17 @@ class EmbeddingScorer(SpectrumScorer):
         query: PeakList,
         references: Iterable[PeakList],
     ) -> list[float]:
+        _validate_peak_list(query, "query")
         query_vector = self._embed(query)
-        if query_vector is None:
-            return [0.0 for _ in references]
-        query_norm = float(np.linalg.norm(query_vector))
-        if query_norm == 0.0:
-            return [0.0 for _ in references]
+        query_norm = (
+            float(np.linalg.norm(query_vector)) if query_vector is not None else 0.0
+        )
         scores: list[float] = []
         for reference in references:
+            _validate_peak_list(reference, "reference")
+            if query_vector is None or query_norm == 0.0:
+                scores.append(0.0)
+                continue
             reference_vector = self._embed(reference)
             if reference_vector is None:
                 scores.append(0.0)
