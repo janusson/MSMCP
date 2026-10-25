@@ -28,6 +28,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -742,5 +743,80 @@ def test_full_mcp_workflow_over_stdio(tmp_path: Path) -> None:
 
         release_text = release_resp["result"]["content"][0]["text"]
         assert "Released" in release_text
+    finally:
+        host.close()
+
+
+def test_similarity_only_search_over_stdio(tmp_path: Path) -> None:
+    """A real MCP host receives ranked candidates without significance claims."""
+    writer = _MzMLWriter()
+    writer.add_spectrum(
+        _CAFFEINE_MZ,
+        _CAFFEINE_INTENSITY,
+        ms_level=2,
+        rt_seconds=120.0,
+        precursor_mz=195.0877,
+        polarity="positive",
+    )
+    mzml_path = writer.write(tmp_path / "query.mzML")
+    library_path = tmp_path / "library.msp"
+    library_path.write_text(
+        "Name: Caffeine\nIon_mode: positive\nPrecursorMZ: 195.0877\n"
+        "Num Peaks: 3\n110.0713 40\n120.0808 100\n136.0757 60\n",
+        encoding="utf-8",
+    )
+
+    host = _StdioHost(allowed_root=tmp_path, cwd=tmp_path)
+    try:
+        init_id = host.send(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "search-validation", "version": "1.0"},
+            },
+        )
+        host.notify("notifications/initialized", {})
+        dispatch_id = host.call_tool(
+            "search_library",
+            {
+                "database_file": str(library_path),
+                "experimental_file": str(mzml_path),
+                "spectrum_index": 0,
+                "scoring_method": "classical",
+                "instrument_class": "generic",
+            },
+        )
+        responses = host.responses({init_id, dispatch_id})
+        assert "error" not in responses[init_id]
+        dispatch = responses[dispatch_id]["result"]["content"][0]["text"]
+        job_match = re.search(r"\*\*Job ID:\*\*\s*`([^`]+)`", dispatch)
+        assert job_match is not None, dispatch
+        job_id = job_match.group(1)
+
+        report = ""
+        deadline = time.monotonic() + 60.0
+        while time.monotonic() < deadline:
+            poll_id = host.call_tool(
+                "check_search_status", {"job_id": job_id, "full_report": True}
+            )
+            poll = host.responses({poll_id})[poll_id]
+            assert "error" not in poll, poll
+            result = poll["result"]
+            assert not result.get("isError"), result
+            report = result["content"][0]["text"]
+            if "SIGNIFICANCE UNCALIBRATED" in report:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail(f"search did not complete over stdio: {report!r}")
+
+        assert "Caffeine" in report
+        assert "| 1 | Caffeine | 1.0000 |" in report
+        assert "| p-value" not in report.lower()
+        assert "| fdr (q-value) |" not in report.lower()
+        assert "significance filter applied" in report
+        assert "ion mode: positive" in report
+        assert "Polarity" in report
     finally:
         host.close()
