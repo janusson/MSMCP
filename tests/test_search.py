@@ -24,6 +24,7 @@ import pytest
 from pydantic import ValidationError
 
 from msmcp.models.embeddings import DreaMSEmbedder, LSMMS2Embedder
+from msmcp.security import SecurityPolicy, SpectrumCountExceededError
 from msmcp.state import store as reference_store
 from msmcp.state.pointers import UnknownReferenceError
 from msmcp.tools import search
@@ -72,6 +73,15 @@ def _scan(
 # Search components — synthetic library, report builder
 # ---------------------------------------------------------------------------
 class TestSearchComponents:
+    def test_file_query_index_beyond_scan_budget_is_rejected(
+        self, valid_mzml: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        policy = SecurityPolicy(allowed_root=valid_mzml.parent, max_spectra=2)
+        monkeypatch.setattr(search.ingest, "DEFAULT_POLICY", policy)
+
+        with pytest.raises(SpectrumCountExceededError, match="max_spectra=2"):
+            search._peaks_from_file(str(valid_mzml), spectrum_index=2)
+
     def test_mock_database_schema_and_rows(self) -> None:
         conn = _build_mock_database(n_spectra=25, seed=7)
         try:
