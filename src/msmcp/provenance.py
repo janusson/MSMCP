@@ -113,7 +113,10 @@ def software_versions() -> dict[str, str]:
     """Return the versions of the packages relevant to reproducibility.
 
     Only distributions that are actually installed appear, so the mapping
-    describes this installation rather than a hypothetical one.
+    describes this installation rather than a hypothetical one. Optional
+    packages (including ``massflow``) are not required or imported here. A
+    distribution version is inventory, not proof that its backend was used
+    or is compatible; source ``backend`` records the reader actually used.
     """
     versions = {"python": platform.python_version()}
     for name in _TRACKED_PACKAGES:

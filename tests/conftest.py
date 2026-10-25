@@ -439,10 +439,14 @@ def gzipped_mgf(tmp_path: Path) -> Path:
 def imzml_fixture(tmp_path: Path) -> Path:
     """A tiny 2-pixel imzML acquisition written with pyimzml.
 
-    pyimzml ships with MassFlow (its imzML parser dependency), so the fixture
-    is produced by the same ecosystem that reads it back; the test is skipped
-    rather than faked when that dependency is absent.
+    The optional imaging extra supplies both the reader and pyimzml writer.
+    Skip real imaging integration rather than faking it in a core-only install.
     """
+    pytest.importorskip(
+        "massflow.data_manager",
+        reason="optional imaging backend is absent (uv sync --extra imaging)",
+        exc_type=ImportError,
+    )
     pyimzml_writer = pytest.importorskip(
         "pyimzml.ImzMLWriter", reason="pyimzml (a MassFlow dependency) is absent"
     )

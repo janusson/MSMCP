@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.13"
 dependencies = [
     "mcp[cli]>=2.0.0",
-    "massflow>=0.1.0",
+
     "pydantic>=2.12.5",
     "numpy>=1.26.4",
 ]
@@ -22,6 +22,11 @@ Issues = "https://github.com/janusson/MSMCP/issues"
 Changelog = "https://github.com/janusson/MSMCP/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
+# imzML only: the lowercase imaging distribution, NOT the analytical MassFlow
+# engine (which shares the distribution name). Keep it out of core installs.
+imaging = [
+    "massflow>=0.1.2,<0.2",
+]
 test = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
