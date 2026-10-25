@@ -59,7 +59,6 @@ and this repository has already been bitten by exactly that.
 |---|---|
 | `#17` acquisition-aware confidence | Depends on `#16` and on real acquisitions. Sequenced next, not now. |
 | `#18` calibration, alignment, comparability tools | Depends on `#17`. This is the "are two calibrations comparable" question, and it is a milestone of its own. |
-| `#8` MS-Numpress mzML arrays | Documented limitation with an opt-in extra; no criterion references it. |
 | `#3` whole-slide imzML benchmark | Measurement, not capability. |
 | `#6` durable job execution | `ARCHITECTURE.md` files it under *Future extension (not v1.0)*; `JobExecutor` is the seam. |
 | `#19` distribution: `server.json`, PyPI, container | Adoption infrastructure, not correctness. |

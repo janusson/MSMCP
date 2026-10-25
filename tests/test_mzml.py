@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import importlib
+import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Callable
 from pathlib import Path
@@ -16,8 +18,10 @@ from msmcp.errors import (
     MissingDependencyError,
     UnsupportedFormatError,
 )
+from msmcp.ingest import resolve_source
 from msmcp.mzml import (
     _decode_binary,
+    _parse_spectrum,
     declared_spectrum_count,
     iter_spectra,
     resolve_mzml_path,
@@ -89,9 +93,233 @@ class TestDecodeBinary:
         with pytest.raises(MalformedFileError, match="zlib"):
             _decode_binary(payload, compression="zlib", precision="64")
 
-    def test_numpress_missing_dependency(self) -> None:
+    def test_numpress_missing_dependency(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import msmcp.mzml as mzml
+
+        def no_numpress(name: str) -> object:
+            if name == "pynumpress":
+                raise ImportError("not installed")
+            return __import__(name)
+
+        monkeypatch.setattr(mzml.importlib, "import_module", no_numpress)
         with pytest.raises(MissingDependencyError, match="pynumpress"):
             _decode_binary("", compression="numpress", precision="64")
+
+    @pytest.mark.parametrize(
+        ("codec", "values", "tolerance"),
+        [
+            ("linear", np.array([100.0, 101.0, 102.0, 103.0]), 1e-5),
+            ("pic", np.array([0.0, 1.0, 256.0, 3.0]), 0.0),
+            ("slof", np.array([0.0, 1.0, 10.0, 100.0]), 0.02),
+        ],
+    )
+    def test_numpress_variants_decode_read_only(
+        self, codec: str, values: np.ndarray, tolerance: float
+    ) -> None:
+        pynumpress = importlib.import_module("pynumpress")
+
+        if codec == "linear":
+            encoded = pynumpress.encode_linear(values, 1000.0)
+        elif codec == "pic":
+            encoded = pynumpress.encode_pic(values)
+        else:
+            encoded = pynumpress.encode_slof(values, 1000.0)
+        actual = _decode_binary(
+            base64.b64encode(encoded).decode(),
+            compression=f"numpress-{codec}",
+            precision="64",
+        )
+        assert actual == pytest.approx(values, abs=tolerance)
+        assert not actual.flags.writeable
+
+    def test_numpress_linear_single_value(self) -> None:
+        pynumpress = importlib.import_module("pynumpress")
+        values = np.array([123.456])
+        encoded = pynumpress.encode_linear(values, 1000.0)
+        actual = _decode_binary(
+            base64.b64encode(encoded).decode(),
+            compression="numpress-linear",
+            precision="64",
+        )
+        assert actual == pytest.approx(values, abs=0.001)
+
+    @pytest.mark.parametrize(
+        ("codec", "payload"),
+        [
+            ("linear", b"\x00" * 15),
+            ("pic", b"\x00"),
+            ("slof", b"\x00" * 9),
+        ],
+    )
+    def test_numpress_malformed_payload_is_rejected_before_decode(
+        self, codec: str, payload: bytes
+    ) -> None:
+        with pytest.raises(MalformedFileError, match="Numpress"):
+            _decode_binary(
+                base64.b64encode(payload).decode(),
+                compression=f"numpress-{codec}",
+                precision="64",
+            )
+
+    def test_numpress_preflight_rejects_truncation_before_native_decode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pynumpress = importlib.import_module("pynumpress")
+
+        def decoder_must_not_run(_: bytes) -> None:
+            pytest.fail("native decoder ran before truncated input was rejected")
+
+        monkeypatch.setattr(pynumpress, "decode_pic", decoder_must_not_run)
+        payload = base64.b64encode(b"\x00").decode()
+        with pytest.raises(MalformedFileError, match="integer stream"):
+            _decode_binary(payload, compression="numpress-pic", precision="64")
+
+    def test_upstream_numpress_fixture_decodes_real_linear_and_pic_arrays(self) -> None:
+        fixture = Path(__file__).parent / "data" / "mini_numpress.chrom.mzML"
+        root = ET.parse(fixture).getroot()
+        arrays = [node for node in root.iter() if node.tag.endswith("binaryDataArray")]
+        decoded: dict[str, np.ndarray] = {}
+        for array in arrays:
+            cv = next(
+                child
+                for child in array
+                if child.tag.endswith("cvParam")
+                and child.get("accession") in {"MS:1002312", "MS:1002313"}
+            )
+            codec = "linear" if cv.get("accession") == "MS:1002312" else "pic"
+            payload = next(
+                child for child in array if child.tag.endswith("binary")
+            ).text
+            decoded[codec] = _decode_binary(
+                payload or "",
+                compression=f"numpress-{codec}",
+                precision="64",
+            )
+        assert decoded["linear"][:3] == pytest.approx(
+            [2302.5300000107377, 2305.939999978524, 2309.3600001288546]
+        )
+        assert decoded["linear"][-1] == pytest.approx(2899.960000343612)
+        assert decoded["pic"][:5] == pytest.approx(np.zeros(5))
+        assert decoded["pic"][-1] == pytest.approx(28.0)
+
+    def test_numpress_zlib_combination(self) -> None:
+        pynumpress = importlib.import_module("pynumpress")
+
+        values = np.array([0.0, 2.0, 5.0, 100.0])
+        encoded = pynumpress.encode_pic(values)
+        payload = base64.b64encode(zlib.compress(encoded)).decode()
+        actual = _decode_binary(
+            payload,
+            compression="numpress-pic-zlib",
+            precision="64",
+        )
+        assert actual == pytest.approx(values)
+
+    def test_numpress_native_decoder_reservation_obeys_byte_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pynumpress = importlib.import_module("pynumpress")
+        from msmcp import security
+
+        payload = base64.b64encode(
+            pynumpress.encode_pic(np.array([0.0, 1.0, 2.0, 3.0]))
+        ).decode()
+        monkeypatch.setattr(
+            security, "DEFAULT_POLICY", SecurityPolicy(max_file_size_bytes=16)
+        )
+        with pytest.raises(FileSizeExceededError, match="byte limit"):
+            _decode_binary(
+                payload,
+                compression="numpress-pic",
+                precision="64",
+            )
+
+    def test_numpress_native_decoder_reservation_uses_source_policy(
+        self, tmp_path: Path
+    ) -> None:
+        pynumpress = importlib.import_module("pynumpress")
+        values = np.arange(1000, dtype=np.float64)
+        encoded = base64.b64encode(pynumpress.encode_pic(values)).decode()
+        xml = f"""<mzML><run><spectrumList count="1">
+          <spectrum index="0" defaultArrayLength="1000">
+            <cvParam accession="MS:1000511" value="1"/>
+            <binaryDataArrayList count="2">
+              <binaryDataArray><cvParam accession="MS:1000514"/>
+                <cvParam accession="MS:1002313"/><binary>{encoded}</binary>
+              </binaryDataArray>
+              <binaryDataArray><cvParam accession="MS:1000515"/>
+                <cvParam accession="MS:1002313"/><binary>{encoded}</binary>
+              </binaryDataArray>
+            </binaryDataArrayList>
+          </spectrum>
+        </spectrumList></run></mzML>"""
+        path = tmp_path / "policy.mzML"
+        path.write_text(xml)
+        assert path.stat().st_size < 10_000
+
+        restrictive = SecurityPolicy(allowed_root=tmp_path, max_file_size_bytes=10_000)
+        source = resolve_source(path, restrictive)
+        with pytest.raises(FileSizeExceededError, match="byte limit"):
+            list(source.iter_spectra())
+
+        permissive = SecurityPolicy(allowed_root=tmp_path, max_file_size_bytes=100_000)
+        source = resolve_source(path, permissive)
+        assert len(list(source.iter_spectra())) == 1
+
+    def test_spectrum_parser_uses_numpress_array_cv_terms(self) -> None:
+        pynumpress = importlib.import_module("pynumpress")
+
+        mz = np.array([100.0, 101.0, 102.0, 103.0])
+        intensity = np.array([0.0, 1.0, 10.0, 100.0])
+        mz_payload = base64.b64encode(pynumpress.encode_linear(mz, 1000.0)).decode()
+        intensity_payload = base64.b64encode(
+            pynumpress.encode_slof(intensity, 1000.0)
+        ).decode()
+        xml = f"""<spectrum index="0" defaultArrayLength="4">
+          <cvParam accession="MS:1000511" value="1"/>
+          <binaryDataArrayList count="2">
+            <binaryDataArray><cvParam accession="MS:1000514"/>
+              <cvParam accession="MS:1002312"/><binary>{mz_payload}</binary>
+            </binaryDataArray>
+            <binaryDataArray><cvParam accession="MS:1000515"/>
+              <cvParam accession="MS:1002314"/><binary>{intensity_payload}</binary>
+            </binaryDataArray>
+          </binaryDataArrayList>
+        </spectrum>"""
+        spectrum = _parse_spectrum(ET.fromstring(xml))
+        assert spectrum.mz == pytest.approx(mz)
+        assert spectrum.intensity == pytest.approx(intensity, abs=0.02)
+
+    def test_numpress_declared_length_mismatch_is_reported_not_refused(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        pynumpress = importlib.import_module("pynumpress")
+        values = np.array([100.0, 101.0, 102.0, 103.0])
+        mz_payload = base64.b64encode(pynumpress.encode_linear(values, 1000.0)).decode()
+        intensity_payload = base64.b64encode(pynumpress.encode_pic(values)).decode()
+        xml = f"""<mzML><run><spectrumList count="1">
+          <spectrum index="0" defaultArrayLength="5">
+            <cvParam accession="MS:1000511" value="1"/>
+            <binaryDataArrayList count="2">
+              <binaryDataArray><cvParam accession="MS:1000514"/>
+                <cvParam accession="MS:1002312"/><binary>{mz_payload}</binary>
+              </binaryDataArray>
+              <binaryDataArray><cvParam accession="MS:1000515"/>
+                <cvParam accession="MS:1002313"/><binary>{intensity_payload}</binary>
+              </binaryDataArray>
+            </binaryDataArrayList>
+          </spectrum>
+        </spectrumList></run></mzML>"""
+        path = tmp_path / "numpress_length_mismatch.mzML"
+        path.write_text(xml)
+
+        with caplog.at_level("WARNING", logger="msmcp.mzml"):
+            spectra = list(iter_spectra(path))
+
+        assert len(spectra) == 1
+        assert spectra[0].mz.size == 4
+        assert spectra[0].intensity.size == 4
+        assert "declare a peak count" in caplog.text
 
 
 # ---------------------------------------------------------------------------
