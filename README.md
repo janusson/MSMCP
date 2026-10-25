@@ -11,6 +11,8 @@ Large acquisitions never enter the conversation: spectra are parsed into **serve
 [![Package manager: uv](https://img.shields.io/badge/uv-managed-9B5DE5?logo=astral&logoColor=white)](https://docs.astral.sh/uv/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+Citation metadata: [CITATION.cff](CITATION.cff). Cite the exact release tag or commit you used; the project has no DOI.
+
 ---
 
 ## Table of contents
