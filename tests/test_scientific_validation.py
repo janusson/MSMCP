@@ -412,7 +412,7 @@ class _MzMLWriter:
             scan_xml = (
                 f'<scanList count="1"><scan>'
                 f'<cvParam cvRef="MS" accession="MS:1000016" name="scan start time" '
-                f'value="{rt_seconds}" unitAccession="MS:1000038" unitName="second"/>'
+                f'value="{rt_seconds}" unitAccession="UO:0000010" unitName="second"/>'
                 f"</scan></scanList>"
             )
 
