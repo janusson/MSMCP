@@ -202,7 +202,7 @@ class TestRealLibrarySearch:
 
 
 # ---------------------------------------------------------------------------
-# Polarity: reported and flagged, never a silent filter
+# Polarity in fragment-only exploratory searches: reported and flagged
 # ---------------------------------------------------------------------------
 class TestLibraryPolarity:
     def test_library_spectra_carry_their_ion_mode(self, tmp_path: Path) -> None:
@@ -251,7 +251,8 @@ class TestLibraryPolarity:
         assert "| Polarity" in report  # the column reaches the report
         assert "positive \u26a0" in report  # caffeine's ion mode opposes the query
         assert "opposite ion mode" in report
-        # The hit is reported, not dropped: polarity is a flag, not a filter.
+        # No query MS2/precursor context is declared, so this is exploratory;
+        # the mismatch is shown rather than silently filtered.
         assert "Caffeine" in report
         parameters = outcome.provenance.to_dict()["parameters"]
         assert parameters["query_polarity"] == "negative"
@@ -288,7 +289,7 @@ class TestLibrarySecurityBoundary:
     async def test_search_library_refuses_a_library_outside_the_root(
         self,
         search_tools: dict[str, SearchTool],
-        valid_mzml: Path,
+        searchable_mzml: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -300,7 +301,7 @@ class TestLibrarySecurityBoundary:
         allowed.mkdir()
         outside.mkdir()
         query = allowed / "query.mzML"
-        query.write_text(valid_mzml.read_text(encoding="utf-8"), encoding="utf-8")
+        query.write_text(searchable_mzml.read_text(encoding="utf-8"), encoding="utf-8")
         evil = _write_msp(outside / "evil.msp")
 
         policy = SecurityPolicy(allowed_root=allowed)
@@ -343,7 +344,7 @@ class TestLibraryValidatedBeforeDispatch:
     async def test_search_library_refuses_a_malformed_library_before_dispatch(
         self,
         search_tools: dict[str, SearchTool],
-        valid_mzml: Path,
+        searchable_mzml: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -359,7 +360,7 @@ class TestLibraryValidatedBeforeDispatch:
         root = tmp_path / "root"
         root.mkdir()
         query = root / "query.mzML"
-        query.write_text(valid_mzml.read_text(encoding="utf-8"), encoding="utf-8")
+        query.write_text(searchable_mzml.read_text(encoding="utf-8"), encoding="utf-8")
         # A .msp that claims five peaks and supplies one.
         bad = root / "not_really.msp"
         bad.write_text("Name: Broken\nNum Peaks: 5\n100.0 1.0\n", encoding="utf-8")
@@ -376,7 +377,7 @@ class TestLibraryValidatedBeforeDispatch:
     async def test_a_malformed_query_and_a_malformed_library_fail_the_same_way(
         self,
         search_tools: dict[str, SearchTool],
-        valid_mzml: Path,
+        searchable_mzml: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -387,7 +388,7 @@ class TestLibraryValidatedBeforeDispatch:
         root = tmp_path / "root"
         root.mkdir()
         query = root / "query.mzML"
-        query.write_text(valid_mzml.read_text(encoding="utf-8"), encoding="utf-8")
+        query.write_text(searchable_mzml.read_text(encoding="utf-8"), encoding="utf-8")
         good = _write_msp(root / "good.msp")
         broken = root / "broken.msp"
         broken.write_text("Name: Broken\n100.0 1.0\nnonsense\n", encoding="utf-8")

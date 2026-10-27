@@ -275,6 +275,28 @@ def valid_mzml(tmp_path: Path) -> Path:
 
 
 @pytest.fixture()
+def searchable_mzml(tmp_path: Path) -> Path:
+    """Three populated MS2 scans for tests that actually dispatch a search."""
+    path = tmp_path / "searchable.mzML"
+    spectra: list[dict[str, Any]] = [
+        {
+            "mz": [100.0, 200.0, 300.0],
+            "intensity": [10.0, 20.0, 30.0],
+            "ms_level": 2,
+            "precursor_mz": 300.0,
+        },
+        {"mz": [101.0, 201.0], "intensity": [5.0, 5.0], "ms_level": 2},
+        {
+            "mz": [102.0, 202.0, 302.0, 402.0],
+            "intensity": [1.0, 2.0, 3.0, 4.0],
+            "ms_level": 2,
+        },
+    ]
+    path.write_text(_mzml_xml(spectra), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
 def truncated_mzml(tmp_path: Path) -> Path:
     """An mzML file cut off mid-document so the XML cannot parse."""
     path = tmp_path / "truncated.mzML"
