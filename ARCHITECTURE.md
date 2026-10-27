@@ -34,7 +34,7 @@ flowchart TD
     end
 
     Ingest["Ingestion (ingest.py)"]
-    MassFlow["MassFlow (imzML)"]
+    MassFlow["Optional imaging massflow (imzML)"]
     Readers["MSMCP readers (mzML, MGF)"]
 
     Agent --> MCP --> Tools
@@ -114,8 +114,8 @@ Everything else is present in the released version.
 
 | Capability | Where | Notes |
 |---|---|---|
-| MassFlow-backed ingestion | `massflow_io.py`, `ingest.py` | imzML imaging data, via MassFlow's own reader |
-| MSMCP-owned readers | `mzml.py`, `mgf.py` | formats MassFlow does not cover |
+| Optional imaging ingestion | `massflow_io.py`, `ingest.py` | imzML via lowercase `massflow`; requires the `imaging` extra |
+| MSMCP-owned readers | `mzml.py`, `mgf.py` | core mzML/MGF; independent of MassFlow |
 | Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions (on `main`, unreleased) |
 | Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py` | exact mass, isotopes, ppm validation, cosine, QC |
 | Spectral scoring contract | `models/scoring.py` | `SpectrumScorer`; classical (in-house, reference implementation) and embedding scorers behind one interface |
@@ -201,7 +201,7 @@ project's array representation. There is no Arrow-shaped hole to fill.
 ## Ingestion
 
 ```
-file -> ingest.resolve_source -> (MassFlow | msmcp reader) -> Spectrum -> DataReference
+file -> ingest.resolve_source -> (optional imaging massflow | msmcp reader) -> Spectrum -> DataReference
 ```
 
 `ingest.resolve_source` chooses the reader from the file extension and records
@@ -209,20 +209,27 @@ which one it picked, because that choice belongs in provenance.
 
 | Format | Reader | Why |
 |---|---|---|
-| `.mzML`, `.mzML.gz` | `msmcp.mzml` | MassFlow 0.1.x ships no mzML reader |
-| `.mgf`, `.mgf.gz` | `msmcp.mgf` | MassFlow ships no MGF reader |
-| `.imzML` (+ `.ibd`) | MassFlow `MSDataManagerImzML` | genuinely supported by MassFlow |
+| `.mzML`, `.mzML.gz` | `msmcp.mzml` | core reader; no MassFlow dependency |
+| `.mgf`, `.mgf.gz` | `msmcp.mgf` | core reader; no MassFlow dependency |
+| `.imzML` (+ `.ibd`) | imaging `massflow.data_manager.MSDataManagerImzML` | optional `imaging` extra |
 | `.raw`, `.d`, `.wiff`, `.mzXML` | refused | recognised, with conversion guidance |
 
 All readers converge on one type, `msmcp.mzml.Spectrum`, so downstream tools
 never branch on format. `Spectrum.coordinate` is populated only for imaging
 sources.
 
-### MassFlow integration
+### Optional imaging integration
 
-MassFlow is used, not wrapped speculatively: MSMCP calls
-`MSDataManagerImzML` and converts the spectra it produces. Two documented
-consequences:
+The `imaging` extra installs lowercase imaging distribution `massflow` (0.1.x),
+not the separate analytical `MassFlow` engine. They share a distribution name,
+not an API; keep them in separate environments. MSMCP lazily calls
+`MSDataManagerImzML` only for imzML reads. Core startup and mzML/MGF do not
+require this package. Missing or incompatible imports raise
+`MissingDependencyError` with install guidance at the Python boundary; the
+current MCP SDK masks its message in the wire-level tool error, while details
+are logged to stderr. `ping` reports installed distribution metadata, not
+backend compatibility. Provenance records the reader actually used. Two
+consequences occur only when the optional imaging backend is imported:
 
 1. **MassFlow reconfigures the root logger on import.** Its logger module
    removes every root handler and installs a `StreamHandler(sys.stdout)`. On
@@ -345,8 +352,8 @@ during the v1.0 work:
 2. **Job state is in-process.** It does not survive a restart; the poller
    reports a lost job as failed rather than pending, so a client can never spin
    forever.
-3. **MSMCP owns its mzML and MGF readers.** That is a deliberate consequence of
-   MassFlow 0.1.x being imaging-only, not an architectural preference.
+3. **MSMCP owns its mzML and MGF readers.** They are core readers independent of
+   both the optional imaging distribution and the analytical MassFlow engine.
 4. **MS-Numpress-compressed mzML arrays** require the optional `pynumpress`
    package and report a missing-dependency error without it.
 5. **MassFlow materialises one placeholder per pixel** when loading an imzML
@@ -387,7 +394,7 @@ of the server or of the fast test suite.
 
 The release is complete when the repository demonstrates all of the following:
 
-- [x] Real, MassFlow-backed ingestion for imzML, plus MSMCP readers for mzML and MGF
+- [x] Optional imaging-backed imzML ingestion, plus core MSMCP readers for mzML and MGF
 - [x] Robust scientific tool execution with deterministic tests for core calculations
 - [x] Server-side `DataReference`s for large payloads, with no payload serialisation
 - [x] Consistent result representations (structured metadata + references + provenance)

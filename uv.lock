@@ -1024,7 +1024,6 @@ name = "msmcp"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "massflow" },
     { name = "mcp", extra = ["cli"] },
     { name = "numpy" },
     { name = "pydantic" },
@@ -1041,6 +1040,9 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
+imaging = [
+    { name = "massflow" },
+]
 ml = [
     { name = "torch" },
 ]
@@ -1052,7 +1054,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.16" },
-    { name = "massflow", specifier = ">=0.1.0" },
+    { name = "massflow", marker = "extra == 'imaging'", specifier = ">=0.1.2,<0.2" },
     { name = "mcp", extras = ["cli"], specifier = ">=2.0.0" },
     { name = "msmcp", extras = ["test"], marker = "extra == 'dev'" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.15" },
@@ -1064,7 +1066,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11" },
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.1" },
 ]
-provides-extras = ["test", "dev", "chem", "ml"]
+provides-extras = ["imaging", "test", "dev", "chem", "ml"]
 
 [[package]]
 name = "mypy"

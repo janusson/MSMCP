@@ -56,7 +56,7 @@ All of that is deterministic, well-understood computation. **LLMs should reason 
 MSMCP is a thin adapter between an LLM host and a stack of analytical engines:
 
 - **Transport layer** — an [MCPServer](https://github.com/modelcontextprotocol/python-sdk) speaking JSON-RPC over stdio, launched as a child process by the LLM host. All diagnostics are logged to stderr; stdout carries only MCP framing.
-- **Ingestion layer** (`src/msmcp/ingest.py`) — one dispatcher that picks the right reader for a file, and one canonical output type. [MassFlow](https://github.com/) is the canonical layer for everything it supports (imzML imaging data); MSMCP owns small readers for the formats MassFlow does not cover (mzML, MGF).
+- **Ingestion layer** (`src/msmcp/ingest.py`) — one dispatcher and one canonical output type. MSMCP's core readers handle mzML/MGF without MassFlow. Optional imzML imaging uses the lowercase `massflow` distribution via the `imaging` extra, not the separate analytical `MassFlow` engine.
 - **Analytical engines** — pure, deterministic, unit-tested Python modules under `src/msmcp/tools/` that perform the actual science: exact-mass arithmetic, adduct shifts, isotope annotation, ppm validation, cosine scoring, QC metrics, and chunked library scanning.
 - **Data-reference store** (`src/msmcp/state/`) — a bounded, thread-safe registry of scientific payloads that stay on the server. This is what lets an agent hand a 100,000-peak spectrum to the next tool as a 30-character string.
 - **Provenance** (`src/msmcp/provenance.py`) — immutable, structured records attached to every derived object: which operation, which parameters, which file (with reader backend and digest), which parent references, which software and model versions.
@@ -150,7 +150,7 @@ flowchart TD
     end
 
     subgraph Ingest["Ingestion (ingest.py)"]
-        MassFlow["MassFlow: imzML imaging"]
+        MassFlow["Optional imaging massflow: imzML"]
         Readers["MSMCP readers: mzML · MGF"]
     end
 
@@ -198,7 +198,10 @@ make all
 ```
 
 The repository ships a **synthetic worked example**, so you can see a real
-library search without sourcing any data of your own:
+library search without sourcing any data of your own. The core installation
+supports mzML/MGF; install `uv sync --extra imaging` from the source checkout only
+if you need the optional imzML importer. Do not install that extra in the same
+environment as the analytical MassFlow engine, which shares the distribution name.
 
 - `examples/caffeine_library.msp` — a 5-compound MSP/NIST text library.
 - `examples/caffeine_spectrum.mgf` — one MS2 spectrum whose peaks duplicate the
@@ -246,6 +249,8 @@ MSMCP keeps its *scientific* claims, its software tests and its identification c
 - [`VALIDATION_SIMILARITY.md`](VALIDATION_SIMILARITY.md) — one bounded experiment comparing MSMCP's scorer against `matchms` on a pinned MassBank release and measuring library recovery on held-out spectra, with its limitations stated plainly.
 
 `make validate-similarity` runs that experiment **opt-in**: it needs the external dataset (`MSMCP_VALIDATION_DATA`) and supplies `matchms` for the one command, so neither the runtime nor the fast test suite depends on it. With no dataset it skips cleanly and downloads nothing.
+
+For a core-only runtime install from the source checkout, use `uv sync` (or `pip install .`). To enable imzML, use `uv sync --extra imaging` (or `pip install '.[imaging]'` from the checkout). To run the optional imaging integration tests, install both extras with `uv sync --extra dev --extra imaging` and run `uv run --extra imaging pytest tests/test_ingest.py`; otherwise those tests skip. This project does not currently claim a published PyPI distribution.
 
 ## Connecting an LLM client
 
@@ -378,12 +383,14 @@ The reader is chosen from the file extension; every reader produces the same spe
 |---|---|---|
 | `.mzML`, `.mzML.gz` | `msmcp.mzml` | dependency-free; zlib-compressed binary arrays supported |
 | `.mgf`, `.mgf.gz` | `msmcp.mgf` | strict: an unparseable peak line raises rather than being skipped |
-| `.imzML` (+ `.ibd`) | MassFlow | imaging data; pixel coordinates are preserved on each spectrum |
+| `.imzML` (+ `.ibd`) | optional imaging `massflow` | requires `uv sync --extra imaging`; pixel coordinates are preserved |
 | `.raw`, `.d`, `.wiff`, `.mzXML` | — | recognised and refused, naming the vendor and suggesting MSConvert |
 
-MassFlow is a required dependency, but the installed release (0.1.x) is an **imaging** framework: it reads imzML/zarr/HDF5 and exposes no mzML or MGF reader. MSMCP therefore routes exactly what MassFlow supports through MassFlow, and owns small readers for the rest. That is a documented consequence of the available library, not a preference.
+The optional imaging distribution `massflow` (0.1.x) exposes `massflow.data_manager.MSDataManagerImzML`. It is unrelated to the analytical `MassFlow` engine, despite sharing a distribution name; keep them in separate environments. The `imaging` extra retains the existing imzML importer. It does not add an analytical-engine integration or zarr/HDF5 input support. Core mzML/MGF behavior is independent of both projects.
 
-Two MassFlow behaviours are worth knowing before debugging an unexpected directory or log line:
+Without the extra, imzML reads raise `MissingDependencyError` with source-install guidance rather than fabricating spectra. `ping` still reports `status="ok"`; its legacy `massflow_available` and `massflow_version` fields inventory installed distribution metadata only and do not verify the imaging importer or analytical engine. In the current MCP SDK the exception detail is masked in the wire-level tool error and remains in stderr logs.
+
+Two imaging-backend behaviours are worth knowing; the import is lazy and neither occurs during core startup or `ping`:
 
 - Importing MassFlow's data manager **reconfigures the root logger to write to stdout**, which would corrupt the stdio JSON-RPC framing. `massflow_io` repoints those handlers at stderr on import, and a test asserts that no handler in the process targets stdout after a read.
 - The same import **creates a `logs/` directory** in the working directory. That is library behaviour MSMCP cannot suppress; it is gitignored and documented rather than hidden.
@@ -417,7 +424,7 @@ jargon.
 | **Cosine similarity** | A 0–1 score for how well two spectra's matched peaks agree; 1.0 means the matched peaks account for all intensity in both. |
 | **Spectral library** | A collection of reference spectra to search against; MSMCP reads MSP/NIST-style text (`.msp`, `.msp.gz`). |
 | **MSP / NIST text** | The plain-text interchange format most public libraries ship as. |
-| **imzML** | An open format for mass-spectrometry **imaging** data; MSMCP reads it via MassFlow. |
+| **imzML** | An open format for mass-spectrometry **imaging** data; MSMCP reads it with the optional imaging `massflow` extra. |
 | **p-value / q-value / FDR** | Significance of a hit, and the false-discovery-rate control across hits. |
 | **Decoy** | A shuffled, non-matching spectrum used to estimate the false-positive background. |
 | **Embedding / foundation model** | A learned vector representation of a spectrum; optional, and requires real model weights. |
@@ -437,11 +444,11 @@ Every significant object MSMCP derives carries a structured, immutable provenanc
                "size_bytes": 84213, "digest": "sha256:5b1f…"}],
   "parents": ["ptr:spectrum:9f3c…"],
   "model": null,
-  "software": {"name": "msmcp", "versions": {"python": "3.13.7", "msmcp": "1.0.0", "massflow": "0.1.2", "numpy": "2.3.4"}}
+  "software": {"name": "msmcp", "versions": {"python": "3.13.7", "msmcp": "1.0.0", "numpy": "2.3.4"}}
 }
 ```
 
-A search result can therefore answer, mechanically: which query reference, which file and which reader produced it, with which scoring method and parameters, under which software versions — and, for embedding-scored work, which model and checkpoint. Digests are computed for sources up to 64 MiB; larger files report `digest: null` rather than silently omitting the field.
+A search result can therefore answer, mechanically: which query reference, which file and which reader produced it, with which scoring method and parameters, under which software versions — and, for embedding-scored work, which model and checkpoint. Digests are computed for sources up to 64 MiB; larger files report `digest: null` rather than silently omitting the field. Optional distributions appear only when installed; a `massflow` version does not prove the imaging backend was imported or used. The per-source `backend` records the actual reader.
 
 It is deliberately not a provenance framework: no graph, no query language, no storage. Records travel with the objects they describe.
 
@@ -506,7 +513,7 @@ user- and agent-facing story.
 - **Search names which library answered it**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. A library path in a readable format (MSP/NIST text or MGF, `.msp`/`.msp.gz`/`.mgf`/`.mgf.gz`) is read from disk through the same `SecurityPolicy` as acquisitions — allowed root, size limit, read-only — and is refused with `PathEscapeError` if it resolves outside the allowed root. A path with no reader still falls back to a synthetic library, and the report says which path was used, in a banner ahead of any hit table. Still to come is the local SQLite peak store.
 - **In-process job state**: jobs live in server memory and do not survive a restart; the poller reports a lost job as failed rather than pending. A durable executor is a drop-in `JobExecutor` implementation.
 - **MCP Tasks are not dispatchable by the installed SDK**: `mcp` 2.1.1 ships the Tasks types but omits `tasks/get`, `tasks/result` and `tasks/cancel` from its request unions, so no server can answer them. MSMCP keeps its snapshots in the MCP `Task` shape and exposes the semantics through `check_search_status` instead of inventing a protocol.
-- **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself, because MassFlow 0.1.x is imaging-only. `.imzML` goes through MassFlow. Vendor formats are refused with conversion guidance.
+- **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself without MassFlow. `.imzML` requires the optional imaging extra. Vendor formats are refused with conversion guidance.
 - **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 awaits a public weights release; its adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
 - **Whole-slide images**: MassFlow materialises one placeholder per pixel when loading an imzML acquisition, so very large images are bounded by MassFlow's own behaviour.
 - **MS-Numpress-compressed mzML arrays** need the optional `pynumpress` package and report a missing-dependency error without it.
@@ -523,7 +530,7 @@ MSMCP is a **local, single-user server**: the MCP host spawns it as a child proc
 - **Server-side data** — registered references are bounded (`MSMCP_MAX_REFERENCES`, `MSMCP_MAX_TOTAL_BYTES`), expire after `MSMCP_REFERENCE_TTL_SECONDS` (default 3600), are held read-only, and are namespaced. Exceeding a limit refuses the request; it never silently discards data a caller still holds. Reference identifiers are opaque random tokens, never object ids, addresses or paths.
 - **Execution** — concurrent jobs are capped by the executor (default 4). A cancelled job's partial output is discarded rather than returned.
 - **Checkpoint loading** — the LSM-MS2 adapter deserialises a checkpoint file (`torch.jit.load`, falling back to `torch.load` with `weights_only=True`); checkpoint files can execute arbitrary code, so only point `MSMCP_LSM_MS2_CKPT` at files you trust. A checkpoint that needs full-pickle loading is **rejected unless `MSMCP_LSM_MS2_ALLOW_UNSAFE=1` explicitly opts in** — that fallback (`torch.load` without `weights_only`) can execute arbitrary code from the file. The DreaMS adapter downloads pre-trained weights from the upstream repository on first use — pin the `dreams` install to a commit you trust.
-- **Dependency side effects** — importing MassFlow's data manager reconfigures the Python root logger to write to stdout and creates a `logs/` directory in the working directory. MSMCP neutralises the first (it would corrupt the stdio framing) and documents the second. See [Supported input formats](#supported-input-formats).
+- **Optional imaging dependency side effects** — importing the imaging `massflow` data manager reconfigures the Python root logger to write to stdout and creates a `logs/` directory in the working directory. MSMCP neutralises the first (it would corrupt the stdio framing) and documents the second. See [Supported input formats](#supported-input-formats).
 - **No secrets** — the server stores no credentials, requires no API keys, and makes no network calls of its own. This is a design constraint, not a current limitation: MSMCP is intended for onsite, offline use, so remote database adapters are explicitly out of scope (see [ARCHITECTURE.md](ARCHITECTURE.md) → *Out of scope*).
 
 ## Configuration reference

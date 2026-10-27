@@ -121,8 +121,9 @@ independent document is authored to that standard.
 * A hidden dependency on producer behaviour remains: a document omitting the
   `64-bit float` CV (the reader then defaults to 64-bit) is not exercised by an
   independent producer.
-* **MGF** (`msmcp/mgf.py`) and **imzML** (via MassFlow) have no independent
-  reference document. The imzML fixture is written by `pyimzml`, the *same
+* **MGF** (`msmcp/mgf.py`) and **imzML** (via the optional imaging `massflow`
+  extra) have no independent reference document. The imzML fixture is written by
+  `pyimzml`, the *same
   dependency MassFlow uses to read it back* — that is same-ecosystem evidence,
   not independent validation.
 

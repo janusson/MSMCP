@@ -2,12 +2,11 @@
 
 Why this module exists
 ----------------------
-MassFlow is MSMCP's canonical MS I/O layer, but the installed MassFlow
-(0.1.x) is an *imaging* framework: it reads imzML, zarr and HDF5 stores and
-exposes no mzML or MGF reader.  MSMCP therefore routes exactly what MassFlow
-actually supports through MassFlow, and owns small readers of its own for the
-formats MassFlow does not cover (:mod:`msmcp.mzml`, :mod:`msmcp.mgf`).  No
-MassFlow API is invented here: only
+The optional ``imaging`` extra installs the lowercase ``massflow`` imaging
+framework (0.1.x), not the separate analytical ``MassFlow`` engine that shares
+its distribution name.  Only imzML is routed here; the core mzML/MGF readers
+(:mod:`msmcp.mzml`, :mod:`msmcp.mgf`) do not depend on either project.
+The imaging package is imported only when reading imzML.  Only
 :class:`massflow.data_manager.MSDataManagerImzML` and the lazy spectrum objects
 it produces are used, and their output is converted into MSMCP's own
 :class:`~msmcp.mzml.Spectrum`.
@@ -31,6 +30,7 @@ it is documented in the README rather than hidden.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import sys
 from collections.abc import Callable, Iterator
@@ -76,7 +76,11 @@ SUFFIXES: Final[tuple[str, ...]] = (".imzml",)
 
 
 def massflow_version() -> str | None:
-    """Return the installed MassFlow version, or ``None`` when absent."""
+    """Return ``massflow`` distribution metadata without importing the backend.
+
+    A version does not prove the imaging API works: the analytical engine uses
+    the same distribution name.  Backend compatibility is checked on imzML read.
+    """
     import importlib.metadata
 
     try:
@@ -114,14 +118,20 @@ def _restore_stderr_logging() -> None:
 def _import_manager() -> Any:
     """Import MassFlow's imzML data manager, keeping stdout clean."""
     try:
-        from massflow.data_manager import MSDataManagerImzML
-    except ImportError as exc:  # pragma: no cover - massflow is a hard dependency
+        module = importlib.import_module("massflow.data_manager")
+        return module.MSDataManagerImzML
+    except (ImportError, AttributeError) as exc:
         raise MissingDependencyError(
-            "Reading imzML files requires the MassFlow package.  Install it "
-            "with `uv sync` (it is a required MSMCP dependency)."
+            "Reading imzML requires the optional imaging backend "
+            "(massflow.data_manager.MSDataManagerImzML). Install it with "
+            "`uv sync --extra imaging` or `pip install '.[imaging]'` from source. "
+            "The analytical MassFlow engine is a different project sharing the "
+            "distribution name; use separate environments. Core mzML/MGF "
+            "reading does not require this backend. "
+            f"Import failed: {type(exc).__name__}: {exc}"
         ) from exc
-    _restore_stderr_logging()
-    return MSDataManagerImzML
+    finally:
+        _restore_stderr_logging()
 
 
 # ---------------------------------------------------------------------------
