@@ -33,7 +33,11 @@ from msmcp.errors import SpectrumIndexError
 from msmcp.mzml import declared_spectrum_count, resolve_mzml_path
 from msmcp.mzml import iter_spectra as iter_mzml_spectra
 from msmcp.provenance import SourceRef, provenance_for
-from msmcp.security import DEFAULT_POLICY, validate_spectrum_count
+from msmcp.security import (
+    DEFAULT_POLICY,
+    SpectrumCountExceededError,
+    validate_spectrum_count,
+)
 from msmcp.state import store as reference_store
 from msmcp.state.pointers import DataReference, StoreLimitError
 
@@ -60,7 +64,7 @@ class LoadSpectrumInput(BaseModel):
     """Validated input for the load_spectrum tool."""
 
     file_path: str = Field(..., min_length=1)
-    spectrum_index: int = Field(default=0, ge=0)
+    spectrum_index: int = Field(default=0, ge=0, le=DEFAULT_POLICY.max_spectra - 1)
 
 
 class ReferenceInput(BaseModel):
@@ -499,7 +503,11 @@ def register_tools(mcp: Any) -> None:
             int,
             Field(
                 ge=0,
-                description="Zero-based index of the spectrum to load within the file.",
+                le=DEFAULT_POLICY.max_spectra - 1,
+                description=(
+                    "Zero-based index of the spectrum to load. The index must be "
+                    "below the configured per-request spectrum limit."
+                ),
             ),
         ] = 0,
     ) -> SpectrumReferenceResult:
@@ -518,6 +526,12 @@ def register_tools(mcp: Any) -> None:
         validated = LoadSpectrumInput(
             file_path=file_path, spectrum_index=spectrum_index
         )
+        if validated.spectrum_index >= DEFAULT_POLICY.max_spectra:
+            raise SpectrumCountExceededError(
+                f"spectrum_index={validated.spectrum_index} requires reading "
+                f"{validated.spectrum_index + 1} spectra, exceeding the configured "
+                f"max_spectra={DEFAULT_POLICY.max_spectra} request limit."
+            )
         source = ingest.resolve_source(validated.file_path, DEFAULT_POLICY)
 
         spectrum = None

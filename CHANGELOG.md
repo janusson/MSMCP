@@ -18,6 +18,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   inventory distribution metadata, not backend compatibility; optional absence
   is healthy. Real imaging integration tests skip in core-only environments.
 
+### Changed
+
+- **Apply the per-request spectrum budget to indexed reads.** `load_spectrum`
+  and file-based `search_library` now reject indices that would require scanning
+  beyond `MSMCP_MAX_SPECTRA`, before opening/iterating the source. The MCP schema
+  advertises the configured maximum rather than allowing an impossible request.
+
 ### Added
 
 - **`list_spectra` — a discovery step before loading or searching.** The new
