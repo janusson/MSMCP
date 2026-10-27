@@ -390,6 +390,8 @@ Two MassFlow behaviours are worth knowing before debugging an unexpected directo
 
 MS-Numpress-compressed mzML arrays require the optional `pynumpress` package and raise a missing-dependency error without it.
 
+The mzML reader normalizes scan start times to minutes from an explicit second or minute unit (`unitAccession` or `unitName`) and retains the source value and unit on each parsed spectrum. It refuses absent, unsupported, or contradictory scan-time units and unequal decoded m/z and intensity arrays. A disagreement between paired decoded arrays and `defaultArrayLength` remains a warning.
+
 ## Glossary
 
 Plain-language definitions of the terms this document uses. Everything here is
