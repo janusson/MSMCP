@@ -37,8 +37,8 @@ dev = [
     "basedpyright>=1.16",
 ]
 # Optional real cheminformatics: enables RDKit-backed SMILES → formula
-# conversion in `annotate_isotopes` (install with `uv sync --extra chem`;
-# without it, the tool falls back to a small static lookup table).
+# conversion in `annotate_isotopes` (install with `uv sync --extra chem`).
+# Without it, explicit formulas still work; SMILES conversion fails closed.
 chem = [
     "rdkit>=2024.3",
 ]

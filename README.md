@@ -518,7 +518,9 @@ C/H/N/O compound never has.
 
 Hallucinated adducts (e.g. `[M+H2O]+`) are explicitly rejected with the list of supported ionisation pathways, rather than silently producing plausible-looking numbers.
 
-SMILES → formula conversion uses RDKit when available (`uv sync --extra chem`); without it, `annotate_isotopes` falls back to a small static lookup table and asks the model to submit a formula instead of an unknown SMILES.
+SMILES → formula conversion requires RDKit (`uv sync --extra chem`). If RDKit is unavailable or rejects the input, `annotate_isotopes(is_smiles=True)` fails closed; it never treats a SMILES string such as `CO` as a formula. Explicit formula input (for example `C6H12O6`, with `is_smiles=False`) works in the core installation without RDKit.
+
+Adduct shifts use a single neutral-atom composition convention: the mass change in neutral atoms is corrected once by subtracting the signed net charge times the electron mass. The reported m/z offset divides by `|z|`. Electron binding/ionisation energies are neglected in this mass convention.
 
 ### Example: spectral similarity (classical → embeddings)
 

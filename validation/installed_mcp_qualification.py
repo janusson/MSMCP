@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import json
 import os
 import tempfile
@@ -197,6 +198,70 @@ async def qualify(server_command: str) -> dict[str, Any]:
             ping = await _call(session, "ping", {})
             assert not ping.is_error, _text(ping)
             evidence["ping"] = _text(ping)
+
+            formula = await _call(
+                session,
+                "annotate_isotopes",
+                {"identifier": "C6H12O6", "is_smiles": False},
+            )
+            formula_text = _text(formula)
+            assert not formula.is_error, formula_text
+            assert "## Isotope Pattern: C6H12O6" in formula_text
+            assert "180.0634 Da" in formula_text
+            evidence["formula_chemistry"] = formula_text
+
+            malformed_formula = await _call(
+                session,
+                "annotate_isotopes",
+                {"identifier": "C6H12O6!", "is_smiles": False},
+            )
+            malformed_formula_text = _text(malformed_formula)
+            assert not malformed_formula.is_error, malformed_formula_text
+            assert malformed_formula_text.startswith("ERROR:")
+            assert "Isotope Pattern" not in malformed_formula_text
+            evidence["malformed_formula"] = malformed_formula_text
+
+            smiles = await _call(
+                session,
+                "annotate_isotopes",
+                {"identifier": "CO", "is_smiles": True},
+            )
+            smiles_text = _text(smiles)
+            assert not smiles.is_error, smiles_text
+            if importlib.util.find_spec("rdkit") is None:
+                assert smiles_text.startswith("ERROR:")
+                assert "Isotope Pattern" not in smiles_text
+                evidence["smiles_mode"] = "core-only: failed closed without RDKit"
+            else:
+                assert "## Isotope Pattern: CH4O" in smiles_text
+                evidence["smiles_mode"] = "RDKit-enabled: CO resolved as CH4O"
+            evidence["smiles_chemistry"] = smiles_text
+
+            adduct_expectations = {
+                "[M+2H]2+": "+2.014553 Da",
+                "[M+3H]3+": "+3.021829 Da",
+                "[M+2Na-H]+": "+44.971165 Da",
+                "[M+Na-2H]-": "+20.974668 Da",
+            }
+            adduct_evidence: dict[str, str] = {}
+            for adduct, expected_shift in adduct_expectations.items():
+                result = await _call(
+                    session,
+                    "predict_adduct_offset",
+                    {"adduct_string": adduct},
+                )
+                result_text = _text(result)
+                assert not result.is_error, result_text
+                assert f"Exact mass shift (Δ): {expected_shift}" in result_text
+                charge_denominators = {
+                    "[M+2H]2+": "|2|",
+                    "[M+3H]3+": "|3|",
+                    "[M+Na-2H]-": "|-1|",
+                }
+                if adduct in charge_denominators:
+                    assert charge_denominators[adduct] in result_text
+                adduct_evidence[adduct] = result_text
+            evidence["adduct_chemistry"] = adduct_evidence
 
             qc = await _call(session, "generate_qc_summary", {"file_path": str(query)})
             assert not qc.is_error, _text(qc)

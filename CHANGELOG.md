@@ -18,6 +18,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   inventory distribution metadata, not backend compatibility; optional absence
   is healthy. Real imaging integration tests skip in core-only environments.
 
+### Fixed
+
+- **Validate complete formula strings.** Formula parsing now rejects skipped or
+  trailing characters and non-positive atom counts while continuing to
+  accumulate legitimately repeated elements.
+- **Use one signed-charge electron convention for every adduct.** Shifts are
+  derived from neutral-atom composition minus net charge times electron mass;
+  multiply charged proton adducts no longer subtract electrons twice, and the
+  sodium/hydrogen exchange adducts use the same charge bookkeeping. Expected
+  values are pinned to test-local independent neutral-mass references.
+- **Fail closed for SMILES without RDKit.** Removed the static/mock converter
+  and formula-string fallback. Explicit formula input still works without the
+  optional `chem` extra; SMILES requires RDKit and rejected input returns an
+  error rather than a plausible but incorrect formula.
+
 ### Changed
 
 - **Gate library candidates on query acquisition context (#79).** Search now

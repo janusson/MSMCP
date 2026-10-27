@@ -132,8 +132,9 @@ Everything else is present in the released version.
   mocks), `models/backends.py` (DreaMS, LSM-MS2). Selected through
   `MSMCP_EMBEDDING_BACKEND`; absent by default, and their absence must degrade
   to a clear error, never to a plausible-looking score.
-* **RDKit cheminformatics** — the `chem` extra; without it `annotate_isotopes`
-  falls back to a static table and says so.
+* **RDKit cheminformatics** — the `chem` extra enables SMILES-to-formula
+  conversion. Without it, explicit formula input to `annotate_isotopes` works,
+  while SMILES conversion fails closed; no guessed formula is substituted.
 
 Neither is required for the core server to start, serve, or be tested.
 

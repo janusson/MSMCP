@@ -290,7 +290,6 @@ class TestAdductReferenceValues:
     electron-balance convention rather than echoing the module's own numbers.
     """
 
-    PROTON = 1.007276466621  # CODATA 2018: ¹H⁺
     ELECTRON = 0.000548579909  # CODATA 2018: e⁻
     H_ATOM = 1.00782503207
     C_ATOM = 12.0
@@ -301,24 +300,26 @@ class TestAdductReferenceValues:
     CL_ATOM = 34.968852682
 
     def _expected(self) -> dict[str, float]:
-        p, e = self.PROTON, self.ELECTRON
+        e = self.ELECTRON
         h, c, n, o = self.H_ATOM, self.C_ATOM, self.N_ATOM, self.O_ATOM
         na, k, cl = self.NA_ATOM, self.K_ATOM, self.CL_ATOM
+        # Independent convention: neutral atomic composition minus z*e,
+        # where z is the signed net charge. Binding energies are neglected.
         return {
-            "[M+H]+": p,
+            "[M+H]+": h - e,
             "[M+Na]+": na - e,
             "[M+K]+": k - e,
             "[M+NH4]+": n + 4 * h - e,
-            "[M+H-H2O]+": p - (2 * h + o),
-            "[M+2H]2+": 2 * p - 2 * e,
-            "[M+3H]3+": 3 * p - 3 * e,
-            "[M+2Na-H]+": 2 * (na - e) - (p - e),
-            "[M-H]-": -p,
+            "[M+H-H2O]+": h - (2 * h + o) - e,
+            "[M+2H]2+": 2 * h - 2 * e,
+            "[M+3H]3+": 3 * h - 3 * e,
+            "[M+2Na-H]+": 2 * na - h - e,
+            "[M-H]-": -h + e,
             "[M+Cl]-": cl + e,
             "[M+HCOO]-": h + c + 2 * o + e,
             "[M+CH3COO]-": 2 * c + 3 * h + 2 * o + e,
-            "[M-H2O-H]-": -(2 * h + o) - p,
-            "[M+Na-2H]-": (na - e) - 2 * p + 2 * e,
+            "[M-H2O-H]-": -(2 * h + o) - h + e,
+            "[M+Na-2H]-": na - 2 * h + e,
         }
 
     def test_every_tabulated_shift_matches_independent_arithmetic(self) -> None:
@@ -329,7 +330,7 @@ class TestAdductReferenceValues:
             f"adduct table changed: {set(expected) ^ set(_ADDUCT_DB)}"
         )
         for adduct, value in expected.items():
-            assert _ADDUCT_DB[adduct]["shift"] == pytest.approx(value, abs=1e-6), adduct
+            assert _ADDUCT_DB[adduct]["shift"] == pytest.approx(value, abs=5e-9), adduct
 
 
 # ---------------------------------------------------------------------------
