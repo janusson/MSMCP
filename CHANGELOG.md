@@ -24,6 +24,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and file-based `search_library` now reject indices that would require scanning
   beyond `MSMCP_MAX_SPECTRA`, before opening/iterating the source. The MCP schema
   advertises the configured maximum rather than allowing an impossible request.
+- **Bound full-acquisition QC scans.** `generate_qc_summary` now stops at
+  `MSMCP_MAX_SPECTRA` without recounting the full source. When the ceiling is
+  reached, the report says complete acquisition coverage is unconfirmed and
+  labels TIC as applying only to the analysed spectra.
 
 ### Added
 
