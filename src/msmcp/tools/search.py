@@ -506,17 +506,32 @@ def _peaks_from_reference(reference: str) -> list[tuple[float, float]]:
     return [(float(mz), float(intensity)) for mz, intensity in peaks]
 
 
-def _reference_polarity(reference: str) -> str | None:
-    """Ion mode of a stored spectrum reference, or ``None`` when it has none.
-
-    A peak-list reference carries no ion mode, and a spectrum whose file did
-    not state one reports ``None``; either way no polarity is invented.
-    """
+def _reference_context(
+    reference: str,
+) -> tuple[str | None, int | None, float | None]:
+    """Available acquisition context, without inventing peak-list metadata."""
     try:
         spectrum = reference_store.resolve_spectrum(reference)
     except ReferenceKindError:
-        return None
-    return getattr(spectrum, "polarity", None)
+        return None, None, None
+    return spectrum.polarity, spectrum.ms_level, spectrum.precursor_mz
+
+
+def _require_ms2(ms_level: int | None) -> None:
+    """A declared non-MS2 acquisition cannot be an MS2 library query."""
+    if ms_level is not None and ms_level != 2:
+        raise MsmcpError(
+            f"MS{ms_level} spectra cannot be searched against an MS2 spectral "
+            "library; select a populated MS2 scan."
+        )
+
+
+def _require_valid_precursor(precursor_mz: float | None) -> None:
+    """Reject malformed acquisition metadata before it can disable matching."""
+    if precursor_mz is not None and (
+        not np.isfinite(precursor_mz) or precursor_mz <= 0
+    ):
+        raise MsmcpError("the query needs a finite positive precursor m/z")
 
 
 def _spectrum_label(spectrum: Spectrum, spectrum_index: int) -> str:
@@ -541,21 +556,18 @@ def _spectrum_label(spectrum: Spectrum, spectrum_index: int) -> str:
 
 def _peaks_from_file(
     file_path: str, spectrum_index: int
-) -> tuple[list[tuple[float, float]], str, str | None]:
+) -> tuple[list[tuple[float, float]], str, str | None, int | None, float | None]:
     """Read one spectrum of *file_path* as a real experimental peak list.
 
-    Returns the peaks, a label naming the spectrum they came from, and the ion
-    mode when the file states one (``None`` otherwise).  The file is opened
+    Returns the peaks, a label, and declared polarity, MS level, and precursor
+    m/z (``None`` for absent metadata).  The file is opened
     through the ingestion layer, so the query of a search is always genuine data
     and a missing or malformed file fails loudly instead of quietly producing a
     synthetic stand-in.
 
-    The spectrum is selected by index **and reported**, because the first
-    spectrum of a real LC-MS/MS file is normally an MS1 survey scan: a search
-    that silently used it would compare an MS1 against an MS2 library and
-    present the result as though it meant something.  An empty scan — ordinary
-    in real acquisitions — is refused rather than dispatched, since a search
-    with no query peaks cannot return anything meaningful.
+    The spectrum is selected by index **and reported**.  A declared MS1 scan
+    is refused by the dispatcher instead of compared with an MS2 library.
+    An empty scan is refused because it has no query peaks.
     """
     source = ingest.resolve_source(file_path)
     for current, candidate in enumerate(source.iter_spectra()):
@@ -572,7 +584,13 @@ def _peaks_from_file(
                 f"real acquisitions; call `load_mzml_summary` to find a "
                 f"populated one and pass its index."
             )
-        return peaks, _spectrum_label(candidate, spectrum_index), candidate.polarity
+        return (
+            peaks,
+            _spectrum_label(candidate, spectrum_index),
+            candidate.polarity,
+            candidate.ms_level,
+            candidate.precursor_mz,
+        )
 
     raise SpectrumIndexError(
         f"'{file_path}' contains no spectrum at index {spectrum_index}.  The "
@@ -602,6 +620,8 @@ class SearchRequest:
     instrument_class: str | None = None
     query_spectrum_index: int | None = None
     query_polarity: str | None = None
+    query_ms_level: int | None = None
+    query_precursor_mz: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -618,6 +638,7 @@ class SearchSummary:
     library_format: str | None
     query_peaks: int
     query_source: str
+    eligibility_mode: str
     mode: str
     threshold: float
     n_hits: int
@@ -689,6 +710,8 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     MCP event loop stays responsive.
     """
     scoring_method = request.scoring_method
+    _require_ms2(request.query_ms_level)
+    _require_valid_precursor(request.query_precursor_mz)
     database_file = request.database_file
     chunk_size = request.chunk_size
     profile = get_profile(request.instrument_class)
@@ -718,32 +741,23 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             )
         logger.info("Scoring %d real query peaks", len(exp_peaks))
 
-        small_library_threshold = profile.small_library_threshold
-        use_fdr = n_spectra >= small_library_threshold
-
-        small_lib_warning = ""
-        if not use_fdr:
-            small_lib_warning = (
-                f"⚠️  **SCIENTIFIC WARNING**\n"
-                f"The spectral library contains only **{n_spectra}** spectra "
-                f"(< {small_library_threshold} threshold).\n"
-                f"Target-Decoy FDR estimation is unreliable with small "
-                f"libraries.\n"
-                f"→ Automatically switching to **empirical p-value** "
-                f"calculation instead.\n\n"
-            )
-
         target_scores: list[float] = []
         target_meta: list[dict[str, Any]] = []
         # Peaks of permutable library spectra, kept for the null model below so
         # the decoy draws cost no further SQL.
         peaks_cache: dict[Any, list[tuple[float, float]]] = {}
+        precursor_gate = (
+            request.query_ms_level == 2 and request.query_precursor_mz is not None
+        )
+        precursor_compared = 0
+        precursor_excluded = 0
+        polarity_compared = 0
+        polarity_excluded = 0
 
         logger.info(
-            "Scanning %d spectra in chunks of %d (%s mode)",
+            "Scanning %d spectra in chunks of %d",
             n_spectra,
             chunk_size,
-            "FDR" if use_fdr else "p-value",
         )
 
         def _chunks() -> Iterator[tuple[int, list[dict[str, Any]]]]:
@@ -756,6 +770,31 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
 
         for chunk_id, chunk in _chunks():
             for spec in chunk:
+                if precursor_gate:
+                    precursor = spec["precursor_mz"]
+                    if (
+                        not isinstance(precursor, int | float)
+                        or not np.isfinite(precursor)
+                        or precursor <= 0
+                    ):
+                        precursor_excluded += 1
+                        continue
+                    precursor_compared += 1
+                    assert request.query_precursor_mz is not None
+                    tolerance = profile.precursor_tolerance
+                    window_da = (
+                        tolerance.value
+                        if tolerance.unit == "Da"
+                        else request.query_precursor_mz * tolerance.value / 1_000_000
+                    )
+                    if abs(precursor - request.query_precursor_mz) > window_da:
+                        precursor_excluded += 1
+                        continue
+                    if request.query_polarity and spec.get("polarity"):
+                        polarity_compared += 1
+                        if spec["polarity"] != request.query_polarity:
+                            polarity_excluded += 1
+                            continue
                 score = scorer.score(exp_peaks, spec["peaks"])
                 target_scores.append(score)
                 if _permutable(spec["peaks"]):
@@ -771,6 +810,21 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                     }
                 )
             logger.debug("Chunk %d: processed %d spectra", chunk_id, len(chunk))
+
+        n_candidates = len(target_scores)
+        small_library_threshold = profile.small_library_threshold
+        use_fdr = n_candidates >= small_library_threshold
+        small_lib_warning = ""
+        if not use_fdr:
+            small_lib_warning = (
+                f"⚠️  **SCIENTIFIC WARNING**\n"
+                f"The search has only **{n_candidates}** eligible spectra "
+                f"(< {small_library_threshold} threshold).\n"
+                f"Target-Decoy FDR estimation is unreliable with small "
+                f"libraries.\n"
+                f"→ Automatically switching to **empirical p-value** "
+                f"calculation instead.\n\n"
+            )
 
         null_scores: list[float] = []
         # Draw a FIXED number of decoys from the spectra already scored above —
@@ -795,7 +849,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 ]
                 null_scores.extend(scorer.score_many(exp_peaks, decoys))
                 remaining -= batch
-        unpermutable = n_spectra - len(pool)
+        unpermutable = n_candidates - len(pool)
         if unpermutable:
             logger.debug(
                 "Null model: %d spectra have no permutable intensity pattern",
@@ -817,7 +871,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
         if use_fdr:
             if null_fit is not None:
                 p_values = null_fit.p_values(target_scores)
-                q_floor = null_fit.smallest_attainable_q(n_spectra)
+                q_floor = null_fit.smallest_attainable_q(n_candidates)
                 null_line = (
                     f"Null model: {null_fit.describe()}.  Significance is read "
                     f"from the fitted upper tail (no sampling floor); smallest "
@@ -870,7 +924,25 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             )
         if request.query_polarity:
             query_line += f", ion mode: {request.query_polarity}"
+        if request.query_ms_level is not None:
+            query_line += f", MS{request.query_ms_level}"
+        if request.query_precursor_mz is not None:
+            query_line += f", precursor m/z {request.query_precursor_mz:.4f}"
         lines.append(query_line)
+        if precursor_gate:
+            lines.append(
+                f"Precursor eligibility: {n_candidates} of {n_spectra} library "
+                f"spectra retained; {precursor_excluded} excluded by missing or "
+                f"incompatible precursor, {polarity_excluded} by opposite ion mode. "
+                f"Configured window: {profile.precursor_tolerance.describe()} "
+                f"({precursor_compared} precursor comparisons)."
+            )
+        else:
+            lines.append(
+                "Search mode: **fragment-only exploratory** — MS2 level or "
+                "query precursor m/z was not declared, so precursor tolerance "
+                "was not applied. Fragment similarity is not compound identity."
+            )
         lines.append(
             f"Scoring method: {_scoring_label(scoring_method, ms2_tolerance_da)}"
         )
@@ -891,8 +963,8 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
         if not hits:
             lines.append(
                 "**No hits passed the significance threshold.**\n\n"
-                "Consider widening the precursor mass tolerance or "
-                "re-acquiring the spectrum with higher signal-to-noise."
+                "Inspect the query and library acquisition context and "
+                "spectrum quality before interpreting this result."
             )
         else:
             lines.append(f"Showing the top {top_n} of {len(hits)} hit(s):")
@@ -961,6 +1033,12 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             null_fit,
             n_null_actual,
             use_fdr,
+            n_candidates,
+            precursor_gate,
+            precursor_compared,
+            precursor_excluded,
+            polarity_compared,
+            polarity_excluded,
         )
         lines.append("")
         lines.append("---")
@@ -997,6 +1075,11 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             query_source=request.spectrum_reference
             or request.experimental_file
             or "unknown",
+            eligibility_mode=(
+                "precursor-qualified MS2"
+                if precursor_gate
+                else "fragment-only exploratory"
+            ),
             mode="FDR" if use_fdr else "empirical p-value",
             threshold=report_threshold,
             n_hits=len(hits),
@@ -1075,11 +1158,17 @@ def _search_provenance(
     null_fit: TailFit | None,
     n_null: int,
     use_fdr: bool,
+    n_candidates: int,
+    precursor_gate: bool,
+    precursor_compared: int,
+    precursor_excluded: int,
+    polarity_compared: int,
+    polarity_excluded: int,
 ) -> Provenance:
     """Build the provenance record for one search.
 
     The record carries the experimental thresholds the scan actually applied —
-    the MS2 window, the significance threshold and the small-library floor —
+    the MS2 window, an applied precursor gate, the significance threshold and the small-library floor —
     together with the instrument class they were defaulted from and that class's
     documented provenance, so a report can be read back against the assumption
     it was produced under (audit F7).
@@ -1101,19 +1190,32 @@ def _search_provenance(
         "query_is_real_data": True,
         "instrument_class": profile.instrument_class,
         "ms2_tolerance_da": profile.ms2_tolerance_da,
-        "precursor_tolerance": profile.precursor_tolerance.to_dict(),
         "fdr_threshold": profile.fdr_threshold,
         "small_library_threshold": profile.small_library_threshold,
         "instrument_defaults_provenance": profile.provenance,
         "null_decoy_scores": n_null,
+        "eligible_library_spectra": n_candidates,
+        "precursor_candidates_compared": precursor_compared,
+        "precursor_candidates_excluded": precursor_excluded,
+        "polarity_candidates_compared": polarity_compared,
+        "polarity_candidates_excluded": polarity_excluded,
     }
+    if precursor_compared:
+        parameters["precursor_tolerance"] = profile.precursor_tolerance.to_dict()
+        parameters["precursor_gate"] = "applied"
+    elif precursor_gate:
+        parameters["precursor_gate"] = "not applied: no comparable library precursors"
+    elif request.query_ms_level != 2:
+        parameters["precursor_gate"] = "not applied: query MS2 level absent"
+    else:
+        parameters["precursor_gate"] = "not applied: query precursor absent"
     if null_fit is not None:
         parameters["null_model"] = null_fit.model
         parameters["null_threshold"] = null_fit.threshold
         parameters["null_shape_xi"] = null_fit.xi
         parameters["null_scale_sigma"] = null_fit.sigma
         parameters["null_smallest_attainable_q"] = null_fit.smallest_attainable_q(
-            n_spectra
+            n_candidates
         )
     elif use_fdr:
         # FDR mode with no permutable decoys: the null could not be calibrated.
@@ -1124,6 +1226,10 @@ def _search_provenance(
         parameters["query_spectrum_index"] = request.query_spectrum_index
     if request.query_polarity is not None:
         parameters["query_polarity"] = request.query_polarity
+    if request.query_ms_level is not None:
+        parameters["query_ms_level"] = request.query_ms_level
+    if request.query_precursor_mz is not None:
+        parameters["query_precursor_mz"] = request.query_precursor_mz
     if library_info is None:
         parameters["library_synthetic"] = True
         parameters["database_file_not_opened"] = request.database_file
@@ -1195,12 +1301,7 @@ def _cell_formula(value: Any) -> str:
 
 
 def _cell_polarity(value: Any, query_polarity: str | None) -> str:
-    """Render a hit's ion mode, flagging a mismatch with the query's.
-
-    A hit is flagged with a warning marker when it declares an ion mode opposite
-    to the query's; polarity is reported, never used to filter, so a caller
-    keeps every hit and decides for itself.
-    """
+    """Render ion mode, flagging mismatches in exploratory searches."""
     if not value:
         return "—"
     polarity = str(value)
@@ -1256,6 +1357,7 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
             "",
             library_line,
             f"- Query: {summary.query_peaks} real peaks from `{summary.query_source}`",
+            f"- Search mode: {summary.eligibility_mode}",
             f"- {summary.mode} threshold {summary.threshold}: {summary.n_hits} hit(s)",
             f"- Top hit: {top}",
             "",
@@ -1334,8 +1436,8 @@ def register_tools(mcp: Any) -> None:
                 description="Zero-based index of the spectrum to search inside "
                 "experimental_file (default 0).  A real LC-MS/MS file starts "
                 "with an MS1 survey scan, so check which spectrum you want with "
-                "load_mzml_summary or load_spectrum first — the reply always "
-                "names the spectrum that was used.",
+                "load_mzml_summary or load_spectrum first. Declared MS1 scans "
+                "are refused; the reply names the spectrum that was used.",
             ),
         ] = None,
         spectrum_reference: Annotated[
@@ -1393,11 +1495,13 @@ def register_tools(mcp: Any) -> None:
         The **query** spectrum can be real: pass `spectrum_reference` from
         `load_spectrum` (peaks already server-side), or `experimental_file` with
         `spectrum_index` to read one from disk.  The reply names the spectrum it
-        used — index, MS level, retention time, precursor m/z and peak count —
-        because the first spectrum of a real LC/MS run is normally an MS1 survey
-        scan, and searching that against an MS2 library means nothing.  A
-        spectrum with no peaks is refused rather than dispatched.  The chunked
-        scan, scoring and FDR estimation are real in every case.
+        used — index, MS level, retention time, precursor m/z and peak count.
+        Declared non-MS2 scans and spectra with no peaks are refused.  When an
+        MS2 precursor m/z is present, only library entries inside the named
+        instrument-class precursor window are scored; opposite declared ion
+        modes are excluded.  Without query MS2/precursor context the report
+        explicitly labels fragment-only exploratory matching. Library adduct
+        identity is not represented or checked.
 
         The experimental thresholds the scan applies — the MS2 m/z window, the
         significance threshold and the small-library FDR floor — come from the
@@ -1425,9 +1529,13 @@ def register_tools(mcp: Any) -> None:
         query_label = ""
         query_spectrum_index: int | None = None
         query_polarity: str | None = None
+        query_ms_level: int | None = None
+        query_precursor_mz: float | None = None
         if validated.spectrum_reference is not None:
             exp_peaks = tuple(_peaks_from_reference(validated.spectrum_reference))
-            query_polarity = _reference_polarity(validated.spectrum_reference)
+            query_polarity, query_ms_level, query_precursor_mz = _reference_context(
+                validated.spectrum_reference
+            )
             query_label = (
                 f"`{validated.spectrum_reference}` ({len(exp_peaks)} real peaks, "
                 f"read from the server-side store)"
@@ -1441,11 +1549,18 @@ def register_tools(mcp: Any) -> None:
             query_spectrum_index = (
                 0 if validated.spectrum_index is None else validated.spectrum_index
             )
-            placed_peaks, description, query_polarity = _peaks_from_file(
-                validated.experimental_file, query_spectrum_index
-            )
+            (
+                placed_peaks,
+                description,
+                query_polarity,
+                query_ms_level,
+                query_precursor_mz,
+            ) = _peaks_from_file(validated.experimental_file, query_spectrum_index)
             exp_peaks = tuple(placed_peaks)
             query_label = f"`{validated.experimental_file}` {description}"
+
+        _require_ms2(query_ms_level)
+        _require_valid_precursor(query_precursor_mz)
 
         # Validate the library before dispatch — not just its path.  Resolving
         # it (allowed root, size, readability) makes an out-of-root or missing
@@ -1468,6 +1583,8 @@ def register_tools(mcp: Any) -> None:
             instrument_class=validated.instrument_class,
             query_spectrum_index=query_spectrum_index,
             query_polarity=query_polarity,
+            query_ms_level=query_ms_level,
+            query_precursor_mz=query_precursor_mz,
         )
 
         handle = _EXECUTOR.submit(
@@ -1482,6 +1599,8 @@ def register_tools(mcp: Any) -> None:
                 "instrument_class": validated.instrument_class,
                 "spectrum_index": validated.spectrum_index,
                 "query_polarity": query_polarity,
+                "query_ms_level": query_ms_level,
+                "query_precursor_mz": query_precursor_mz,
             },
         )
 

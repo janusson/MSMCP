@@ -238,15 +238,15 @@ class TestScorerRouting:
 # Dispatcher → poller round trip against the executor
 # ---------------------------------------------------------------------------
 @pytest.fixture()
-def query_mzml(valid_mzml: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def query_mzml(searchable_mzml: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A real mzML fixture the search tools are allowed to read."""
     from msmcp import ingest
     from msmcp.security import SecurityPolicy
 
     monkeypatch.setattr(
-        ingest, "DEFAULT_POLICY", SecurityPolicy(allowed_root=valid_mzml.parent)
+        ingest, "DEFAULT_POLICY", SecurityPolicy(allowed_root=searchable_mzml.parent)
     )
-    return valid_mzml
+    return searchable_mzml
 
 
 class TestSearchDispatcherAndPoller:
@@ -594,13 +594,13 @@ class TestQuerySpectrumSelection:
     async def test_experimental_file_names_the_spectrum_it_used(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
-        valid_mzml: Path,
+        searchable_mzml: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The reply states which spectrum was searched, and its peak count."""
-        self._allow(valid_mzml, monkeypatch)
+        self._allow(searchable_mzml, monkeypatch)
         dispatched = await search_tools["search_library"](
-            experimental_file=str(valid_mzml),
+            experimental_file=str(searchable_mzml),
             database_file=DB_FILE,
         )
         assert "spectrum #0" in dispatched
@@ -609,17 +609,17 @@ class TestQuerySpectrumSelection:
     async def test_spectrum_index_selects_that_spectrum(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
-        valid_mzml: Path,
+        searchable_mzml: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """``spectrum_index`` chooses the query instead of always taking 0.
 
-        ``valid_mzml``'s three spectra have 3, 2 and 4 peaks, so the reported
+        ``searchable_mzml``'s three spectra have 3, 2 and 4 peaks, so the reported
         count identifies which one was scanned.
         """
-        self._allow(valid_mzml, monkeypatch)
+        self._allow(searchable_mzml, monkeypatch)
         dispatched = await search_tools["search_library"](
-            experimental_file=str(valid_mzml),
+            experimental_file=str(searchable_mzml),
             spectrum_index=2,
             database_file=DB_FILE,
         )
@@ -651,16 +651,16 @@ class TestQuerySpectrumSelection:
     async def test_spectrum_index_out_of_range_is_refused(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
-        valid_mzml: Path,
+        searchable_mzml: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """An index past the end of the file fails before dispatch."""
         from msmcp.errors import SpectrumIndexError
 
-        self._allow(valid_mzml, monkeypatch)
+        self._allow(searchable_mzml, monkeypatch)
         with pytest.raises(SpectrumIndexError, match="index"):
             await search_tools["search_library"](
-                experimental_file=str(valid_mzml),
+                experimental_file=str(searchable_mzml),
                 spectrum_index=99,
                 database_file=DB_FILE,
             )
@@ -715,7 +715,7 @@ class TestQuerySpectrumSelection:
     async def test_the_effective_index_reaches_the_request(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
-        valid_mzml: Path,
+        searchable_mzml: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A *default* index is still an index, and must be recorded as one.
@@ -726,11 +726,11 @@ class TestQuerySpectrumSelection:
         left no record at all of which spectrum had been searched.  The
         dispatch reply named it; the provenance did not.
         """
-        self._allow(valid_mzml, monkeypatch)
+        self._allow(searchable_mzml, monkeypatch)
         seen = self._capture_scan(monkeypatch)
 
         dispatched = await search_tools["search_library"](
-            experimental_file=str(valid_mzml),
+            experimental_file=str(searchable_mzml),
             database_file=DB_FILE,
         )
         await self._drain(search_tools["check_search_status"], dispatched)
@@ -741,15 +741,15 @@ class TestQuerySpectrumSelection:
     async def test_an_explicit_index_reaches_the_request(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
-        valid_mzml: Path,
+        searchable_mzml: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The index the caller named is the one that is recorded."""
-        self._allow(valid_mzml, monkeypatch)
+        self._allow(searchable_mzml, monkeypatch)
         seen = self._capture_scan(monkeypatch)
 
         dispatched = await search_tools["search_library"](
-            experimental_file=str(valid_mzml),
+            experimental_file=str(searchable_mzml),
             spectrum_index=2,
             database_file=DB_FILE,
         )
