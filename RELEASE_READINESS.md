@@ -13,14 +13,15 @@ released version. `main` is unchanged.
 | Repository | `janusson/MSMCP` |
 | Candidate branch | `release/1.0.2-candidate` |
 | Base | `origin/main` @ `18e183a5873d6622b0cd09432b4056d13b0f3499` |
-| Code candidate SHA | `2f891ce373f408437ee74e5fbe6e24ccb462c7c7` |
+| Code candidate SHA (chemistry-corrected) | `793c05d2ee3c5fb610b73b78981c68681bf708ab` |
 | Package version | `1.0.2` (candidate only; no tag) |
 | Python requirement | `>=3.13` |
 | Core dependencies | `mcp[cli]>=2.0.0`, `pydantic>=2.12.5`, `numpy>=1.26.4` |
 | Optional extras | `imaging` (`massflow>=0.1.2,<0.2`), `chem`, `ml`, `test`, `dev` |
 
-The readiness document is committed after the code tip, so the final branch head
-is one documentation commit later. The draft PR is the authoritative tip.
+The readiness document is committed after the code tip; the draft PR head is
+therefore a later documentation commit. The code candidate SHA above identifies
+the complete release source.
 
 ## Supported core server
 
@@ -90,6 +91,49 @@ Scientific limitation: this is a software eligibility contract. It does not
 establish identification accuracy or a calibrated false-discovery rate.
 `VALIDATION_SIGNIFICANCE.md` records the restoration conditions.
 
+## Final chemistry correctness gate
+
+The chemistry review defects are corrected in code commit
+`793c05d2ee3c5fb610b73b78981c68681bf708ab`:
+
+1. **Formula parsing:** `_parse_formula` now walks contiguous tokens and rejects
+   any skipped/trailing text, malformed count and zero/negative count. Repeated
+   elements remain valid and accumulate (`CH3CH3` → `C2H6`). Regressions include
+   `C6H12O6!`, `C6H12O6?`, `C6-H12O6`, embedded whitespace, leading digits,
+   fractional counts, and zero/negative counts.
+2. **Adduct mass bookkeeping:** all 14 canonical adducts are now computed under
+   one convention: neutral-atom composition delta minus signed net charge times
+   electron mass; electron binding/ionisation energies are neglected. The
+   independent test oracle uses separate NIST/CIAAW neutral atomic masses and a
+   CODATA electron mass, not production constants. It checks every shift and
+   the mass-to-charge divisor uses absolute charge. Corrected examples:
+   `[M+2H]2+` = `+2.014553 Da`, `[M+3H]3+` = `+3.021829 Da`,
+   `[M+2Na-H]+` = `+44.971165 Da`, `[M+Na-2H]-` = `+20.974668 Da`.
+   Independent 500 Da neutral examples give 251.007276452 and 167.673943119
+   m/z for the 2+ and 3+ protonated ions respectively.
+3. **SMILES:** the mock table and formula-string passthrough are removed.
+   Without RDKit or when RDKit rejects an input, conversion returns failure;
+   explicit formula input remains core behavior.
+
+Chemistry verification:
+
+- Core environment (RDKit absent): `tests/test_chem.py` → 69 passed, 1 skipped;
+  the skipped test is the actual RDKit-enabled conversion test. Simulated
+  no-RDKit tests prove `CO` does not become formula `CO`, and formula input still
+  works.
+- RDKit environment: `uv sync --extra dev --extra chem` installed RDKit 2026.3.5;
+  `pytest tests/test_chem.py` → **70 passed**. Actual RDKit resolves `CO` to
+  `CH4O` (methanol), `CCO` to `C2H6O`, and rejects malformed SMILES.
+- Installed core wheel MCP smoke: explicit glucose formula returns 180.0634 Da;
+  malformed `C6H12O6!` returns an error; `CO` with `is_smiles=True` fails closed;
+  the corrected multiply-charged and sodium-exchange adduct shifts match; all
+  15 tools initialize and the full ingest/QC/search/provenance/errors workflow
+  remains healthy.
+- Installed wheel with `[chem]` MCP smoke: RDKit 2026.9.1 resolves `CO` to
+  `CH4O`; explicit formulas and adduct values also pass. The sdist core install
+  separately completed the same MCP chemistry checks, with RDKit and `massflow`
+  absent.
+
 ## Deferred, not shipped
 
 - #61 optional MS-Numpress decoding: remains optional; core mzML behavior is
@@ -110,12 +154,14 @@ Run in the isolated candidate worktree with its own `.venv`:
 
 | Gate | Command | Result |
 |---|---|---|
-| Format/lint/types | `make lint` | PASS — 91 files formatted; ruff, mypy, basedpyright clean |
-| Unit/integration | `make test` | PASS — 741 passed, 17 skipped, 1 deselected |
-| Evaluation notebook | `make eval` | PASS — 119/120 cases passed, 1 expected skip (DreaMS weights); 5.60 s |
+| Format/lint/types | `make lint` | PASS — 92 files formatted; ruff, mypy (69 files), basedpyright clean |
+| Unit/integration | `make test` | PASS — 752 passed, 18 skipped, 1 deselected |
+| Evaluation notebook | `make eval` | PASS — 119/120 cases passed, 1 expected skip (DreaMS weights); 5.59 s |
 
-Skips are the optional imaging backend (not installed) and `scipy` for an
-optional Spearman reference. Neither is core.
+Core-environment skips include the optional RDKit conversion test, imaging
+backend tests and `scipy` for an optional Spearman reference. Actual RDKit
+behavior is independently covered by the optional-chem run above; none is a core
+dependency.
 
 ## Distribution qualification
 
@@ -123,8 +169,8 @@ Built from the candidate:
 
 | Artifact | SHA-256 |
 |---|---|
-| `msmcp-1.0.2-py3-none-any.whl` | `dd1a26a1e5598e0467de1fe24f5b7cf9fcef978ea28bdac5372d5f4314f05563` |
-| `msmcp-1.0.2.tar.gz` | `c7af4e5617be91920f19fcbec93ca43fa37a7e8bc1c2fcc6cefa57825f92880a` |
+| `msmcp-1.0.2-py3-none-any.whl` | `95460d9b58278816e7547846533908f90e01f16afaca86893469356f0635f1d0` |
+| `msmcp-1.0.2.tar.gz` | `dcc7cba107ff683d04d7c92e7af749e2860062190c20c43790f738be632acdd4` |
 
 Verified independently for wheel and sdist:
 
@@ -132,7 +178,8 @@ Verified independently for wheel and sdist:
 - `msmcp==1.0.2` installed; `massflow` **not** installed.
 - Core install resolves `mcp 2.3.0`, `numpy 2.5.4`, `pydantic 2.14.1`.
 - `msmcp` entry point starts with `MSMCP-MassFlow-Adapter v1.0.2`.
-- Wheel metadata lists `massflow` only under the `imaging` extra.
+- Wheel metadata lists `massflow` only under the `imaging` extra and `rdkit`
+  only under `chem`.
 - `uv sync` / `uv run msmcp` from a source checkout remains the documented path
   until the package is published.
 
