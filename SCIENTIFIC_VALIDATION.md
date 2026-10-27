@@ -10,8 +10,10 @@ Owner: scientific validation. Audience: maintainers and the analytical-chemist
 reviewer. Scope: the capabilities MSMCP ships today; it does not describe
 planned work except where a gap is a release blocker.
 
-Last updated: 2026-10-14. Applies to `main` plus the corrected isotope
-implementation under review in PR #50.
+Last updated: 2026-10-18. This document records the evidence for current
+capabilities and historical search behavior. The accompanying search-significance
+withdrawal removes production p/q reporting and filtering; §6's decoy findings
+remain evidence against restoring an error-rate claim.
 
 ---
 
@@ -58,7 +60,7 @@ implementation under review in PR #50.
 | 2 | Exact mass & isotopes | Monoisotopic mass, M+1/M+2 envelope | **VALIDATED** (algorithm); constants cited | Analytical reference (independent table + exact expansion) |
 | 2b | Adduct shifts | Exact Δ per ionisation pathway | **VALIDATED** | Analytical reference (CODATA constants) |
 | 3 | Similarity & library search | Ground-truth recovery of the correct library entry | **PARTIAL** | Independent matchms comparison + pinned MassBank recovery (§5) |
-| 4 | Statistical significance | Calibrated p/q-value under the decoy null | **NOT VALIDATED** *(known optimistic)* | Internal measurement; see §6 |
+| 4 | Search significance | No calibrated p/q-value or FDR claim is shipped; legacy decoy findings remain unvalidated | **NOT VALIDATED — not used in production** | Internal counter-evidence; see §6 |
 | 5 | MCP protocol integration | JSON-RPC session, tool surface, provenance plumbing | **PARTIAL** | Analytical reference (real stdio session) |
 
 **Scope discipline.** A validation result is only as broad as the evidence behind
@@ -306,10 +308,11 @@ results and the full limitation list are in `VALIDATION_SIMILARITY.md`.
 false-discovery rate for the ranked hits — i.e. the fraction of hits above it
 expected to be false — under a null model of a non-matching spectrum.
 
-**What is implemented.** `msmcp/models/null_model.py` fits a generalised Pareto
-upper tail (peaks-over-threshold, method of moments) to a decoy score sample,
-so p-values are no longer floored by the decoy sample size. q-values apply a
-Benjamini–Hochberg factor across the library size *m*.
+**Historical implementation.** The former production search fitted a
+generalised Pareto upper tail (peaks-over-threshold, method of moments) to a
+decoy score sample and applied Benjamini–Hochberg q-values for large libraries.
+The fitting/decoy helpers remain for offline investigation, but production search
+now ranks candidates by similarity only and does not report or filter on p/q-values.
 
 **Existing evidence.** `tests/test_null_model.py` and the invariants in
 `tests/test_scoring.py` check *internal* consistency (the fit round-trips its own
@@ -332,9 +335,10 @@ This is why the model must **not** be shrunk opportunistically: preferring the
 exponential would certify hits on a tail the decoy sample directly refutes — a
 false positive, the worse error for a scientific tool.
 
-**Status: NOT VALIDATED.** The claim that q-values are calibrated is currently
-**unsupported**, and there is positive evidence of optimism at the extreme. Do
-not describe this model as validated.
+**Status: NOT VALIDATED.** The former claim that q-values are calibrated is
+unsupported, with positive evidence of optimism at the extreme. The production
+claim has been withdrawn; do not describe this model as validated or use the
+legacy utilities as evidence of calibration.
 
 ### 6.1 Assumptions that must be tested empirically
 
@@ -350,7 +354,7 @@ not describe this model as validated.
 5. **The BH factor over full library size *m*** is the right multiplicity
    correction for a search that also ranks.
 
-### 6.2 Empirical evidence required before changing the model (issue #51)
+### 6.2 Evidence required before restoring any error-rate claim (issues #12/#51)
 
 * **Realistic decoy score distributions** — decoys that share m/z with targets
   (e.g. shuffled-intensity or shifted-mass decoys on a real library, as in
@@ -363,14 +367,15 @@ not describe this model as validated.
 * **Any adopted model must track held-out empirical counts across the upper
   range**, per #51's acceptance criteria. Do not adopt a lighter tail to make the
   floor vanish.
-* **Reported uncertainties.** Until this is done, the report should state the
-  model is *estimated*, name its parameters, and state the smallest attainable q
-  (it already does the latter).
+* **Reported uncertainties.** If a future method is proposed, reports must name
+  its assumptions and parameters, disclose uncertainty, and be evaluated on
+  independent held-out identities and acquisition batches before release.
 
 **Datasets / provenance.** Real (or realistically simulated) decoy distributions
 derived from a pinned public library (§5). Same provenance requirements.
 
-**Status: NOT VALIDATED — release blocker for the library reader (#12/#51).**
+**Status: NOT VALIDATED — blocker for restoring statistical significance, not
+for the explicitly similarity-only candidate-ranking interface.**
 
 ---
 
@@ -440,9 +445,10 @@ code regression does.
 ## 9. The three highest-value validation gaps
 
 1. **The search null is not calibrated (Capability 4, #12/#51).** It is the only
-   capability with *counter-evidence*, and it blocks the library reader. The
-   next action is data, not code: obtain realistic decoy distributions and
-   measure fitted-vs-held-out empirical survival across the upper range.
+   capability with *counter-evidence*. Production search does not make a
+   significance claim; restoring one requires independently confirmed identities,
+   separated calibration/evaluation compounds and acquisition batches, and
+   prespecified error-rate criteria with uncertainty.
 2. **Similarity and library search are only partially validated (Capability 3,
    #54).** The matchms comparison and pinned MassBank recovery now exist
    (`VALIDATION_SIMILARITY.md`); still missing are other ion modes/instruments,

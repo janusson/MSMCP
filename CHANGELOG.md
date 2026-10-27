@@ -34,6 +34,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   invalid real query before dispatch. Raw file ingestion is unchanged: signed
   baseline-corrected data is not clipped and cannot be passed to these cosine
   scorers without an explicit upstream transform.
+- **Withdraw unvalidated search significance claims.** `search_library` now
+  returns similarity-ranked candidates for every library size, with no decoy
+  sampling, p/q-value output, or significance filtering. Reports, repeat-poll
+  digests and provenance disclose the uncalibrated status. The summary now uses
+  null significance/threshold fields and `n_hits` counts ranked candidates;
+  clients relying on the old p/q columns must adapt. Decoy utilities remain for
+  offline research only. See `VALIDATION_SIGNIFICANCE.md` and the updated
+  `SCIENTIFIC_VALIDATION.md` for the evidence and restoration criteria.
 
 ### Added
 
