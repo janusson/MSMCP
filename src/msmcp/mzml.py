@@ -65,6 +65,9 @@ _ACC_NO_COMPRESSION = "MS:1000576"
 _ACC_MS_LEVEL = "MS:1000511"
 _ACC_SCAN_START_TIME = "MS:1000016"
 _ACC_SELECTED_ION_MZ = "MS:1000744"
+_ACC_CHARGE_STATE = "MS:1000041"
+_ACC_ISOLATION_WINDOW_LOWER = "MS:1000828"
+_ACC_ISOLATION_WINDOW_UPPER = "MS:1000829"
 _ACC_POSITIVE_SCAN = "MS:1000130"
 _ACC_NEGATIVE_SCAN = "MS:1000129"
 _ACC_CENTROID_SPECTRUM = "MS:1000127"
@@ -117,6 +120,12 @@ class Spectrum:
     spectrum that carries neither the positive- nor the negative-scan cvParam),
     so a tool never has to invent one.
     """
+    charge: int | None = None
+    """Stated precursor charge magnitude, when the source declares one."""
+
+    isolation_window: float | None = None
+    """Stated precursor isolation-window width in m/z, when declared."""
+
     retention_time_source_value: float | None = None
     retention_time_source_unit_accession: str | None = None
     retention_time_source_unit_name: str | None = None
@@ -460,6 +469,56 @@ def _extract_scan_start_time(elem: ET.Element) -> _ScanStartTime | None:
     return None
 
 
+def _extract_selected_ion(elem: ET.Element) -> tuple[float | None, int | None]:
+    """Return the selected-ion m/z and charge magnitude, when declared."""
+    for precursor in elem:
+        if _local(precursor.tag) != "precursor":
+            continue
+        for selected_ion_list in precursor:
+            if _local(selected_ion_list.tag) != "selectedIonList":
+                continue
+            for selected_ion in selected_ion_list:
+                if _local(selected_ion.tag) != "selectedIon":
+                    continue
+                mz: float | None = None
+                charge: int | None = None
+                for cv in selected_ion:
+                    if _local(cv.tag) != "cvParam":
+                        continue
+                    if cv.get("accession") == _ACC_SELECTED_ION_MZ:
+                        mz = _to_float_or_none(cv.get("value"))
+                    elif cv.get("accession") == _ACC_CHARGE_STATE:
+                        raw_charge = _to_int_or_none(cv.get("value"))
+                        if raw_charge is not None:
+                            charge = abs(raw_charge)
+                if mz is not None or charge is not None:
+                    return mz, charge
+    return None, None
+
+
+def _extract_isolation_window(elem: ET.Element) -> float | None:
+    """Return the stated isolation-window width (m/z), or ``None``."""
+    for precursor in elem:
+        if _local(precursor.tag) != "precursor":
+            continue
+        for window in precursor:
+            if _local(window.tag) != "isolationWindow":
+                continue
+            lower: float | None = None
+            upper: float | None = None
+            for cv in window:
+                if _local(cv.tag) != "cvParam":
+                    continue
+                if cv.get("accession") == _ACC_ISOLATION_WINDOW_LOWER:
+                    lower = _to_float_or_none(cv.get("value"))
+                elif cv.get("accession") == _ACC_ISOLATION_WINDOW_UPPER:
+                    upper = _to_float_or_none(cv.get("value"))
+            if lower is not None and upper is not None:
+                width = lower + upper
+                return width if math.isfinite(width) and width > 0.0 else None
+    return None
+
+
 def _extract_precursor_mz(elem: ET.Element) -> float | None:
     for precursor in elem:
         if _local(precursor.tag) != "precursor":
@@ -485,6 +544,8 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
     retention_time: float | None = None
     scan_time: _ScanStartTime | None = None
     precursor_mz: float | None = None
+    precursor_charge: int | None = None
+    isolation_window: float | None = None
     polarity: str | None = None
     representations: set[str] = set()
 
@@ -504,7 +565,10 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
             scan_time = _extract_scan_start_time(child)
             retention_time = scan_time.minutes if scan_time is not None else None
         elif tag == "precursorList":
-            precursor_mz = _extract_precursor_mz(child)
+            precursor_mz, precursor_charge = _extract_selected_ion(child)
+            if precursor_mz is None:
+                precursor_mz = _extract_precursor_mz(child)
+            isolation_window = _extract_isolation_window(child)
 
     binary_data_array_list = _child(elem, "binaryDataArrayList")
     if binary_data_array_list is None:
@@ -547,6 +611,8 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
         mz=mz,
         intensity=intensity,
         polarity=polarity,
+        charge=precursor_charge,
+        isolation_window=isolation_window,
         retention_time_source_value=(
             scan_time.source_value if scan_time is not None else None
         ),

@@ -297,6 +297,37 @@ def valid_mzml(tmp_path: Path) -> Path:
 
 
 @pytest.fixture()
+def ms2_query_mzml(tmp_path: Path) -> Path:
+    """A well-formed MS2 query file with stated precursors and ion modes."""
+    path = tmp_path / "ms2_query.mzML"
+    spectra: list[dict[str, Any]] = [
+        {
+            "mz": [100.0, 200.0, 300.0],
+            "intensity": [10.0, 20.0, 30.0],
+            "ms_level": 2,
+            "precursor_mz": 300.0,
+            "polarity": "positive",
+        },
+        {
+            "mz": [101.0, 201.0],
+            "intensity": [5.0, 5.0],
+            "ms_level": 2,
+            "precursor_mz": 200.0,
+            "polarity": "positive",
+        },
+        {
+            "mz": [102.0, 202.0, 302.0, 402.0],
+            "intensity": [1.0, 2.0, 3.0, 4.0],
+            "ms_level": 2,
+            "precursor_mz": 400.0,
+            "polarity": "positive",
+        },
+    ]
+    path.write_text(_mzml_xml(spectra), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
 def mzml_with_representation_metadata(tmp_path: Path) -> Path:
     """Centroid, profile and unknown representations in three spectra."""
     path = tmp_path / "representations.mzML"
