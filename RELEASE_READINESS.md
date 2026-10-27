@@ -314,7 +314,8 @@ site merge. Those are explicit approvals, not follow-up work performed here.
 ## Draft review artefacts
 
 - MSMCP draft PR: https://github.com/janusson/MSMCP/pull/82
-  - CI run 40430031270: `gate` passed in 1m06s
+  - Final chemistry/package-change gate run `40439225870`: passed in 55s.
+  - Current branch head and live check status are recorded in the PR.
 - Site draft PR: https://github.com/janusson/msmcp-site/pull/3
   - CI run 40430041353: `Gate` passed (16s), `Build` passed (21s), `Deploy`
     skipped as designed for a pull request
