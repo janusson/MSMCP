@@ -224,9 +224,14 @@ You should get a **REAL LIBRARY — READ FROM DISK** banner with caffeine ranked
 first by similarity. This fabricated example demonstrates mechanics only; search
 significance is uncalibrated and the result is not a compound identification:
 
-| Rank | Compound | Score  | Precursor m/z | Formula   |
-|------|----------|--------|---------------|-----------|
-| 1    | Caffeine | 1.0000 | 195.0877      | C8H10N4O2 |
+| Rank | Compound | Score  | Precursor m/z | Formula   | Context |
+|------|----------|--------|---------------|-----------|---------|
+| 1    | Caffeine | 1.0000 | 195.0877      | C8H10N4O2 | matched |
+
+The query is MS2 with precursor m/z 195.0877 and positive polarity, so the
+declared precursor tolerance is applied and the record is context-matched. An
+MS1 query, or an MS2 query whose precursor conflicts with the reference, is not
+reported as a library match.
 
 `uv` is the canonical tool — every command runs through it:
 
@@ -362,7 +367,7 @@ Fifteen tools are exposed to the model: compact Markdown (or a single sentence) 
 | `validate_precursor` | `tools/similarity.py` | Mass-error gate at the instrument class's precursor tolerance (5.0 ppm for the default `generic` class) |
 | `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference). The matching window comes from `ms2_tolerance`, or the instrument class when it is unset |
 | `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file, using the instrument class's diagnostic-ion window and SNR bands |
-| `search_library` | `tools/search.py` | Asynchronous similarity-ranked library search (job executor; classical or real-embedding scoring). MSP/NIST text and MGF libraries are read from disk through the security boundary; unsupported formats use a labelled synthetic fallback. Statistical significance is uncalibrated: production search applies no significance filter and reports no p-values or q-values. The **query** is always real data.
+| `search_library` | `tools/search.py` | Asynchronous similarity-ranked library search (job executor; classical or real-embedding scoring). MSP/NIST text and MGF libraries are read from disk through the security boundary; unsupported formats use a labelled synthetic fallback. The **query** is always real data. MS1/non-MS2 queries are refused; for MS2 queries the stated precursor, polarity, charge and adduct are checked before ranking, and only the tolerance actually applied is recorded. Candidates missing a field stay ranked but are labelled *unknown*. Statistical significance is uncalibrated: production search applies no significance filter and reports no p-values or q-values.
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID. The report is delivered once; later polls return a short digest, and `full_report=True` re-requests it |
 | `cancel_search` | `tools/search.py` | Cancel a pending or running search job |
 
@@ -374,7 +379,9 @@ Several tools apply an experimental threshold: `validate_precursor`'s precursor
 gate, `compute_cosine`'s and `search_library`'s m/z matching window, and
 `generate_qc_summary`'s diagnostic-ion window and SNR bands. Each is resolved
 from the `instrument_class` argument (default `generic`), which names a
-documented profile in `src/msmcp/instruments.py`. Search has no significance
+documented profile in `src/msmcp/instruments.py`. For `search_library`, the
+precursor gate is applied only when the query is MS2 and states a precursor;
+the report and provenance say whether it was applied. Search has no significance
 threshold; historical profile values are metadata only and are not applied:
 
 | Class | Precursor gate | MS2 / diagnostic-ion window | SNR bands |
@@ -396,7 +403,9 @@ The class and the values actually applied are always stated in the result: in
 the report body for `validate_precursor`, `compute_cosine` and
 `generate_qc_summary`, and in `Provenance.parameters` for `search_library`. An
 explicit `ms2_tolerance` on `compute_cosine` overrides the class default, and
-the response says which source the window came from. These are documented
+the response says which source the window came from. MSMCP parses stated MS
+level, precursor m/z, polarity, charge and isolation window from mzML/MGF, but
+it does not invent missing acquisition parameters. These are documented
 conventions, not measured acquisition parameters — MSMCP does not yet parse
 instrument model, resolution or calibration from a file (see *Known
 limitations & roadmap*) — so the class is the assumption a result was produced
@@ -471,7 +480,7 @@ Every significant object MSMCP derives carries a structured, immutable provenanc
                "size_bytes": 84213, "digest": "sha256:5b1f…"}],
   "parents": ["ptr:spectrum:9f3c…"],
   "model": null,
-  "software": {"name": "msmcp", "versions": {"python": "3.13.7", "msmcp": "1.0.0", "numpy": "2.3.4"}}
+  "software": {"name": "msmcp", "versions": {"python": "3.13.7", "msmcp": "1.0.2", "numpy": "2.3.4"}}
 }
 ```
 

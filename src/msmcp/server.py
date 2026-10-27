@@ -31,8 +31,8 @@ logger = logging.getLogger("msmcp")
 # ---------------------------------------------------------------------------
 # Resolved from the installed distribution, for which pyproject.toml is the
 # authority.  Everything that reports or logs a version reads this one value:
-# a second literal here is how the advertised version (1.0.0) and the startup
-# log line ("v0.1.0") drifted apart.
+# a second literal here is how the advertised version and the startup log
+# line ("v0.1.0") drifted apart in an earlier release.
 SERVER_VERSION: str = package_version("msmcp") or "0.0.0+unknown"
 
 # ---------------------------------------------------------------------------

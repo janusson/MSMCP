@@ -20,6 +20,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Gate library candidates on query acquisition context (#79).** Search now
+  carries the query's MS level, precursor m/z, polarity, charge and isolation
+  window into the request and report. An MS1 or non-MS2 query is refused rather
+  than scored as MS/MS evidence. For an MS2 query with a stated precursor, the
+  declared instrument-class precursor tolerance is applied before ranking, and
+  records whose stated polarity, charge or adduct conflicts are excluded.
+  Records that omit context remain ranked but are labelled *unknown*; a direct
+  peak-list query is reported as fragment-only exploratory. Reports and
+  provenance record eligibility counts, exclusion reasons, and only the
+  tolerance actually applied. These are software-contract checks, not an
+  identification-accuracy or FDR validation.
 - **Apply the per-request spectrum budget to indexed reads.** `load_spectrum`
   and file-based `search_library` now reject indices that would require scanning
   beyond `MSMCP_MAX_SPECTRA`, before opening/iterating the source. The MCP schema
@@ -28,6 +39,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `MSMCP_MAX_SPECTRA` without recounting the full source. When the ceiling is
   reached, the report says complete acquisition coverage is unconfirmed and
   labels TIC as applying only to the analysed spectra.
+- **Parse stated precursor charge and isolation window.** The mzML reader
+  carries `MS:1000041` charge state and the isolation-window offsets when the
+  file states them; MGF carries `CHARGE`. Missing values stay `None` and are
+  never inferred.
 - **Reject spectra outside cosine's numeric domain.** Classical and embedding
   scorers now reject non-finite m/z/intensity values and negative intensities;
   `compute_cosine` validates inline inputs, and `search_library` rejects an
