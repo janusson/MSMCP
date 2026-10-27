@@ -243,7 +243,10 @@ Repository `janusson/msmcp-site`, reconciled branch `release/site-1.0.2`:
    identification or FDR procedure. Context gating depends on metadata the source
    declares; missing context is labelled unknown rather than inferred.
 5. **Optional capabilities.** imzML, real embedding weights, remote transport and
-   durable jobs are not qualified by this candidate.
+   durable jobs are not qualified by this candidate. GitHub Dependabot alerts on
+   the default branch include advisories in optional-extras chains (`rdkit`/
+   `torch`/`massflow`); the core installed wheel has none of those packages. The
+   candidate does not claim a dependency-security audit beyond the core install.
 6. **Website deploy trigger.** Merging the site branch to `main` triggers the
    existing Pages workflow by design; do not merge until the owner approves the
    deployment.
@@ -259,6 +262,15 @@ gate.
 **NO-GO for publishing or deployment** until the owner (a) approves the
 integration PRs, (b) creates the PyPI pending publisher, and (c) authorises the
 site merge. Those are explicit approvals, not follow-up work performed here.
+
+## Draft review artefacts
+
+- MSMCP draft PR: https://github.com/janusson/MSMCP/pull/82
+  - CI run 40430031270: `gate` passed in 1m06s
+- Site draft PR: https://github.com/janusson/msmcp-site/pull/3
+  - CI run 40430041353: `Gate` passed (16s), `Build` passed (21s), `Deploy`
+    skipped as designed for a pull request
+- Site deployment checklist: `SITE_DEPLOYMENT_CHECKLIST.md` on the site branch
 
 ## Stop point
 
