@@ -45,6 +45,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Add `CITATION.cff` with author, repository, website and MIT license metadata.
+  It asks users to cite the exact release tag or commit and does not invent a DOI.
+
 - **`list_spectra` — a discovery step before loading or searching.** The new
   read-only tool indexes a file's spectra (index, MS level, retention time,
   precursor m/z, peak count) behind an optional MS-level and minimum-peak
