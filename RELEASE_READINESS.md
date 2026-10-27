@@ -156,7 +156,7 @@ Run in the isolated candidate worktree with its own `.venv`:
 |---|---|---|
 | Format/lint/types | `make lint` | PASS — 92 files formatted; ruff, mypy (69 files), basedpyright clean |
 | Unit/integration | `make test` | PASS — 752 passed, 18 skipped, 1 deselected |
-| Evaluation notebook | `make eval` | PASS — 119/120 cases passed, 1 expected skip (DreaMS weights); 5.59 s |
+| Evaluation notebook | `make eval` | PASS — 119/120 cases passed, 1 expected skip (DreaMS weights); 5.55 s |
 
 Core-environment skips include the optional RDKit conversion test, imaging
 backend tests and `scipy` for an optional Spearman reference. Actual RDKit
@@ -170,7 +170,7 @@ Built from the candidate:
 | Artifact | SHA-256 |
 |---|---|
 | `msmcp-1.0.2-py3-none-any.whl` | `95460d9b58278816e7547846533908f90e01f16afaca86893469356f0635f1d0` |
-| `msmcp-1.0.2.tar.gz` | `dcc7cba107ff683d04d7c92e7af749e2860062190c20c43790f738be632acdd4` |
+| `msmcp-1.0.2.tar.gz` | `4409864b5b8f68ccbb35d3d1b27018347e256230e837914cf51fc9a667def561` |
 
 Verified independently for wheel and sdist:
 
@@ -179,7 +179,8 @@ Verified independently for wheel and sdist:
 - Core install resolves `mcp 2.3.0`, `numpy 2.5.4`, `pydantic 2.14.1`.
 - `msmcp` entry point starts with `MSMCP-MassFlow-Adapter v1.0.2`.
 - Wheel metadata lists `massflow` only under the `imaging` extra and `rdkit`
-  only under `chem`.
+  only under `chem`. The candidate-only `RELEASE_READINESS.md` is excluded from
+  the sdist and is not shipped as user documentation.
 - `uv sync` / `uv run msmcp` from a source checkout remains the documented path
   until the package is published.
 
