@@ -846,7 +846,7 @@ def test_similarity_only_search_over_stdio(tmp_path: Path) -> None:
         assert "| p-value" not in report.lower()
         assert "| fdr (q-value) |" not in report.lower()
         assert "significance filter applied" in report
-        assert "ion mode: positive" in report
+        assert "ion mode positive" in report
         assert "Polarity" in report
     finally:
         host.close()
