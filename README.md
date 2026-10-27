@@ -242,6 +242,29 @@ The `Makefile` wraps these into one pipeline: `make lint`, `make test`, `make ev
 
 Re-run `uv sync --extra dev` after changing `pyproject.toml`. The optional `repomix` pack (Node-based) is run as `repomix --style xml --output repomix-output.xml`.
 
+## Container image (pre-release packaging)
+
+The repository includes a minimal `Dockerfile` for local packaging checks. It
+uses the committed `uv.lock` with `uv sync --frozen`, keeps the server on its
+stdio transport, and does not add a network service or runtime credentials:
+
+```bash
+docker build -t msmcp:local .
+docker run --rm -i \
+  -e MSMCP_ALLOWED_ROOT=/data \
+  -v "$PWD/examples:/data:ro" \
+  msmcp:local
+```
+
+When using the worked example above with this container, ask MSMCP to load
+`/data/caffeine_spectrum.mgf` and search it against
+`/data/caffeine_library.msp`; the container sees the mounted directory at
+`/data`, not at the checkout's `examples/` path.
+
+This image is a reproducible container starting point, not a published release
+or registry entry. Package publication, registry metadata, and release signing
+remain separate work under issue #19.
+
 ## Scientific validation
 
 MSMCP keeps its *scientific* claims, its software tests and its identification confidence as separate things, and documents the evidence for each:
@@ -517,6 +540,7 @@ user- and agent-facing story.
 - **MCP Tasks are not dispatchable by the installed SDK**: `mcp` 2.1.1 ships the Tasks types but omits `tasks/get`, `tasks/result` and `tasks/cancel` from its request unions, so no server can answer them. MSMCP keeps its snapshots in the MCP `Task` shape and exposes the semantics through `check_search_status` instead of inventing a protocol.
 - **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself without MassFlow. `.imzML` requires the optional imaging extra. Vendor formats are refused with conversion guidance.
 - **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 awaits a public weights release; its adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
+(`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
 - **Whole-slide images**: MassFlow materialises one placeholder per pixel when loading an imzML acquisition, so very large images are bounded by MassFlow's own behaviour.
 - **MS-Numpress-compressed mzML arrays** need the optional `pynumpress` package and report a missing-dependency error without it.
 - **Hardware control is out of scope for this repository, not just for v1.0.** Direct instrument control, actuation and the safety interlock layer that must precede them belong to a **different project**. MSMCP is a data and computation interface; the MCP application layer must never be the only barrier between a model and physical hardware. There is no instrument-control code here and none will be added.
