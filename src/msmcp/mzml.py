@@ -67,6 +67,8 @@ _ACC_SCAN_START_TIME = "MS:1000016"
 _ACC_SELECTED_ION_MZ = "MS:1000744"
 _ACC_POSITIVE_SCAN = "MS:1000130"
 _ACC_NEGATIVE_SCAN = "MS:1000129"
+_ACC_CENTROID_SPECTRUM = "MS:1000127"
+_ACC_PROFILE_SPECTRUM = "MS:1000128"
 
 _SCAN_TIME_UNITS = {
     "UO:0000010": "second",
@@ -118,6 +120,13 @@ class Spectrum:
     retention_time_source_value: float | None = None
     retention_time_source_unit_accession: str | None = None
     retention_time_source_unit_name: str | None = None
+
+    representation: str | None = None
+    """``"centroid"`` or ``"profile"`` when stated by the spectrum CV terms."""
+
+    native_id: str | None = None
+    """Exact mzML spectrum/@id; never inferred from index or ordinal."""
+    source_warnings: tuple[str, ...] = ()
 
     @property
     def tic(self) -> float:
@@ -477,6 +486,7 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
     scan_time: _ScanStartTime | None = None
     precursor_mz: float | None = None
     polarity: str | None = None
+    representations: set[str] = set()
 
     for child in elem:
         tag = _local(child.tag)
@@ -486,6 +496,10 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
             polarity = "positive"
         elif tag == "cvParam" and child.get("accession") == _ACC_NEGATIVE_SCAN:
             polarity = "negative"
+        elif tag == "cvParam" and child.get("accession") == _ACC_CENTROID_SPECTRUM:
+            representations.add("centroid")
+        elif tag == "cvParam" and child.get("accession") == _ACC_PROFILE_SPECTRUM:
+            representations.add("profile")
         elif tag == "scanList":
             scan_time = _extract_scan_start_time(child)
             retention_time = scan_time.minutes if scan_time is not None else None
@@ -522,6 +536,11 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
 
     return Spectrum(
         index=index,
+        native_id=elem.get("id"),
+        source_warnings=("declared_array_length_mismatch",)
+        if declared_length is not None
+        and (mz.size != declared_length or intensity.size != declared_length)
+        else (),
         ms_level=ms_level,
         retention_time=retention_time,
         precursor_mz=precursor_mz,
@@ -537,6 +556,9 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
         retention_time_source_unit_name=(
             scan_time.source_unit_name if scan_time is not None else None
         ),
+        representation=next(iter(representations))
+        if len(representations) == 1
+        else None,
     )
 
 
