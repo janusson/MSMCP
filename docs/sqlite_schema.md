@@ -39,6 +39,7 @@ from pathlib import Path
 from msmcp.security import SecurityPolicy
 from msmcp.library import get_library_provider
 
+
 def build_sqlite_store(input_text_library: Path, output_sqlite_db: Path) -> None:
     # 1. Create the database and schema
     conn = sqlite3.connect(output_sqlite_db)
@@ -98,18 +99,17 @@ def build_sqlite_store(input_text_library: Path, output_sqlite_db: Path) -> None
                         spectrum.precursor_mz,
                         spectrum.formula,
                         polarity_int,
-                        metadata_json
-                    )
+                        metadata_json,
+                    ),
                 )
 
                 # Insert peaks
                 peak_rows = [
-                    (spectrum.index, mz, intensity)
-                    for mz, intensity in spectrum.peaks
+                    (spectrum.index, mz, intensity) for mz, intensity in spectrum.peaks
                 ]
                 cursor.executemany(
                     "INSERT INTO peaks (spectrum_id, mz, intensity) VALUES (?, ?, ?)",
-                    peak_rows
+                    peak_rows,
                 )
         conn.commit()
     except Exception:
@@ -117,6 +117,7 @@ def build_sqlite_store(input_text_library: Path, output_sqlite_db: Path) -> None
         raise
     finally:
         conn.close()
+
 
 if __name__ == "__main__":
     # Example usage:
