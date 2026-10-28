@@ -712,6 +712,95 @@ class TestQuerySpectrumSelection:
         monkeypatch.setattr(search, "_run_scan", capture)
         return seen
 
+    def test_search_provenance_records_library_info(self) -> None:
+        from msmcp.instruments import InstrumentProfile, Tolerance
+        from msmcp.library import LibraryInfo
+        from msmcp.tools.search import SearchRequest, _search_provenance
+
+        request = SearchRequest(
+            database_file="/allowed/lib.sqlite",
+            experimental_peaks=((100.0, 1.0),),
+            scoring_method="classical",
+            chunk_size=2000,
+            experimental_file="/allowed/query.mzML",
+        )
+        library_info = LibraryInfo(
+            path="/allowed/lib.sqlite",
+            name="lib.sqlite",
+            format="SQLite",
+            version="SQLite peak store",
+            n_spectra=50,
+            digest="sha256:12345",
+            size_bytes=1000,
+        )
+        profile = InstrumentProfile(
+            instrument_class="generic",
+            ms2_tolerance_da=0.01,
+            precursor_tolerance=Tolerance(value=5.0, unit="ppm"),
+            diagnostic_ion_tolerance_da=0.01,
+            snr_low=5.0,
+            snr_high=20.0,
+            fdr_threshold=0.05,
+            small_library_threshold=500,
+            provenance="test",
+        )
+
+        prov = _search_provenance(
+            request=request,
+            n_spectra=50,
+            n_query_peaks=1,
+            library_info=library_info,
+            profile=profile,
+            null_fit=None,
+            n_null=0,
+            use_fdr=False,
+        )
+
+        # Verify the library fields are present in the parameters dictionary
+        params = prov.parameters
+        assert params["library_path"] == "/allowed/lib.sqlite"
+        assert params["library_format"] == "SQLite"
+        assert params["library_digest"] == "sha256:12345"
+
+    def test_search_provenance_handles_synthetic_library(self) -> None:
+        from msmcp.instruments import InstrumentProfile, Tolerance
+        from msmcp.tools.search import SearchRequest, _search_provenance
+
+        request = SearchRequest(
+            database_file="unknown_library",
+            experimental_peaks=((100.0, 1.0),),
+            scoring_method="classical",
+            chunk_size=2000,
+            experimental_file="/allowed/query.mzML",
+        )
+        profile = InstrumentProfile(
+            instrument_class="generic",
+            ms2_tolerance_da=0.01,
+            precursor_tolerance=Tolerance(value=5.0, unit="ppm"),
+            diagnostic_ion_tolerance_da=0.01,
+            snr_low=5.0,
+            snr_high=20.0,
+            fdr_threshold=0.05,
+            small_library_threshold=500,
+            provenance="test",
+        )
+
+        prov = _search_provenance(
+            request=request,
+            n_spectra=50,
+            n_query_peaks=1,
+            library_info=None,
+            profile=profile,
+            null_fit=None,
+            n_null=0,
+            use_fdr=False,
+        )
+
+        params = prov.parameters
+        assert params["library_path"] == "unknown_library"
+        assert params["library_format"] == "synthetic"
+        assert params["library_digest"] is None
+
     async def test_the_effective_index_reaches_the_request(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
