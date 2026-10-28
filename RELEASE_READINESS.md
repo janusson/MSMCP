@@ -3,8 +3,9 @@
 Status: **candidate ready for approval review**. No merge, tag, PyPI upload or
 website deployment has been performed. The recommendation is at the end.
 
-Prepared 2026-10-26. This document describes the integrated candidate, not a
-released version. `main` is unchanged.
+Updated 2026-10-28 after syncing the dependency and SQLite documentation PRs.
+This describes the integrated candidate; `main` is unchanged and no version is
+released.
 
 ## Candidate identity
 
@@ -56,6 +57,8 @@ Tasks dispatch, and future protocol features.
 | #75 MassFlow interoperability contract | Integrated | Reproducible opt-in probe, contract note and tests; no dependency exchange |
 | #60 documentation/packaging | Integrated | Readiness/container docs and contract tests; reconciled with the optional imaging boundary |
 | #68 citation metadata | Integrated | `CITATION.cff` |
+| #84 SQLite schema documentation | Integrated | Documents the existing read-only SQLite provider and marks the verified #2 library coverage criteria complete |
+| #65/#74/#76/#77/#78 dependency updates | Integrated | Lockfile now uses MCP 2.3.0, Pillow 13.0.0, filelock 4.2.4, opentelemetry-api 1.45.1 and setuptools 84.2.1 |
 | Issue #79 context eligibility | Implemented in this candidate | MS1 refusal, precursor/polarity/charge/adduct gate, unknown-context labelling, eligibility counts and applied-tolerance disclosure |
 
 Existing PRs are reused by integrating their commits; this candidate does not
@@ -142,9 +145,10 @@ Chemistry verification:
   through the SQLite/library work; the older PR is not needed for this candidate.
 - #66 experimental workflow demo: documentation-only; not required for the core
   release.
-- #65, #74, #76, #77, #78 dependency bumps: not release-blocking; the candidate
-  was qualified against a fresh resolution (`mcp 2.3.0`, `numpy 2.5.4`,
-  `pydantic 2.14.1`).
+- #65, #74, #76, #77, #78 dependency updates: incorporated into this candidate.
+  The candidate lock now pins versions beyond the original PR targets where the
+  resolver selected newer compatible patched releases; see the integrated changes
+  table and gate results below.
 - imzML/imaging, foundation-model inference, remote hosting and durable jobs:
   optional, unvalidated here, and not claimed as release features.
 
@@ -154,9 +158,9 @@ Run in the isolated candidate worktree with its own `.venv`:
 
 | Gate | Command | Result |
 |---|---|---|
-| Format/lint/types | `make lint` | PASS — 92 files formatted; ruff, mypy (69 files), basedpyright clean |
+| Format/lint/types | `make lint` | PASS — 93 files formatted; ruff, mypy (69 files), basedpyright clean |
 | Unit/integration | `make test` | PASS — 752 passed, 18 skipped, 1 deselected |
-| Evaluation notebook | `make eval` | PASS — 119/120 cases passed, 1 expected skip (DreaMS weights); 5.55 s |
+| Evaluation notebook | `make eval` | PASS — 119/120 cases passed, 1 expected skip (DreaMS weights); 5.31 s |
 
 Core-environment skips include the optional RDKit conversion test, imaging
 backend tests and `scipy` for an optional Spearman reference. Actual RDKit
@@ -295,7 +299,11 @@ Repository `janusson/msmcp-site`, reconciled branch `release/site-1.0.2`:
    the default branch include advisories in optional-extras chains (`rdkit`/
    `torch`/`massflow`); the core installed wheel has none of those packages. The
    candidate does not claim a dependency-security audit beyond the core install.
-6. **Website deploy trigger.** Merging the site branch to `main` triggers the
+6. **Default-branch security read-back.** GitHub reported 47 open Dependabot
+   alerts on `main`, including five critical Pillow alerts. The candidate lock now
+   includes patched versions for the existing dependency PRs. Recheck alerts on
+   `main` after an approved merge.
+7. **Website deploy trigger.** Merging the site branch to `main` triggers the
    existing Pages workflow by design; do not merge until the owner approves the
    deployment.
 
@@ -314,8 +322,9 @@ site merge. Those are explicit approvals, not follow-up work performed here.
 ## Draft review artefacts
 
 - MSMCP draft PR: https://github.com/janusson/MSMCP/pull/82
-  - Final chemistry/package-change gate run `40439225870`: passed in 55s.
-  - Current branch head and live check status are recorded in the PR.
+  - Candidate refreshed locally on 2026-10-28 with the dependency updates and #84 SQLite documentation.
+  - Local gate: `make lint` passed; `make test` 752 passed / 18 skipped / 1 deselected; `make eval` 119/120 passed with the optional DreaMS skip.
+  - The refreshed candidate commit is not yet pushed; rerun hosted CI after the authorised push.
 - Site draft PR: https://github.com/janusson/msmcp-site/pull/3
   - CI run 40430041353: `Gate` passed (16s), `Build` passed (21s), `Deploy`
     skipped as designed for a pull request

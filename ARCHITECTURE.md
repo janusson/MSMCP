@@ -441,19 +441,19 @@ conditions for restoration.
 
 ### Library format coverage (#2)
 
-- [ ] `get_library_provider` resolves `.mgf`/`.mgf.gz` and a documented local
+- [x] `get_library_provider` resolves `.mgf`/`.mgf.gz` and a documented local
       SQLite peak store, in addition to the MSP/NIST text reader.
-- [ ] Every provider crosses the same `SecurityPolicy` as an acquisition —
+- [x] Every provider crosses the same `SecurityPolicy` as an acquisition —
       allowed root with symlinks resolved, file-size limit, read-only — and is
       probed before dispatch, so a malformed library of any format is a typed
       tool error rather than a failed background job.
-- [ ] The SQLite store is opened read-only by URI (`file:...?mode=ro`), with
+- [x] The SQLite store is opened read-only by URI (`file:...?mode=ro`), with
       extension loading disabled and `ATTACH` refused. It is a binary format
       parsed by a library rather than by this project's own line reader, which
       makes it a different surface from MSP, not merely a third suffix.
-- [ ] The SQLite schema is documented in this repository, including how a user
+- [x] The SQLite schema is documented in this repository, including how a user
       builds a store from a text library.
-- [ ] Banner and provenance name what was opened, for every format: path,
+- [x] Banner and provenance name what was opened, for every format: path,
       format, spectrum count and digest.
 
 ### Acquisition context (#16)
