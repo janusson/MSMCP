@@ -76,11 +76,11 @@ class TestFullWorkflow:
         self,
         io_tools: dict[str, Callable[..., Any]],
         search_tools: dict[str, Callable[..., Awaitable[str]]],
-        valid_mzml: Path,
+        ms2_query_mzml: Path,
         data_root: Path,
     ) -> None:
         # --- 1. load a real file and get a server-side reference ------------
-        loaded = _load(io_tools, valid_mzml)
+        loaded = _load(io_tools, ms2_query_mzml)
         assert isinstance(loaded, SpectrumReferenceResult)
         assert loaded.reference.startswith("ptr:spectrum:")
         assert loaded.kind == "spectrum"
@@ -89,7 +89,7 @@ class TestFullWorkflow:
         assert loaded.n_peaks == 3
         assert loaded.tic == pytest.approx(60.0)
         assert loaded.mz_range == pytest.approx([100.0, 300.0])
-        assert loaded.ms_level == 1
+        assert loaded.ms_level == 2
         assert loaded.precursor_mz == pytest.approx(300.0)
         assert loaded.n_bytes == 3 * 8 * 2
 
@@ -98,7 +98,7 @@ class TestFullWorkflow:
         assert "mz" not in payload and "intensity" not in payload
         assert payload["provenance"]["operation"] == "load_spectrum"
         source = payload["provenance"]["sources"][0]
-        assert source["path"] == str(valid_mzml.resolve())
+        assert source["path"] == str(ms2_query_mzml.resolve())
         assert source["format"] == "mzML"
         assert source["backend"] == "msmcp.mzml"
         assert source["digest"] is not None
@@ -112,7 +112,7 @@ class TestFullWorkflow:
         assert "Provenance: load_spectrum" in summary
         assert "parent references" not in summary  # no parents for a source object
         # The provenance chain back to the file is intact.
-        assert str(valid_mzml.resolve()) in summary
+        assert str(ms2_query_mzml.resolve()) in summary
 
         # --- 4. drive a search from the reference --------------------------
         dispatched = await search_tools["search_library"](
@@ -372,14 +372,14 @@ class TestLongRunningWorkflow:
     async def test_search_exposes_an_mcp_shaped_task(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
-        valid_mzml: Path,
+        ms2_query_mzml: Path,
         data_root: Path,
     ) -> None:
         """The job handle maps onto the MCP Task shape without translation."""
         from msmcp.tools import search as search_module
 
         dispatched = await search_tools["search_library"](
-            experimental_file=str(valid_mzml),
+            experimental_file=str(ms2_query_mzml),
             database_file=LIBRARY_MZML,
             chunk_size=100,
         )
@@ -399,11 +399,11 @@ class TestLongRunningWorkflow:
     async def test_cancellation_is_terminal_and_discards_work(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
-        valid_mzml: Path,
+        ms2_query_mzml: Path,
         data_root: Path,
     ) -> None:
         dispatched = await search_tools["search_library"](
-            experimental_file=str(valid_mzml),
+            experimental_file=str(ms2_query_mzml),
             database_file=LIBRARY_MZML,
             chunk_size=100,
         )
@@ -429,12 +429,12 @@ class TestLongRunningWorkflow:
     async def test_the_database_path_is_never_opened(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],
-        valid_mzml: Path,
+        ms2_query_mzml: Path,
         data_root: Path,
     ) -> None:
         """Half-real pipeline, stated precisely: real query, synthetic library."""
         dispatched = await search_tools["search_library"](
-            experimental_file=str(valid_mzml),
+            experimental_file=str(ms2_query_mzml),
             database_file=LIBRARY_MZML,
             chunk_size=100,
         )

@@ -195,7 +195,10 @@ class TestRealLibrarySearch:
 
         assert "REAL LIBRARY" in report
         assert "SYNTHETIC LIBRARY" not in report
-        assert "No hits passed the significance threshold" in report
+        assert "No context-eligible or context-unknown library candidates." in report
+        assert "SIGNIFICANCE UNCALIBRATED" in report
+        assert outcome.summary.n_hits == 0
+        assert outcome.summary.threshold is None
         parameters = outcome.provenance.to_dict()["parameters"]
         assert parameters["library_synthetic"] is False
         assert parameters["library_spectra"] == 0
@@ -228,9 +231,15 @@ class TestLibraryPolarity:
         spectra = [s for chunk in provider.iter_spectra(10) for s in chunk]
         assert [s.polarity for s in spectra] == ["positive", "negative"]
 
-    def test_polarity_mismatch_is_flagged_not_filtered(
+    def test_polarity_mismatch_is_excluded_before_ranking(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """A stated opposite ion mode is incompatible context, not a ranking hint.
+
+        Polarity used to be reported with a warning but still ranked.  Issue #79
+        moves it into the eligibility gate: a record whose stated ion mode
+        conflicts with the query is excluded before scoring.
+        """
         from msmcp import security
 
         msp = _write_msp(tmp_path / "ground_truth.msp")
@@ -248,13 +257,12 @@ class TestLibraryPolarity:
         )
         report = outcome.report
 
-        assert "| Polarity" in report  # the column reaches the report
-        assert "positive \u26a0" in report  # caffeine's ion mode opposes the query
-        assert "opposite ion mode" in report
-        # The hit is reported, not dropped: polarity is a flag, not a filter.
-        assert "Caffeine" in report
+        assert "| Polarity" in report  # the column still reaches the report
+        assert "polarity mismatch" in report
+        assert "Caffeine" not in report
         parameters = outcome.provenance.to_dict()["parameters"]
         assert parameters["query_polarity"] == "negative"
+        assert parameters["eligibility_counts"]["excluded"] >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +296,7 @@ class TestLibrarySecurityBoundary:
     async def test_search_library_refuses_a_library_outside_the_root(
         self,
         search_tools: dict[str, SearchTool],
-        valid_mzml: Path,
+        ms2_query_mzml: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -300,7 +308,7 @@ class TestLibrarySecurityBoundary:
         allowed.mkdir()
         outside.mkdir()
         query = allowed / "query.mzML"
-        query.write_text(valid_mzml.read_text(encoding="utf-8"), encoding="utf-8")
+        query.write_text(ms2_query_mzml.read_text(encoding="utf-8"), encoding="utf-8")
         evil = _write_msp(outside / "evil.msp")
 
         policy = SecurityPolicy(allowed_root=allowed)
@@ -343,7 +351,7 @@ class TestLibraryValidatedBeforeDispatch:
     async def test_search_library_refuses_a_malformed_library_before_dispatch(
         self,
         search_tools: dict[str, SearchTool],
-        valid_mzml: Path,
+        ms2_query_mzml: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -359,7 +367,7 @@ class TestLibraryValidatedBeforeDispatch:
         root = tmp_path / "root"
         root.mkdir()
         query = root / "query.mzML"
-        query.write_text(valid_mzml.read_text(encoding="utf-8"), encoding="utf-8")
+        query.write_text(ms2_query_mzml.read_text(encoding="utf-8"), encoding="utf-8")
         # A .msp that claims five peaks and supplies one.
         bad = root / "not_really.msp"
         bad.write_text("Name: Broken\nNum Peaks: 5\n100.0 1.0\n", encoding="utf-8")
@@ -376,7 +384,7 @@ class TestLibraryValidatedBeforeDispatch:
     async def test_a_malformed_query_and_a_malformed_library_fail_the_same_way(
         self,
         search_tools: dict[str, SearchTool],
-        valid_mzml: Path,
+        ms2_query_mzml: Path,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -387,7 +395,7 @@ class TestLibraryValidatedBeforeDispatch:
         root = tmp_path / "root"
         root.mkdir()
         query = root / "query.mzML"
-        query.write_text(valid_mzml.read_text(encoding="utf-8"), encoding="utf-8")
+        query.write_text(ms2_query_mzml.read_text(encoding="utf-8"), encoding="utf-8")
         good = _write_msp(root / "good.msp")
         broken = root / "broken.msp"
         broken.write_text("Name: Broken\n100.0 1.0\nnonsense\n", encoding="utf-8")

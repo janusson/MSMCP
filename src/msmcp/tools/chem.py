@@ -15,89 +15,107 @@ logger = logging.getLogger("msmcp.tools.chem")
 # Physical constants (exact masses, Da)
 # ======================================================================
 PROTIUM_MASS = 1.00782503223  # neutral ¹H atom
-PROTON_MASS = 1.00727646688  # ¹H⁺ ion (proton)
+PROTON_MASS = 1.00727646688  # CODATA ¹H⁺ reference mass
+# Adducts below use the stated neutral-atom/signed-electron convention.
 ELECTRON_MASS = 0.00054857990907  # e⁻
 NEUTRON_MASS = 1.00866491588  # n
 
+# Neutral monoisotopic atomic masses used by the adduct table. These are kept
+# separate from ionic masses so the signed charge correction is applied once.
+_CARBON_ATOM_MASS = 12.00000000000
+_NITROGEN_ATOM_MASS = 14.00307400443
+_OXYGEN_ATOM_MASS = 15.99491461957
+_SODIUM_ATOM_MASS = 22.98976928200
+_POTASSIUM_ATOM_MASS = 38.96370648640
+_CHLORINE_ATOM_MASS = 34.96885268200
+
 # ======================================================================
-# Known adducts — delta = (adduct mass) - (neutral M mass) in Da.
-# Convention: Δ is the exact mass of the ionised adduct relative to
-# neutral M.  [M+H]+ adds the bare proton (already an ion — no electron
-# term); metal/ammonium cations are the neutral atom/molecule minus one
-# electron; neutral losses (H2O) use the neutral molecular mass.
+# Known adducts — delta = (ion mass) - (neutral M mass) in Da.
+#
+# Consistent mass convention: write the adduct as its change in neutral-atom
+# composition, then convert that composition to the stated net ionic charge by
+# subtracting z * ELECTRON_MASS (z is signed). This neglects electron binding /
+# ionisation energies, as do the tabulated exact-mass approximations here. Thus
+# [M+2H]2+ is 2*H - 2*e, never 2*(H-e) - 2*e. Anions add electron mass because
+# z is negative. Neutral losses use neutral atomic masses before charge correction.
 # ======================================================================
 _ADDUCT_DB: dict[str, dict[str, Any]] = {
     # --- positive mode -------------------------------------------------
     "[M+H]+": {
-        "shift": PROTON_MASS,
+        "shift": PROTIUM_MASS - ELECTRON_MASS,
         "charge": 1,
         "polarity": "positive",
     },
     "[M+Na]+": {
-        "shift": 22.98976928 - ELECTRON_MASS,
+        "shift": _SODIUM_ATOM_MASS - ELECTRON_MASS,
         "charge": 1,
         "polarity": "positive",
     },
     "[M+K]+": {
-        "shift": 38.96370649 - ELECTRON_MASS,
+        "shift": _POTASSIUM_ATOM_MASS - ELECTRON_MASS,
         "charge": 1,
         "polarity": "positive",
     },
     "[M+NH4]+": {
-        "shift": 14.003074004 + 4 * PROTIUM_MASS - ELECTRON_MASS,
+        "shift": _NITROGEN_ATOM_MASS + 4 * PROTIUM_MASS - ELECTRON_MASS,
         "charge": 1,
         "polarity": "positive",
     },
     "[M+H-H2O]+": {
-        "shift": PROTON_MASS - (2 * PROTIUM_MASS + 15.994914619),
+        "shift": PROTIUM_MASS - (2 * PROTIUM_MASS + _OXYGEN_ATOM_MASS) - ELECTRON_MASS,
         "charge": 1,
         "polarity": "positive",
     },
     "[M+2H]2+": {
-        "shift": 2 * PROTON_MASS - 2 * ELECTRON_MASS,
+        "shift": 2 * PROTIUM_MASS - 2 * ELECTRON_MASS,
         "charge": 2,
         "polarity": "positive",
     },
     "[M+3H]3+": {
-        "shift": 3 * PROTON_MASS - 3 * ELECTRON_MASS,
+        "shift": 3 * PROTIUM_MASS - 3 * ELECTRON_MASS,
         "charge": 3,
         "polarity": "positive",
     },
     "[M+2Na-H]+": {
-        "shift": 2 * (22.98976928 - ELECTRON_MASS) - (PROTON_MASS - ELECTRON_MASS),
+        "shift": 2 * _SODIUM_ATOM_MASS - PROTIUM_MASS - ELECTRON_MASS,
         "charge": 1,
         "polarity": "positive",
     },
     # --- negative mode -------------------------------------------------
     "[M-H]-": {
-        "shift": -PROTON_MASS,
+        "shift": -PROTIUM_MASS + ELECTRON_MASS,
         "charge": -1,
         "polarity": "negative",
     },
     "[M+Cl]-": {
-        "shift": 34.96885269 + ELECTRON_MASS,
+        "shift": _CHLORINE_ATOM_MASS + ELECTRON_MASS,
         "charge": -1,
         "polarity": "negative",
     },
     "[M+HCOO]-": {
-        "shift": (PROTIUM_MASS + 12.000000000 + 2 * 15.994914619 + ELECTRON_MASS),
+        "shift": (
+            PROTIUM_MASS + _CARBON_ATOM_MASS + 2 * _OXYGEN_ATOM_MASS + ELECTRON_MASS
+        ),
         "charge": -1,
         "polarity": "negative",
     },
     "[M+CH3COO]-": {
         "shift": (
-            2 * 12.000000000 + 3 * PROTIUM_MASS + 2 * 15.994914619 + ELECTRON_MASS
+            2 * _CARBON_ATOM_MASS
+            + 3 * PROTIUM_MASS
+            + 2 * _OXYGEN_ATOM_MASS
+            + ELECTRON_MASS
         ),
         "charge": -1,
         "polarity": "negative",
     },
     "[M-H2O-H]-": {
-        "shift": -(2 * PROTIUM_MASS + 15.994914619) - PROTON_MASS,
+        "shift": -(2 * PROTIUM_MASS + 15.994914619) - PROTIUM_MASS + ELECTRON_MASS,
         "charge": -1,
         "polarity": "negative",
     },
     "[M+Na-2H]-": {
-        "shift": ((22.98976928 - ELECTRON_MASS) - 2 * PROTON_MASS + 2 * ELECTRON_MASS),
+        "shift": _SODIUM_ATOM_MASS - 2 * PROTIUM_MASS + ELECTRON_MASS,
         "charge": -1,
         "polarity": "negative",
     },
@@ -183,15 +201,40 @@ _ELEMENT_RE = re.compile(r"([A-Z][a-z]?)(\d*)")
 
 
 def _parse_formula(formula: str) -> dict[str, int]:
-    """Parse a chemical formula string → {element: count}."""
+    """Parse a complete chemical formula string into element counts.
+
+    Every input character must belong to a formula token. Repeated element
+    symbols are permitted and their positive counts are accumulated.
+    """
     composition: dict[str, int] = {}
-    for match in _ELEMENT_RE.finditer(formula):
+    position = 0
+    while position < len(formula):
+        match = _ELEMENT_RE.match(formula, position)
+        if match is None:
+            if not composition:
+                raise ValueError(f"Could not parse any elements from '{formula}'.")
+            raise ValueError(
+                f"Malformed formula '{formula}': unexpected text at position {position}."
+            )
+
         el = match.group(1)
         count_str = match.group(2)
-        count = int(count_str) if count_str else 1
+        try:
+            count = int(count_str) if count_str else 1
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid atom count for element '{el}' in formula '{formula}'."
+            ) from exc
+        if count <= 0:
+            raise ValueError(
+                f"Atom count for element '{el}' must be a positive integer "
+                f"in formula '{formula}'."
+            )
         if el not in _ISOTOPES:
             raise ValueError(f"Unknown element '{el}' in formula '{formula}'.")
         composition[el] = composition.get(el, 0) + count
+        position = match.end()
+
     if not composition:
         raise ValueError(f"Could not parse any elements from '{formula}'.")
     return composition
@@ -276,27 +319,6 @@ def _isotope_pattern(
         mean_shift = (shift_weight[k] / wk) if wk else 0.0
         pattern.append((mono_mass + mean_shift, abund))
     return pattern
-
-
-# ======================================================================
-# Mock cheminformatics (replaces massflow.cheminformatics when absent)
-# ======================================================================
-def _mock_smiles_to_formula(smiles: str) -> str:
-    """Stub SMILES→formula converter for development.
-
-    Returns a plausible formula string for a handful of known SMILES
-    so the tool produces non-trivial output during testing.
-    """
-    _KNOWN: dict[str, str] = {
-        "CCO": "C2H6O",
-        "c1ccccc1": "C6H6",
-        "CC(=O)O": "C2H4O2",
-        "C1=CC=C(C=C1)C=O": "C7H6O",
-        "CN1C=NC2=C1C(=O)N(C(=O)N2C)C": "C8H10N4O2",  # caffeine
-        "O": "H2O",
-        "[Na+].[Cl-]": "NaCl",
-    }
-    return _KNOWN.get(smiles, smiles)  # fallback: treat as formula
 
 
 # ======================================================================
@@ -468,10 +490,10 @@ def register_tools(mcp: Any) -> None:
             formula = _smiles_to_formula(identifier)
             if formula is None:
                 return (
-                    "ERROR: RDKit is not installed and the SMILES string "
-                    "could not be resolved.\n\n"
+                    "ERROR: SMILES-to-formula conversion failed (invalid "
+                    "SMILES or RDKit unavailable).\n\n"
                     "Install the optional `chem` extra (`uv sync --extra chem`) "
-                    "to enable SMILES parsing, or compute the chemical "
+                    "to enable RDKit SMILES parsing, or compute the chemical "
                     "formula for this structure manually and resubmit using "
                     "**is_smiles=False** with the formula string as "
                     "*identifier*."
@@ -524,45 +546,35 @@ def register_tools(mcp: Any) -> None:
 # Internal helpers
 # ======================================================================
 def _smiles_to_formula(smiles: str) -> str | None:
-    """Convert SMILES → chemical formula.
+    """Convert a valid SMILES to a formula using optional RDKit only.
 
-    Tries RDKit first; falls back to a static lookup table for
-    development.  Returns ``None`` when conversion is impossible,
-    signalling the caller to instruct the LLM to compute the formula.
+    Fail closed when RDKit is unavailable, rejects the input, or fails during
+    conversion. Formula strings are accepted only through the explicit
+    ``is_smiles=False`` interface; a SMILES string is never treated as a formula.
     """
-    # -- attempt real RDKit conversion ---------------------------------
     try:
         from rdkit import Chem  # type: ignore[import-untyped]
 
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES: {smiles!r}")
+            logger.warning("RDKit rejected SMILES %r", smiles)
+            return None
 
-        # Build formula string from atomic numbers
         from collections import Counter
 
-        # RDKit Hydrogens are implicit — add them
         mol_with_h = Chem.AddHs(mol)
-        all_atoms = [atom.GetSymbol() for atom in mol_with_h.GetAtoms()]
-
-        counts = Counter(all_atoms)
-        # Hill order: C first, then H, then alphabetical
+        counts = Counter(atom.GetSymbol() for atom in mol_with_h.GetAtoms())
         hill_order = sorted(
             counts.keys(),
-            key=lambda el: (
-                0 if el == "C" else 1 if el == "H" else 2,
-                el,
-            ),
+            key=lambda el: (0 if el == "C" else 1 if el == "H" else 2, el),
         )
-        formula_str = "".join(
-            f"{el}{counts[el] if counts[el] > 1 else ''}" for el in hill_order
+        return "".join(
+            f"{element}{counts[element] if counts[element] > 1 else ''}"
+            for element in hill_order
         )
-        return formula_str
-
     except ImportError:
-        logger.info("RDKit not available; using mock SMILES→formula lookup.")
-        return _mock_smiles_to_formula(smiles)
-
+        logger.info("RDKit is not installed; refusing SMILES conversion.")
+        return None
     except Exception as exc:
-        logger.warning("SMILES conversion failed: %s", exc)
-        return _mock_smiles_to_formula(smiles)
+        logger.warning("RDKit SMILES conversion failed: %s", exc)
+        return None

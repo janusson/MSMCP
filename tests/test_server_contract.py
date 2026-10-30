@@ -7,18 +7,18 @@ Both of these have already drifted once, and neither had a test:
   telling the model that ``search_library`` could not read a library from disk
   after the MSP/NIST reader had shipped — so the capability existed and the
   model was instructed not to use it.
-* the assumption that the installed ``mcp`` SDK does not dispatch ``tasks/*``.
-  ``ARCHITECTURE.md`` and ``README.md`` both justify MSMCP's own polling tool
-  with that claim, and nothing tested it.
+* whether the installed ``mcp`` SDK exposes the generic extension hooks needed
+  to register and advertise non-core request methods.
 """
 
 from __future__ import annotations
 
 import os
-from typing import get_args
+from typing import Any
 
 import mcp.types as mcp_types
-import pytest
+from mcp.server.lowlevel.server import Server
+from pydantic import BaseModel
 
 os.environ.setdefault("MSMCP_EMBEDDING_BACKEND", "mock")
 
@@ -50,34 +50,41 @@ def test_instructions_say_a_supported_library_is_read_from_disk() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The upstream assumption the docs rest on
+# Extension support exposed by the installed SDK
 # ---------------------------------------------------------------------------
-#: Tasks request types the installed SDK defines but does not dispatch.
-#: ARCHITECTURE.md's "MCP Tasks: what is implemented and what is not" section
-#: and README.md's two Tasks paragraphs both assert these are absent from the
-#: request unions, which is the stated reason MSMCP exposes
-#: ``check_search_status`` instead of answering Tasks natively.
-TASK_REQUESTS = (
-    mcp_types.GetTaskRequest,
-    mcp_types.GetTaskPayloadRequest,
-    mcp_types.CancelTaskRequest,
-    mcp_types.ListTasksRequest,
-)
+class _ExtensionParams(BaseModel):
+    """Minimal typed request body for exercising the SDK extension hook."""
+
+    value: str
 
 
-@pytest.mark.parametrize("union_name", ["ClientRequest", "ServerRequest"])
-def test_installed_sdk_does_not_dispatch_tasks(union_name: str) -> None:
-    """Fails the day ``mcp`` adds ``tasks/*`` to its request unions.
+async def _extension_handler(
+    ctx: Any, params: _ExtensionParams
+) -> mcp_types.EmptyResult:
+    del ctx, params
+    return mcp_types.EmptyResult()
 
-    Deliberately a failure rather than a skip: this is the trigger for roadmap
-    issue #7 ("waiting on the mcp SDK dispatching tasks/*").  When it goes red,
-    decide whether MSMCP should answer Tasks natively, and update the documents
-    that claim it cannot.
+
+def test_installed_sdk_can_register_and_advertise_extension_requests() -> None:
+    """Guard the SDK hooks MSMCP would use for non-core Tasks methods.
+
+    MCP Tasks are an extension, so membership in the core request unions is not
+    a readiness signal. This verifies that the installed server can register
+    an extension method and advertise its extension capability. It does not
+    claim MSMCP itself has implemented the Tasks adapter.
     """
-    dispatched = set(get_args(getattr(mcp_types, union_name))) & set(TASK_REQUESTS)
-    assert not dispatched, (
-        f"{union_name} now dispatches {sorted(t.__name__ for t in dispatched)}: the "
-        f"SDK can carry MCP Tasks, so ARCHITECTURE.md ('MCP Tasks: what is "
-        f"implemented and what is not') and README.md's Tasks paragraphs need "
-        f"revisiting, and roadmap #7 is unblocked"
+    server = Server("extension-contract-test")
+    register = getattr(server, "add_request_handler", None)
+    assert callable(register), (
+        "mcp Server must expose add_request_handler for extension methods"
     )
+
+    method = "tasks/get"
+    register(method, _ExtensionParams, _extension_handler)
+    assert method in server._request_handlers
+
+    extension_id = "io.modelcontextprotocol/tasks"
+    server.extensions[extension_id] = {}
+    capabilities = server.get_capabilities()
+    assert capabilities.extensions is not None
+    assert extension_id in capabilities.extensions

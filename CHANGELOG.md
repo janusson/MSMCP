@@ -7,7 +7,76 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Dependency isolation
+
+- Move the lowercase imaging `massflow` distribution out of core dependencies
+  into `msmcp[imaging]` (`uv sync --extra imaging`). It is unrelated to the
+  analytical MassFlow engine despite sharing its distribution name; keep those
+  installations separate. Core mzML/MGF APIs and ingestion semantics are unchanged.
+- Keep imzML loading lazy and report missing/incompatible imaging imports with
+  source-install guidance. Preserve `ping`'s public fields and clarify that they
+  inventory distribution metadata, not backend compatibility; optional absence
+  is healthy. Real imaging integration tests skip in core-only environments.
+
+### Fixed
+
+- **Validate complete formula strings.** Formula parsing now rejects skipped or
+  trailing characters and non-positive atom counts while continuing to
+  accumulate legitimately repeated elements.
+- **Use one signed-charge electron convention for every adduct.** Shifts are
+  derived from neutral-atom composition minus net charge times electron mass;
+  multiply charged proton adducts no longer subtract electrons twice, and the
+  sodium/hydrogen exchange adducts use the same charge bookkeeping. Expected
+  values are pinned to test-local independent neutral-mass references.
+- **Fail closed for SMILES without RDKit.** Removed the static/mock converter
+  and formula-string fallback. Explicit formula input still works without the
+  optional `chem` extra; SMILES requires RDKit and rejected input returns an
+  error rather than a plausible but incorrect formula.
+
+### Changed
+
+- **Gate library candidates on query acquisition context (#79).** Search now
+  carries the query's MS level, precursor m/z, polarity, charge and isolation
+  window into the request and report. An MS1 or non-MS2 query is refused rather
+  than scored as MS/MS evidence. For an MS2 query with a stated precursor, the
+  declared instrument-class precursor tolerance is applied before ranking, and
+  records whose stated polarity, charge or adduct conflicts are excluded.
+  Records that omit context remain ranked but are labelled *unknown*; a direct
+  peak-list query is reported as fragment-only exploratory. Reports and
+  provenance record eligibility counts, exclusion reasons, and only the
+  tolerance actually applied. These are software-contract checks, not an
+  identification-accuracy or FDR validation.
+- **Apply the per-request spectrum budget to indexed reads.** `load_spectrum`
+  and file-based `search_library` now reject indices that would require scanning
+  beyond `MSMCP_MAX_SPECTRA`, before opening/iterating the source. The MCP schema
+  advertises the configured maximum rather than allowing an impossible request.
+- **Bound full-acquisition QC scans.** `generate_qc_summary` now stops at
+  `MSMCP_MAX_SPECTRA` without recounting the full source. When the ceiling is
+  reached, the report says complete acquisition coverage is unconfirmed and
+  labels TIC as applying only to the analysed spectra.
+- **Parse stated precursor charge and isolation window.** The mzML reader
+  carries `MS:1000041` charge state and the isolation-window offsets when the
+  file states them; MGF carries `CHARGE`. Missing values stay `None` and are
+  never inferred.
+- **Reject spectra outside cosine's numeric domain.** Classical and embedding
+  scorers now reject non-finite m/z/intensity values and negative intensities;
+  `compute_cosine` validates inline inputs, and `search_library` rejects an
+  invalid real query before dispatch. Raw file ingestion is unchanged: signed
+  baseline-corrected data is not clipped and cannot be passed to these cosine
+  scorers without an explicit upstream transform.
+- **Withdraw unvalidated search significance claims.** `search_library` now
+  returns similarity-ranked candidates for every library size, with no decoy
+  sampling, p/q-value output, or significance filtering. Reports, repeat-poll
+  digests and provenance disclose the uncalibrated status. The summary now uses
+  null significance/threshold fields and `n_hits` counts ranked candidates;
+  clients relying on the old p/q columns must adapt. Decoy utilities remain for
+  offline research only. See `VALIDATION_SIGNIFICANCE.md` and the updated
+  `SCIENTIFIC_VALIDATION.md` for the evidence and restoration criteria.
+
 ### Added
+
+- Add `CITATION.cff` with author, repository, website and MIT license metadata.
+  It asks users to cite the exact release tag or commit and does not invent a DOI.
 
 - **`list_spectra` — a discovery step before loading or searching.** The new
   read-only tool indexes a file's spectra (index, MS level, retention time,

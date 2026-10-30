@@ -187,3 +187,29 @@ class TestProvenanceAcrossAWorkflow:
         assert payload["parents"][0].startswith("ptr:spectrum:")
         # ...and the earlier record answers which file and which reader.
         assert load_provenance.to_dict()["sources"][0]["backend"] == "msmcp.mzml"
+
+
+def test_digest_refuses_file_growth_during_hash(tmp_path, monkeypatch) -> None:
+    import hashlib
+
+    path = tmp_path / "growing.bin"
+    path.write_bytes(b"a" * 16)
+    original = hashlib.sha256
+
+    class GrowingDigest:
+        def __init__(self):
+            self.inner = original()
+            self.changed = False
+
+        def update(self, chunk):
+            self.inner.update(chunk)
+            if not self.changed:
+                self.changed = True
+                with path.open("ab") as handle:
+                    handle.write(b"b" * 100)
+
+        def hexdigest(self):
+            return self.inner.hexdigest()
+
+    monkeypatch.setattr(hashlib, "sha256", GrowingDigest)
+    assert file_digest(path, limit_bytes=32) is None
