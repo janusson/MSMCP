@@ -3,9 +3,14 @@
 Status: **candidate ready for approval review**. No merge, tag, PyPI upload or
 website deployment has been performed. The recommendation is at the end.
 
-Updated 2026-10-28 after syncing the dependency and SQLite documentation PRs.
-This describes the integrated candidate; `main` is unchanged and no version is
-released.
+Updated 2026-10-29 after checking the live PR head and reconciling the Tasks SDK
+documentation. This describes the integrated candidate; `main` is unchanged
+and no version is released.
+
+The hosted-CI snapshot below is for PR head
+`601718184d4a6f059fb96f3dcb11882142c447e8`, before this documentation-only
+follow-up. Its `gate` run passed; the follow-up itself still needs hosted CI
+after it is pushed.
 
 ## Candidate identity
 
@@ -178,7 +183,9 @@ Built from the candidate:
 
 Verified independently for wheel and sdist:
 
-- Fresh Python 3.13.12 virtual environments outside the checkout.
+- Fresh Python 3.13.12 virtual environments outside the checkout. This is the
+  only Python version qualified here; `requires-python = ">=3.13"` is the
+  declared install range, not evidence from a multi-version compatibility run.
 - `msmcp==1.0.2` installed; `massflow` **not** installed.
 - Core install resolves `mcp 2.3.0`, `numpy 2.5.4`, `pydantic 2.14.1`.
 - `msmcp` entry point starts with `MSMCP-MassFlow-Adapter v1.0.2`.
@@ -322,9 +329,9 @@ site merge. Those are explicit approvals, not follow-up work performed here.
 ## Draft review artefacts
 
 - MSMCP draft PR: https://github.com/janusson/MSMCP/pull/82
-  - Candidate refreshed locally on 2026-10-28 with the dependency updates and #84 SQLite documentation.
-  - Local gate: `make lint` passed; `make test` 752 passed / 18 skipped / 1 deselected; `make eval` 119/120 passed with the optional DreaMS skip.
-  - The refreshed candidate commit is not yet pushed; rerun hosted CI after the authorised push.
+  - Review snapshot: PR head `601718184d4a6f059fb96f3dcb11882142c447e8`, including the dependency updates and #84 SQLite documentation.
+  - Hosted run [40761662742](https://github.com/janusson/MSMCP/actions/runs/40761662742): `gate` passed on that exact head. The local gate record for the refreshed candidate was `make lint` passed; `make test` 752 passed / 18 skipped / 1 deselected; `make eval` 119/120 passed with the optional DreaMS skip.
+  - The documentation-only follow-up described in this update is later than that run and requires hosted CI after it is pushed.
 - Site draft PR: https://github.com/janusson/msmcp-site/pull/3
   - CI run 40430041353: `Gate` passed (16s), `Build` passed (21s), `Deploy`
     skipped as designed for a pull request

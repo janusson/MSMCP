@@ -297,14 +297,14 @@ Statuses use the MCP vocabulary (`mcp.types.TaskStatus`), and
 `Task` (`task_id`, `status`, `status_message`, `created_at`,
 `last_updated_at`, `ttl`, `poll_interval`).
 
-The pinned `mcp` 2.1.1 SDK exposes generic extension request registration and
-capability advertisement, but does not provide a Tasks-specific adapter. The
-contract test exercises those extension hooks; it does not inspect core request
-unions, since Tasks are intentionally outside the core protocol. MSMCP has not
-registered the Tasks extension methods, so it exposes job semantics through its
-own polling tool (`check_search_status`) and keeps the wire representation
-aligned with the MCP `Task` shape. Implementing the Tasks extension remains
-roadmap issue #7.
+The candidate lock resolves `mcp` 2.3.0, which is also the SDK version used by
+the recorded installed-client qualification; package metadata declares the
+broader lower bound `mcp[cli]>=2.0.0`. SDK 2.x supports generic extension request
+registration and capability advertisement, but MSMCP has not registered the
+Tasks extension methods. It exposes job semantics through its own polling tool
+(`check_search_status`) and keeps the wire representation aligned with the MCP
+`Task` shape. The contract test verifies extension hooks, not a Tasks adapter.
+Implementing the Tasks extension remains roadmap issue #7.
 
 ## Security and limits
 
