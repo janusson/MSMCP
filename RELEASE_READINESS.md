@@ -7,10 +7,10 @@ Updated 2026-10-29 after checking the live PR head and reconciling the Tasks SDK
 documentation. This describes the integrated candidate; `main` is unchanged
 and no version is released.
 
-The hosted-CI snapshot below is for PR head
-`601718184d4a6f059fb96f3dcb11882142c447e8`, before this documentation-only
-follow-up. Its `gate` run passed; the follow-up itself still needs hosted CI
-after it is pushed.
+The documentation-only follow-up was pushed as
+`aaef387eacaa01338a94d8ec0373fdf74858ae92`. Hosted CI run
+`41007714676` passed on that exact PR head. This is a point-in-time evidence
+snapshot and should be refreshed if the PR head changes again.
 
 ## Candidate identity
 
@@ -329,9 +329,8 @@ site merge. Those are explicit approvals, not follow-up work performed here.
 ## Draft review artefacts
 
 - MSMCP draft PR: https://github.com/janusson/MSMCP/pull/82
-  - Review snapshot: PR head `601718184d4a6f059fb96f3dcb11882142c447e8`, including the dependency updates and #84 SQLite documentation.
-  - Hosted run [40761662742](https://github.com/janusson/MSMCP/actions/runs/40761662742): `gate` passed on that exact head. The local gate record for the refreshed candidate was `make lint` passed; `make test` 752 passed / 18 skipped / 1 deselected; `make eval` 119/120 passed with the optional DreaMS skip.
-  - The documentation-only follow-up described in this update is later than that run and requires hosted CI after it is pushed.
+  - Review snapshot: PR head `aaef387eacaa01338a94d8ec0373fdf74858ae92`, including the dependency updates, #84 SQLite documentation, and the release-readiness clarifications.
+  - Hosted run [41007714676](https://github.com/janusson/MSMCP/actions/runs/41007714676): `gate` passed on that exact head. The local gate record for the refreshed candidate was `make lint` passed; `make test` 752 passed / 18 skipped / 1 deselected; `make eval` 119/120 passed with the optional DreaMS skip.
 - Site draft PR: https://github.com/janusson/msmcp-site/pull/3
   - CI run 40430041353: `Gate` passed (16s), `Build` passed (21s), `Deploy`
     skipped as designed for a pull request
