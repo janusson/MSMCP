@@ -29,9 +29,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   sodium/hydrogen exchange adducts use the same charge bookkeeping. Expected
   values are pinned to test-local independent neutral-mass references.
 - **Fail closed for SMILES without RDKit.** Removed the static/mock converter
-  and formula-string fallback. Explicit formula input still works without the
+  and formula-string passthrough. Explicit formula input still works without the
   optional `chem` extra; SMILES requires RDKit and rejected input returns an
   error rather than a plausible but incorrect formula.
+- **Bound isotope calculation work and stabilize rare-isotope normalization.**
+  Formula/SMILES inputs are limited to 4,096 characters and 10,000 total atoms;
+  relative isotope probabilities are normalized to the monoisotopic abundance,
+  avoiding underflow for formulas such as selenium-rich compositions.
+- **Require positive m/z in cosine scoring.** Non-positive mass coordinates were
+  previously accepted and could produce a perfect similarity for physically
+  invalid peak lists. Scorers now reject them; raw ingestion remains unchanged.
+- **Exclude ignored local artifacts from source distributions.** A reproduced
+  build included an ignored `.cache` directory in the sdist. Explicit exclusions
+  now keep local caches, worktrees, environments, build output and credentials
+  out of release archives.
+- **Raise the minimum MCP SDK to patched 2.2.0.** The candidate lock already
+  resolves MCP 2.3.0; the published requirement now excludes the advisory's
+  vulnerable `<2.2.0` range. Exact 2.2.0 compatibility passed the installed
+  stdio-client qualification.
 
 ### Changed
 
@@ -59,11 +74,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   file states them; MGF carries `CHARGE`. Missing values stay `None` and are
   never inferred.
 - **Reject spectra outside cosine's numeric domain.** Classical and embedding
-  scorers now reject non-finite m/z/intensity values and negative intensities;
+  scorers now reject non-finite or non-positive m/z values and non-finite or
+  negative intensities;
   `compute_cosine` validates inline inputs, and `search_library` rejects an
   invalid real query before dispatch. Raw file ingestion is unchanged: signed
   baseline-corrected data is not clipped and cannot be passed to these cosine
   scorers without an explicit upstream transform.
+- **Bound isotope calculation inputs and avoid monoisotopic-probability underflow.**
+  Formulae are limited to 10,000 total atoms and identifiers to 4,096 characters;
+  isotope convolution now works with probabilities relative to each element's
+  monoisotopic abundance. This prevents zero-denominator failures for formulas
+  with rare monoisotopic isotopes and bounds CPU work for this small-molecule tool.
 - **Withdraw unvalidated search significance claims.** `search_library` now
   returns similarity-ranked candidates for every library size, with no decoy
   sampling, p/q-value output, or significance filtering. Reports, repeat-poll

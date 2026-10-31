@@ -15,6 +15,8 @@ from pydantic import ValidationError
 
 from msmcp.tools.chem import (
     _ADDUCT_DB,
+    MAX_FORMULA_ATOMS,
+    MAX_IDENTIFIER_LENGTH,
     NEUTRON_MASS,
     _isotope_pattern,
     _parse_formula,
@@ -197,6 +199,12 @@ class TestParseFormula:
     def test_multi_digit_count(self) -> None:
         assert _parse_formula("C60") == {"C": 60}
 
+    def test_atom_count_budget_is_enforced(self) -> None:
+        with pytest.raises(
+            ValueError, match=f"maximum of {MAX_FORMULA_ATOMS} total atoms"
+        ):
+            _parse_formula(f"C{MAX_FORMULA_ATOMS + 1}")
+
     def test_salt_formula(self) -> None:
         assert _parse_formula("NaCl") == {"Na": 1, "Cl": 1}
 
@@ -359,8 +367,20 @@ class TestIsotopePattern:
         """``max_isotopologue`` sets the number of rows, not just a label."""
         assert len(_isotope_pattern(_parse_formula("C8H10N4O2"), 5)) == 5
         assert len(_isotope_pattern(_parse_formula("C8H10N4O2"), 1)) == 1
-        with pytest.raises(ValueError, match="at least 1"):
+        with pytest.raises(ValueError, match="integer from 1 to 10"):
             _isotope_pattern(_parse_formula("C8H10N4O2"), 0)
+
+    def test_rare_monoisotope_abundance_does_not_underflow(self) -> None:
+        """Relative abundances remain finite when the absolute M probability vanishes."""
+        atom_count = 1_000
+        pattern = _isotope_pattern({"Se": atom_count}, 10)
+        assert all(
+            math.isfinite(mass) and math.isfinite(abundance)
+            for mass, abundance in pattern
+        )
+        assert pattern[0][1] == pytest.approx(1.0)
+        # M+2 is one 76Se substitution; ratios are relative to the 74Se M isotope.
+        assert pattern[2][1] == pytest.approx(atom_count * 0.0937 / 0.0089)
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +396,21 @@ class TestAnnotateIsotopes:
         assert "| M           |             180.0634 |             1.0000 |" in out
         assert "| M+1         |             181.0668 |             0.0686 |" in out
         assert "| M+2         |             182.0680 |             0.0143 |" in out
+
+    def test_oversized_formula_returns_a_bounded_validation_error(
+        self, chem_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        out = chem_tools["annotate_isotopes"](identifier=f"C{MAX_FORMULA_ATOMS + 1}")
+        assert out.startswith("ERROR:")
+        assert f"maximum of {MAX_FORMULA_ATOMS} total atoms" in out
+
+    def test_oversized_identifier_is_rejected_before_parsing(
+        self, chem_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        with pytest.raises(ValidationError):
+            chem_tools["annotate_isotopes"](
+                identifier="C" * (MAX_IDENTIFIER_LENGTH + 1)
+            )
 
     def test_isotopologues_parameter_reveals_the_halogen_m4(
         self, chem_tools: dict[str, Callable[..., str]]

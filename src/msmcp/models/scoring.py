@@ -8,17 +8,21 @@ third-party one (matchms, in the plan of record), without touching the pipeline.
 
 Semantics every implementation must preserve
 --------------------------------------------
-1. **The score is not normalised over the matched peaks alone.**  Intensity the
-   match does not explain has to lower the score.  Normalising over matched peaks
+1. **The score is not normalised over the matched peaks alone.** Intensity the
+   match does not explain has to lower the score. Normalising over matched peaks
    makes a spectrum that shares *one* coincidental peak score exactly 1.0, which
    is indistinguishable from an identical spectrum; this defect was reproduced
    against the synthetic library (53 spectra scored 1.0, 52 of them sharing one
    incidental peak).
-2. ``1.0`` means "the matched peaks carry all of the intensity in both spectra",
+2. **Coordinates and intensities must be physically/scorably valid.** m/z values
+   must be finite and positive; intensities must be finite and non-negative.
+   Raw ingestion preserves source data, but a cosine scorer refuses values
+   outside this domain rather than assigning them a plausible score.
+3. ``1.0`` means "the matched peaks carry all of the intensity in both spectra",
    never "these are the same compound".
-3. An empty spectrum on either side scores ``0.0``, and a spectrum whose
+4. An empty spectrum on either side scores ``0.0``, and a spectrum whose
    intensity is entirely zero scores ``0.0`` — never ``nan``.
-4. Implementations are pure and thread-safe: no I/O, no mutation of the inputs,
+5. Implementations are pure and thread-safe: no I/O, no mutation of the inputs,
    no state carried between calls.  The scan runs on a worker thread.
 
 Cost is part of the contract
@@ -50,13 +54,15 @@ PeakList = Sequence[tuple[float, float]]
 
 
 def _validate_peak_list(peaks: Sequence[Sequence[float]], label: str) -> None:
-    """Reject values outside the non-negative finite cosine-score domain."""
+    """Require positive finite m/z and non-negative finite intensities."""
     for index, peak in enumerate(peaks):
         if len(peak) != 2:
             raise ValueError(f"{label} peak [{index}] must contain m/z and intensity")
         mz, intensity = float(peak[0]), float(peak[1])
         if not math.isfinite(mz):
             raise ValueError(f"{label} peak [{index}] has non-finite m/z ({mz!r})")
+        if mz <= 0.0:
+            raise ValueError(f"{label} peak [{index}] has non-positive m/z ({mz})")
         if not math.isfinite(intensity):
             raise ValueError(
                 f"{label} peak [{index}] has non-finite intensity ({intensity!r})"

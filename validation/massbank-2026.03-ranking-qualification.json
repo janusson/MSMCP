@@ -1,0 +1,254 @@
+{
+  "run_provenance": {
+    "git_commit": "e847aef9ee7f27e6527afd2be9722afbb35a2db4",
+    "git_worktree_dirty": true,
+    "validation_script_sha256": "2f168669a822d4913562bc7c6fad87d1170a1f73b8ebf136bbcd42686eaaf520",
+    "python": "3.13.12",
+    "numpy": "2.4.6",
+    "matchms": "0.33.1"
+  },
+  "dataset": {
+    "name": "MassBank",
+    "release": "2026.03",
+    "asset": "MassBank_NISTformat.msp",
+    "url": "https://github.com/MassBank/MassBank-data/releases/download/2026.03/MassBank_NISTformat.msp",
+    "licence": "CC-BY-4.0",
+    "doi": "10.5281/zenodo.3378723",
+    "sha256": "cf49e1b293f1c8c1b4a645123638826eea70db656bd76e09ea0c47a1a56fc269"
+  },
+  "matchms_version": "0.33.1",
+  "parameters": {
+    "seed": 20261014,
+    "tolerance_da": 0.02,
+    "min_peaks": 5,
+    "max_peaks": 300,
+    "precursor_range": [
+      100.0,
+      1200.0
+    ],
+    "n_query_compounds": 250,
+    "n_db_target": 3500,
+    "n_agreement_pairs": 20000,
+    "near_duplicate_cosine": 0.995
+  },
+  "counts": {
+    "filtered_records": 59061,
+    "queries": 250,
+    "database": 3499
+  },
+  "implementation_agreement": {
+    "n_pairs": 20000,
+    "sampling": {
+      "distinct_query_spectra": 250,
+      "distinct_reference_spectra": 3493,
+      "note": "pairs are drawn from a 250-query x 3499-reference grid with replacement and are NOT independent observations"
+    },
+    "median_abs_delta": 0.0,
+    "p95_abs_delta": 0.0001808709178801881,
+    "max_abs_delta": 0.42356958979066195,
+    "exact_agreement_frac": 0.9301,
+    "contested_pairs": 2273,
+    "contested_pairs_differing": 1398,
+    "uncontested_pairs_differing": 0,
+    "spearman_rho": 0.9994587516616926,
+    "worst_pair": [
+      0.42356958979066195,
+      {
+        "query": "MSBNK-RIKEN-PR300485",
+        "db": "MSBNK-BAFG-CSL25011734610",
+        "msmcp": 0.08175421942620185,
+        "matchms": 0.5053238092168638
+      }
+    ],
+    "tolerances": {
+      "exact": 1e-09,
+      "median_abs": 0.01,
+      "p95_abs": 0.1,
+      "spearman": 0.99
+    },
+    "verdict": {
+      "median_ok": true,
+      "p95_ok": true,
+      "spearman_ok": true,
+      "uncontested_exact_ok": true
+    }
+  },
+  "identification_recovery": {
+    "msmcp": {
+      "naive": {
+        "n_queries_total": 250,
+        "answerable_queries": 250,
+        "excluded_queries": 0,
+        "hits": {
+          "1": 184,
+          "5": 213,
+          "10": 222
+        },
+        "conditional": {
+          "top1": 0.736,
+          "top5": 0.852,
+          "top10": 0.888
+        },
+        "original_denominator": {
+          "top1": 0.736,
+          "top5": 0.852,
+          "top10": 0.888
+        }
+      },
+      "strict": {
+        "n_queries_total": 250,
+        "answerable_queries": 248,
+        "excluded_queries": 2,
+        "hits": {
+          "1": 183,
+          "5": 211,
+          "10": 220
+        },
+        "conditional": {
+          "top1": 0.7379032258064516,
+          "top5": 0.8508064516129032,
+          "top10": 0.8870967741935484
+        },
+        "original_denominator": {
+          "top1": 0.732,
+          "top5": 0.844,
+          "top10": 0.88
+        }
+      }
+    },
+    "matchms": {
+      "naive": {
+        "n_queries_total": 250,
+        "answerable_queries": 250,
+        "excluded_queries": 0,
+        "hits": {
+          "1": 184,
+          "5": 213,
+          "10": 222
+        },
+        "conditional": {
+          "top1": 0.736,
+          "top5": 0.852,
+          "top10": 0.888
+        },
+        "original_denominator": {
+          "top1": 0.736,
+          "top5": 0.852,
+          "top10": 0.888
+        }
+      },
+      "strict": {
+        "n_queries_total": 250,
+        "answerable_queries": 248,
+        "excluded_queries": 2,
+        "hits": {
+          "1": 183,
+          "5": 212,
+          "10": 220
+        },
+        "conditional": {
+          "top1": 0.7379032258064516,
+          "top5": 0.8548387096774194,
+          "top10": 0.8870967741935484
+        },
+        "original_denominator": {
+          "top1": 0.732,
+          "top5": 0.848,
+          "top10": 0.88
+        }
+      }
+    }
+  },
+  "ranking_comparison": {
+    "naive": {
+      "n_queries": 250,
+      "ranking_rule": "descending score; stable database order breaks ties",
+      "strict_near_duplicate_filter": false,
+      "same_top1_reference_record_count": 239,
+      "top1_reference_record_disagreement_count": 11,
+      "same_top1_compound_count": 244,
+      "top1_compound_disagreement_count": 6,
+      "top_k": {
+        "1": {
+          "mean_reference_record_set_jaccard": 0.956,
+          "mean_compound_set_jaccard": 0.976,
+          "known_compound_hit_outcomes": {
+            "both_hit": 181,
+            "msmcp_only": 3,
+            "matchms_only": 3,
+            "neither": 63
+          },
+          "known_compound_hit_discordant_queries": 6
+        },
+        "5": {
+          "mean_reference_record_set_jaccard": 0.9537619047619048,
+          "mean_compound_set_jaccard": 0.9660761904761904,
+          "known_compound_hit_outcomes": {
+            "both_hit": 213,
+            "msmcp_only": 0,
+            "matchms_only": 0,
+            "neither": 37
+          },
+          "known_compound_hit_discordant_queries": 0
+        },
+        "10": {
+          "mean_reference_record_set_jaccard": 0.9430410700410701,
+          "mean_compound_set_jaccard": 0.9496076701076701,
+          "known_compound_hit_outcomes": {
+            "both_hit": 221,
+            "msmcp_only": 1,
+            "matchms_only": 1,
+            "neither": 27
+          },
+          "known_compound_hit_discordant_queries": 2
+        }
+      },
+      "uncertainty_note": "Descriptive paired counts on the selected queries; batches are not identified and no independent-unit confidence interval is estimated."
+    },
+    "strict": {
+      "n_queries": 250,
+      "ranking_rule": "descending score; stable database order breaks ties",
+      "strict_near_duplicate_filter": true,
+      "same_top1_reference_record_count": 239,
+      "top1_reference_record_disagreement_count": 11,
+      "same_top1_compound_count": 244,
+      "top1_compound_disagreement_count": 6,
+      "top_k": {
+        "1": {
+          "mean_reference_record_set_jaccard": 0.956,
+          "mean_compound_set_jaccard": 0.976,
+          "known_compound_hit_outcomes": {
+            "both_hit": 180,
+            "msmcp_only": 3,
+            "matchms_only": 3,
+            "neither": 64
+          },
+          "known_compound_hit_discordant_queries": 6
+        },
+        "5": {
+          "mean_reference_record_set_jaccard": 0.9497619047619048,
+          "mean_compound_set_jaccard": 0.9617428571428571,
+          "known_compound_hit_outcomes": {
+            "both_hit": 211,
+            "msmcp_only": 0,
+            "matchms_only": 1,
+            "neither": 38
+          },
+          "known_compound_hit_discordant_queries": 1
+        },
+        "10": {
+          "mean_reference_record_set_jaccard": 0.9423137973137973,
+          "mean_compound_set_jaccard": 0.9484648129648129,
+          "known_compound_hit_outcomes": {
+            "both_hit": 219,
+            "msmcp_only": 1,
+            "matchms_only": 1,
+            "neither": 29
+          },
+          "known_compound_hit_discordant_queries": 2
+        }
+      },
+      "uncertainty_note": "Descriptive paired counts on the selected queries; batches are not identified and no independent-unit confidence interval is estimated."
+    }
+  }
+}

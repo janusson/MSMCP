@@ -120,6 +120,19 @@ class TestValidatePrecursor:
                 theoretical_mass=theoretical, experimental_mass=experimental
             )
 
+    @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+    @pytest.mark.parametrize("field", ["theoretical_mass", "experimental_mass"])
+    def test_nonfinite_masses_raise_validation_error(
+        self,
+        sim_tools: dict[str, Callable[..., str]],
+        invalid: float,
+        field: str,
+    ) -> None:
+        masses = {"theoretical_mass": 100.0, "experimental_mass": 100.0}
+        masses[field] = invalid
+        with pytest.raises(ValidationError):
+            sim_tools["validate_precursor"](**masses)
+
 
 # ---------------------------------------------------------------------------
 # _match_peaks — greedy one-to-one matching within tolerance
@@ -273,13 +286,15 @@ class TestComputeCosine:
     @pytest.mark.parametrize(
         ("mz", "intensity", "message"),
         [
+            (0.0, 1.0, "non-positive m/z"),
+            (-100.0, 1.0, "non-positive m/z"),
             (float("nan"), 1.0, "non-finite m/z"),
             (100.0, float("nan"), "non-finite intensity"),
             (float("inf"), 1.0, "non-finite m/z"),
             (100.0, float("inf"), "non-finite intensity"),
         ],
     )
-    def test_non_finite_inline_peaks_return_validation_error(
+    def test_invalid_inline_peaks_return_validation_error(
         self, sim_tools, mz: float, intensity: float, message: str
     ) -> None:
         out = sim_tools["compute_cosine"](

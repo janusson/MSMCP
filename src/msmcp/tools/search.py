@@ -1599,9 +1599,10 @@ def register_tools(mcp: Any) -> None:
         (default 'generic'). The class and matching window are stated in the
         report and recorded in provenance. No significance threshold is applied,
         and ranked scores are not identification probabilities or error rates.
-        Scoring requires finite peak coordinates and intensities, with
-        non-negative intensities; signed baseline-corrected peaks are not clipped
-        or scored as cosine similarity.
+        Scoring requires finite positive m/z coordinates and finite
+        non-negative intensities; non-positive coordinates and signed
+        baseline-corrected peaks are rejected, not clipped or scored as cosine
+        similarity.
 
         Returns immediately with a job ID, because the scan takes far longer
         than a request timeout.  Poll `check_search_status` with that ID to

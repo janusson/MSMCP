@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "mcp[cli]>=2.0.0",
+    "mcp[cli]>=2.2.0",
     "pydantic>=2.12.5",
     "numpy>=1.26.4",
 ]
@@ -58,9 +58,26 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.sdist]
-# Release-readiness evidence is review material for the candidate branch, not
-# package documentation; excluding it also keeps artifact hashes non-recursive.
-exclude = ["/RELEASE_READINESS.md"]
+# Do not ship local release evidence, cached acquisitions, build products,
+# environments, worktrees, or credentials in a source archive. Hatchling does not
+# treat the repository's .gitignore as an sdist allowlist.
+exclude = [
+    "/RELEASE_READINESS.md",
+    "/.cache/**",
+    "/.worktrees/**",
+    "/.venv/**",
+    "/dist/**",
+    "/build/**",
+    "/drafts/**",
+    "/logs/**",
+    "/notebooks/.eval_artifacts/**",
+    "/docs/release-qualification/**",
+    "/validation/release_qualification_client.py",
+    "/validation/release_performance_probe.py",
+    "/.env",
+    "/.env.*",
+    "/.pypirc",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

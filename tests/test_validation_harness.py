@@ -14,9 +14,11 @@ import hashlib
 import importlib.util
 import random
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 
@@ -32,6 +34,24 @@ def harness() -> Any:
     sys.modules[spec.name] = module  # dataclasses need the module registered
     spec.loader.exec_module(module)
     return module
+
+
+def test_sdist_excludes_local_cache_builds_and_credentials() -> None:
+    project = Path(__file__).resolve().parents[1]
+    config = tomllib.loads((project / "pyproject.toml").read_text(encoding="utf-8"))
+    excludes = set(config["tool"]["hatch"]["build"]["targets"]["sdist"]["exclude"])
+    assert {
+        "/.cache/**",
+        "/.worktrees/**",
+        "/.venv/**",
+        "/dist/**",
+        "/docs/release-qualification/**",
+        "/validation/release_qualification_client.py",
+        "/validation/release_performance_probe.py",
+        "/.env",
+        "/.env.*",
+        "/.pypirc",
+    } <= excludes
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +210,41 @@ def test_contest_at_the_window_boundary_counts(harness: Any) -> None:
 # ---------------------------------------------------------------------------
 # _sha256 and main() missing-data handling (the two do not need matchms)
 # ---------------------------------------------------------------------------
+def test_ranking_comparison_counts_top1_and_topk_disagreements(harness: Any) -> None:
+    database = [
+        _record(harness, "A1", "KEY-A", ((100.0, 10.0),)),
+        _record(harness, "B1", "KEY-B", ((200.0, 10.0),)),
+        _record(harness, "C1", "KEY-C", ((300.0, 10.0),)),
+    ]
+    queries = [
+        _record(harness, "QA", "KEY-A", ((100.0, 10.0),)),
+        _record(harness, "QB", "KEY-B", ((200.0, 10.0),)),
+    ]
+    truth = {"QA": "KEY-A", "QB": "KEY-B"}
+    msmcp_matrix = np.asarray([[0.9, 0.8, 0.1], [0.7, 0.6, 0.1]])
+    matchms_matrix = np.asarray([[0.8, 0.9, 0.1], [0.1, 0.9, 0.6]])
+
+    result = harness._ranking_comparison(
+        msmcp_matrix,
+        matchms_matrix,
+        database,
+        queries,
+        truth,
+        strict=False,
+    )
+
+    assert result["same_top1_reference_record_count"] == 0
+    assert result["top1_reference_record_disagreement_count"] == 2
+    assert result["top_k"]["1"]["known_compound_hit_outcomes"] == {
+        "both_hit": 0,
+        "msmcp_only": 1,
+        "matchms_only": 1,
+        "neither": 0,
+    }
+    assert result["top_k"]["5"]["known_compound_hit_discordant_queries"] == 0
+    assert result["top_k"]["5"]["mean_reference_record_set_jaccard"] == 1.0
+
+
 def test_sha256_matches_hashlib(harness: Any, tmp_path: Path) -> None:
     payload = tmp_path / "blob.bin"
     payload.write_bytes(b"massbank-placeholder")
