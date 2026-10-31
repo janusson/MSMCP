@@ -205,6 +205,20 @@ class TestLimits:
             validate_file_size(alias, policy)
 
 
+class _ReadTrackingBytesIO(io.BytesIO):
+    def __init__(self, data: bytes) -> None:
+        super().__init__(data)
+        self.read_requests: list[int | None] = []
+
+    def read(self, size: int | None = -1) -> bytes:
+        self.read_requests.append(size)
+        return super().read(size)
+
+    def read1(self, size: int | None = -1) -> bytes:
+        self.read_requests.append(size)
+        return super().read1(size)
+
+
 class TestCompressedInputBudget:
     """The byte budget must bound what a compressed input inflates to.
 
@@ -240,6 +254,41 @@ class TestCompressedInputBudget:
     def test_a_non_positive_limit_disables_the_bound(self) -> None:
         stream = io.BytesIO(b"abc")
         assert bounded_stream(stream, 0) is stream
+
+    @pytest.mark.parametrize("method", ["read", "read1", "readinto"])
+    def test_over_budget_read_requests_only_remaining_plus_one_byte(
+        self, method: str
+    ) -> None:
+        payload = b"x" * 65_536
+        source = _ReadTrackingBytesIO(payload)
+        bounded = bounded_stream(source, 8)
+        buffer = bytearray(len(payload))
+
+        with pytest.raises(FileSizeExceededError, match="Decompressed"):
+            if method == "read":
+                bounded.read()
+            elif method == "read1":
+                bounded.read1()
+            else:
+                bounded.readinto(buffer)
+
+        assert source.read_requests == [9]
+        assert source.tell() == 9
+        if method == "readinto":
+            assert buffer == bytearray(len(payload))
+
+    def test_sized_reads_under_the_remaining_budget_are_unchanged(self) -> None:
+        source = _ReadTrackingBytesIO(b"abcdefghij")
+        bounded = bounded_stream(source, 8)
+
+        assert bounded.read(4) == b"abcd"
+        assert bounded.read(4) == b"efgh"
+        assert source.read_requests == [4, 4]
+
+        with pytest.raises(FileSizeExceededError, match="Decompressed"):
+            bounded.read(1)
+        assert source.read_requests == [4, 4, 1]
+        assert source.tell() == 9
 
     def test_mgf_gzip_bomb_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

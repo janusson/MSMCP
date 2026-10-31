@@ -90,6 +90,8 @@ class TestContract:
         "invalid_peak",
         [
             (100.0, -1.0),
+            (0.0, 1.0),
+            (-100.0, 1.0),
             (float("nan"), 1.0),
             (100.0, float("nan")),
             (float("inf"), 1.0),

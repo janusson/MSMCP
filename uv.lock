@@ -1055,7 +1055,7 @@ test = [
 requires-dist = [
     { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.16" },
     { name = "massflow", marker = "extra == 'imaging'", specifier = ">=0.1.2,<0.2" },
-    { name = "mcp", extras = ["cli"], specifier = ">=2.0.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=2.2.0" },
     { name = "msmcp", extras = ["test"], marker = "extra == 'dev'" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.15" },
     { name = "numpy", specifier = ">=1.26.4" },

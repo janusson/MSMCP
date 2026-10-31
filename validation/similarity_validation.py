@@ -82,7 +82,9 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import random
+import subprocess
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -348,6 +350,96 @@ def _recovery_from_matrix(
     }
 
 
+def _ranking_comparison(
+    msmcp_matrix: np.ndarray,
+    matchms_matrix: np.ndarray,
+    database: list[Record],
+    queries: list[Record],
+    truth: dict[str, str],
+    *,
+    strict: bool,
+) -> dict[str, Any]:
+    """Measure per-query ranking changes between scorers, not just score deltas."""
+    same_reference_top1 = 0
+    same_compound_top1 = 0
+    for qi in range(len(queries)):
+        score_a = msmcp_matrix[qi].astype(float).copy()
+        score_b = matchms_matrix[qi].astype(float).copy()
+        if strict:
+            score_a = np.where(score_a < NEAR_DUPLICATE_COSINE, score_a, -1.0)
+            score_b = np.where(score_b < NEAR_DUPLICATE_COSINE, score_b, -1.0)
+        indices_a = np.flatnonzero(score_a >= 0.0)
+        indices_b = np.flatnonzero(score_b >= 0.0)
+        order_a = indices_a[np.argsort(-score_a[indices_a], kind="mergesort")]
+        order_b = indices_b[np.argsort(-score_b[indices_b], kind="mergesort")]
+        if order_a.size and order_b.size:
+            same_reference_top1 += int(order_a[0] == order_b[0])
+            same_compound_top1 += int(
+                database[int(order_a[0])].inchikey == database[int(order_b[0])].inchikey
+            )
+
+    top_k: dict[str, dict[str, Any]] = {}
+    for k in TOP_K:
+        jaccard_records: list[float] = []
+        jaccard_compounds: list[float] = []
+        outcomes = {"both_hit": 0, "msmcp_only": 0, "matchms_only": 0, "neither": 0}
+        for qi, query in enumerate(queries):
+            score_a = msmcp_matrix[qi].astype(float).copy()
+            score_b = matchms_matrix[qi].astype(float).copy()
+            if strict:
+                score_a = np.where(score_a < NEAR_DUPLICATE_COSINE, score_a, -1.0)
+                score_b = np.where(score_b < NEAR_DUPLICATE_COSINE, score_b, -1.0)
+            indices_a = np.flatnonzero(score_a >= 0.0)
+            indices_b = np.flatnonzero(score_b >= 0.0)
+            order_a = indices_a[np.argsort(-score_a[indices_a], kind="mergesort")]
+            order_b = indices_b[np.argsort(-score_b[indices_b], kind="mergesort")]
+            top_a, top_b = order_a[:k], order_b[:k]
+            ids_a = {database[int(index)].uid for index in top_a}
+            ids_b = {database[int(index)].uid for index in top_b}
+            union_ids = ids_a | ids_b
+            jaccard_records.append(
+                len(ids_a & ids_b) / len(union_ids) if union_ids else 1.0
+            )
+            compounds_a = {database[int(index)].inchikey for index in top_a}
+            compounds_b = {database[int(index)].inchikey for index in top_b}
+            union_compounds = compounds_a | compounds_b
+            jaccard_compounds.append(
+                len(compounds_a & compounds_b) / len(union_compounds)
+                if union_compounds
+                else 1.0
+            )
+            true_key = truth[query.uid]
+            hit_a = any(database[int(index)].inchikey == true_key for index in top_a)
+            hit_b = any(database[int(index)].inchikey == true_key for index in top_b)
+            if hit_a and hit_b:
+                outcomes["both_hit"] += 1
+            elif hit_a:
+                outcomes["msmcp_only"] += 1
+            elif hit_b:
+                outcomes["matchms_only"] += 1
+            else:
+                outcomes["neither"] += 1
+        top_k[str(k)] = {
+            "mean_reference_record_set_jaccard": float(np.mean(jaccard_records)),
+            "mean_compound_set_jaccard": float(np.mean(jaccard_compounds)),
+            "known_compound_hit_outcomes": outcomes,
+            "known_compound_hit_discordant_queries": outcomes["msmcp_only"]
+            + outcomes["matchms_only"],
+        }
+    n_queries = len(queries)
+    return {
+        "n_queries": n_queries,
+        "ranking_rule": "descending score; stable database order breaks ties",
+        "strict_near_duplicate_filter": strict,
+        "same_top1_reference_record_count": same_reference_top1,
+        "top1_reference_record_disagreement_count": n_queries - same_reference_top1,
+        "same_top1_compound_count": same_compound_top1,
+        "top1_compound_disagreement_count": n_queries - same_compound_top1,
+        "top_k": top_k,
+        "uncertainty_note": "Descriptive paired counts on the selected queries; batches are not identified and no independent-unit confidence interval is estimated.",
+    }
+
+
 def run(*, data_path: Path, out_path: Path | None) -> dict:
     import matchms
     from matchms import Spectrum, calculate_scores
@@ -482,7 +574,41 @@ def run(*, data_path: Path, out_path: Path | None) -> dict:
         },
     }
 
+    ranking_comparison = {
+        "naive": _ranking_comparison(
+            matrix_msmcp, matrix_matchms, database, queries, truth, strict=False
+        ),
+        "strict": _ranking_comparison(
+            matrix_msmcp, matrix_matchms, database, queries, truth, strict=True
+        ),
+    }
+
+    checkout = Path(__file__).resolve().parents[1]
+    git_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=checkout,
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout.strip()
+    git_dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=checkout,
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
+    )
     result = {
+        "run_provenance": {
+            "git_commit": git_commit,
+            "git_worktree_dirty": git_dirty,
+            "validation_script_sha256": _sha256(Path(__file__)),
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "matchms": getattr(matchms, "__version__", "unknown"),
+        },
         "dataset": {
             "name": "MassBank",
             "release": MASSBANK_TAG,
@@ -511,6 +637,7 @@ def run(*, data_path: Path, out_path: Path | None) -> dict:
         },
         "implementation_agreement": agreement,
         "identification_recovery": recovery,
+        "ranking_comparison": ranking_comparison,
     }
     if out_path is not None:
         out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")

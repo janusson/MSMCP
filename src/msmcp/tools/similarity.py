@@ -41,8 +41,8 @@ logger = logging.getLogger("msmcp.tools.similarity")
 class ValidatePrecursorInput(BaseModel):
     """Input for the validate_precursor tool."""
 
-    theoretical_mass: float = Field(..., gt=0.0)
-    experimental_mass: float = Field(..., gt=0.0)
+    theoretical_mass: float = Field(..., gt=0.0, allow_inf_nan=False)
+    experimental_mass: float = Field(..., gt=0.0, allow_inf_nan=False)
     instrument_class: InstrumentClass | None = None
 
 
@@ -333,14 +333,16 @@ def register_tools(mcp: Any) -> None:
             float,
             Field(
                 gt=0.0,
-                description="Exact monoisotopic mass of the hypothesised compound (Da).",
+                allow_inf_nan=False,
+                description="Finite, positive exact monoisotopic mass of the hypothesised compound (Da).",
             ),
         ],
         experimental_mass: Annotated[
             float,
             Field(
                 gt=0.0,
-                description="Experimentally observed precursor m/z (Da).",
+                allow_inf_nan=False,
+                description="Finite, positive experimentally observed precursor m/z (Da).",
             ),
         ],
         instrument_class: Annotated[
@@ -448,9 +450,9 @@ def register_tools(mcp: Any) -> None:
             Field(
                 min_length=1,
                 description=(
-                    "Query spectrum peaks as [[m/z, intensity], ...]; at least "
-                    "one peak is required.  Provide this or query_reference, "
-                    "not both."
+                    "Query spectrum peaks as [[m/z, intensity], ...]; m/z must "
+                    "be finite and positive, and intensity finite and non-negative. "
+                    "Provide this or query_reference, not both."
                 ),
             ),
         ] = None,
@@ -469,9 +471,9 @@ def register_tools(mcp: Any) -> None:
             Field(
                 min_length=1,
                 description=(
-                    "Reference spectrum peaks as [[m/z, intensity], ...]; at "
-                    "least one peak is required.  Provide this or "
-                    "reference_reference, not both."
+                    "Reference spectrum peaks as [[m/z, intensity], ...]; m/z "
+                    "must be finite and positive, and intensity finite and "
+                    "non-negative. Provide this or reference_reference, not both."
                 ),
             ),
         ] = None,

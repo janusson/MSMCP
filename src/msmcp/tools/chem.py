@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Annotated, Any
 
@@ -19,6 +20,10 @@ PROTON_MASS = 1.00727646688  # CODATA ¹H⁺ reference mass
 # Adducts below use the stated neutral-atom/signed-electron convention.
 ELECTRON_MASS = 0.00054857990907  # e⁻
 NEUTRON_MASS = 1.00866491588  # n
+MAX_FORMULA_ATOMS = 10_000
+"""Maximum total atom count handled by the exact isotope convolution."""
+MAX_IDENTIFIER_LENGTH = 4_096
+"""Bound formula/SMILES input size before parsing or optional RDKit work."""
 
 # Neutral monoisotopic atomic masses used by the adduct table. These are kept
 # separate from ionic masses so the signed charge correction is applied once.
@@ -189,7 +194,7 @@ class AdductInput(BaseModel):
 class IsotopeInput(BaseModel):
     """Validated input for annotate_isotopes."""
 
-    identifier: str = Field(..., min_length=1)
+    identifier: str = Field(..., min_length=1, max_length=MAX_IDENTIFIER_LENGTH)
     is_smiles: bool = False
     isotopologues: int = Field(default=3, ge=1, le=10)
 
@@ -207,6 +212,7 @@ def _parse_formula(formula: str) -> dict[str, int]:
     symbols are permitted and their positive counts are accumulated.
     """
     composition: dict[str, int] = {}
+    total_atoms = 0
     position = 0
     while position < len(formula):
         match = _ELEMENT_RE.match(formula, position)
@@ -232,6 +238,12 @@ def _parse_formula(formula: str) -> dict[str, int]:
             )
         if el not in _ISOTOPES:
             raise ValueError(f"Unknown element '{el}' in formula '{formula}'.")
+        if total_atoms + count > MAX_FORMULA_ATOMS:
+            raise ValueError(
+                f"Formula '{formula}' exceeds the maximum of "
+                f"{MAX_FORMULA_ATOMS} total atoms."
+            )
+        total_atoms += count
         composition[el] = composition.get(el, 0) + count
         position = match.end()
 
@@ -272,9 +284,15 @@ def _isotope_pattern(
     put M+1 about 5.3 mDa (~18 ppm at m/z 300) too high, outside the tolerance
     the rest of this project works to.
     """
-    if max_isotopologue < 1:
+    if type(max_isotopologue) is not int or not 1 <= max_isotopologue <= 10:
+        raise ValueError("max_isotopologue must be an integer from 1 to 10")
+    if not composition or any(
+        type(count) is not int or count <= 0 for count in composition.values()
+    ):
+        raise ValueError("composition must contain positive integer atom counts")
+    if sum(composition.values()) > MAX_FORMULA_ATOMS:
         raise ValueError(
-            f"max_isotopologue must be at least 1, got {max_isotopologue!r}"
+            f"composition exceeds the maximum of {MAX_FORMULA_ATOMS} total atoms"
         )
 
     # --- monoisotopic mass ------------------------------------------------
@@ -291,8 +309,17 @@ def _isotope_pattern(
     for el, count in composition.items():
         isotopes = _ISOTOPES[el]
         mono_el_mass = isotopes[0][0]
-        # One atom's polynomial: (abundance, \u0394n, \u0394mass vs the monoisotopic atom).
-        atom = [(abund, delta, mass - mono_el_mass) for mass, abund, delta in isotopes]
+        # Normalize each atom's isotope probabilities by its monoisotopic
+        # abundance. The final envelope is relative to M, so carrying the tiny
+        # absolute probability of an all-monoisotope molecule is unnecessary and
+        # can underflow for elements such as selenium.
+        mono_abundance = isotopes[0][1]
+        if not math.isfinite(mono_abundance) or mono_abundance <= 0.0:
+            raise ValueError(f"invalid monoisotopic abundance for element {el!r}")
+        atom = [
+            (abund / mono_abundance, delta, mass - mono_el_mass)
+            for mass, abund, delta in isotopes
+        ]
         for _ in range(count):
             new_weight = [0.0] * max_isotopologue
             new_shift = [0.0] * max_isotopologue
@@ -308,10 +335,16 @@ def _isotope_pattern(
                     new_weight[k2] += wk * abund
                     new_shift[k2] += sk * abund + wk * abund * dm
             weight, shift_weight = new_weight, new_shift
+            if not all(math.isfinite(value) for value in (*weight, *shift_weight)):
+                raise ValueError(
+                    "isotope convolution exceeded the finite numeric range"
+                )
 
-    # Normalise to the monoisotopic peak (weight[0] is never zero: every
-    # supported element has a monoisotopic isotope).
+    # The relative-abundance normalization above leaves the monoisotopic
+    # coefficient at one without multiplying tiny absolute probabilities.
     base = weight[0]
+    if not math.isfinite(base) or base <= 0.0:
+        raise ValueError("monoisotopic coefficient is not finite and positive")
     pattern: list[tuple[float, float]] = []
     for k in range(max_isotopologue):
         wk = weight[k]
@@ -428,9 +461,10 @@ def register_tools(mcp: Any) -> None:
             str,
             Field(
                 min_length=1,
+                max_length=MAX_IDENTIFIER_LENGTH,
                 description=(
-                    "Chemical formula (e.g. 'C6H12O6') or SMILES string, "
-                    "depending on is_smiles."
+                    f"Chemical formula (e.g. 'C6H12O6') or SMILES string, "
+                    f"depending on is_smiles; maximum {MAX_IDENTIFIER_LENGTH} characters."
                 ),
             ),
         ],
@@ -478,6 +512,8 @@ def register_tools(mcp: Any) -> None:
         instead.  The identifier must be at least one character long, and only
         elements with tabulated isotope data are supported (C, H, N, O, S, P,
         F, Cl, Br, I, Na, K, Si, Fe, Se) - any other element returns an error.
+        Formulae are limited to 10,000 total atoms so the exact expansion remains
+        bounded for the small-molecule use case.
         """
         _ = IsotopeInput(
             identifier=identifier,
@@ -505,12 +541,12 @@ def register_tools(mcp: Any) -> None:
         # --- parse formula --------------------------------------------------
         try:
             composition = _parse_formula(formula)
+            pattern = _isotope_pattern(composition, max_isotopologue=isotopologues)
         except ValueError as exc:
-            logger.warning("Formula parse failed: %s", exc)
+            logger.warning("Formula/isotope calculation failed: %s", exc)
             return f"ERROR: {exc}"
 
         # --- compute isotope pattern ----------------------------------------
-        pattern = _isotope_pattern(composition, max_isotopologue=isotopologues)
 
         # --- render Markdown table ------------------------------------------
         lines = [
