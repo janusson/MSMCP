@@ -1,16 +1,8 @@
 # MSMCP 1.0.2 release readiness
 
-Status: **candidate ready for approval review**. No merge, tag, PyPI upload or
-website deployment has been performed. The recommendation is at the end.
+Status: **qualification corrections integrated into the 1.0.2 candidate; awaiting final owner approval on PR #82**. PR #86 was merged into `release/1.0.2-candidate` at `e9a1599402143dd211fa64adb2b3f260ea574836`. PR #82 remains open/draft. No merge to `main`, tag, PyPI upload, or website deployment has been performed.
 
-Updated 2026-10-29 after checking the live PR head and reconciling the Tasks SDK
-documentation. This describes the integrated candidate; `main` is unchanged
-and no version is released.
-
-The documentation-only follow-up was pushed as
-`aaef387eacaa01338a94d8ec0373fdf74858ae92`. Hosted CI run
-`41007714676` passed on that exact PR head. This is a point-in-time evidence
-snapshot and should be refreshed if the PR head changes again.
+Updated 2026-10-31 after qualification PR #86. The corrected code tree is identical to the reviewed PR #86 source tree `af1d79a4cfeecb0b451ba522ffac2bd7ba87e82f`; the merge commit adds no code changes. Hosted gate run `41253058734` passed on that code tree. The documentation below preserves earlier candidate receipts; the current detailed qualification packet is [`docs/release-qualification/QUALIFICATION_REPORT.md`](docs/release-qualification/QUALIFICATION_REPORT.md). A later documentation-only refresh changes no packaged files; use PR #82's live head/checks for its current CI state.
 
 ## Candidate identity
 
@@ -19,15 +11,13 @@ snapshot and should be refreshed if the PR head changes again.
 | Repository | `janusson/MSMCP` |
 | Candidate branch | `release/1.0.2-candidate` |
 | Base | `origin/main` @ `18e183a5873d6622b0cd09432b4056d13b0f3499` |
-| Code candidate SHA (chemistry-corrected) | `793c05d2ee3c5fb610b73b78981c68681bf708ab` |
+| Qualified code tree SHA | `e9a1599402143dd211fa64adb2b3f260ea574836` (merge tree equals PR #86 source tree `af1d79a4cfeecb0b451ba522ffac2bd7ba87e82f`) |
 | Package version | `1.0.2` (candidate only; no tag) |
 | Python requirement | `>=3.13` |
-| Core dependencies | `mcp[cli]>=2.0.0`, `pydantic>=2.12.5`, `numpy>=1.26.4` |
+| Core dependencies | `mcp[cli]>=2.2.0`, `pydantic>=2.12.5`, `numpy>=1.26.4` |
 | Optional extras | `imaging` (`massflow>=0.1.2,<0.2`), `chem`, `ml`, `test`, `dev` |
 
-The readiness document is committed after the code tip; the draft PR head is
-therefore a later documentation commit. The code candidate SHA above identifies
-the complete release source.
+The package version remains `1.0.2`; no version tag exists. The PR #82 branch may advance for documentation-only readiness updates; the live PR head and check run are authoritative for owner review.
 
 ## Supported core server
 
@@ -163,9 +153,10 @@ Run in the isolated candidate worktree with its own `.venv`:
 
 | Gate | Command | Result |
 |---|---|---|
-| Format/lint/types | `make lint` | PASS — 93 files formatted; ruff, mypy (69 files), basedpyright clean |
-| Unit/integration | `make test` | PASS — 752 passed, 18 skipped, 1 deselected |
-| Evaluation notebook | `make eval` | PASS — 119/120 cases passed, 1 expected skip (DreaMS weights); 5.31 s |
+| Format/lint/types | `make lint` | PASS — 96 files formatted; Ruff clean; mypy (71 source files) clean; basedpyright 0 errors / 0 warnings / 0 notes |
+| Unit/integration | `make test` | PASS — 772 passed, 18 skipped, 1 deselected |
+| Evaluation notebook | `make eval` | PASS — 119/120 cases passed, 1 expected optional DreaMS skip |
+| Bounded decompression regression | `uv run pytest -q tests/test_security.py` | PASS — 32 passed, including capped `read`, `read1`, `readinto` and sized-read preservation |
 
 Core-environment skips include the optional RDKit conversion test, imaging
 backend tests and `scipy` for an optional Spearman reference. Actual RDKit
@@ -178,8 +169,8 @@ Built from the candidate:
 
 | Artifact | SHA-256 |
 |---|---|
-| `msmcp-1.0.2-py3-none-any.whl` | `95460d9b58278816e7547846533908f90e01f16afaca86893469356f0635f1d0` |
-| `msmcp-1.0.2.tar.gz` | `4409864b5b8f68ccbb35d3d1b27018347e256230e837914cf51fc9a667def561` |
+| `msmcp-1.0.2-py3-none-any.whl` | `92500b39002a4676395f9264fa952bab55bd6e32755952eb1ad8ac679c6c9bdf` |
+| `msmcp-1.0.2.tar.gz` | `ca28702d6efae8eb8021233ab27c88923ebf9b346ead4a85d93fcfced8b3916e` |
 
 Verified independently for wheel and sdist:
 
@@ -187,7 +178,7 @@ Verified independently for wheel and sdist:
   only Python version qualified here; `requires-python = ">=3.13"` is the
   declared install range, not evidence from a multi-version compatibility run.
 - `msmcp==1.0.2` installed; `massflow` **not** installed.
-- Core install resolves `mcp 2.3.0`, `numpy 2.5.4`, `pydantic 2.14.1`.
+- Core install resolves MCP 2.3.0; the final wheel also passed with exact MCP 2.2.0, the declared minimum. Python 3.13.12 was used.
 - `msmcp` entry point starts with `MSMCP-MassFlow-Adapter v1.0.2`.
 - Wheel metadata lists `massflow` only under the `imaging` extra and `rdkit`
   only under `chem`. The candidate-only `RELEASE_READINESS.md` is excluded from
@@ -197,30 +188,9 @@ Verified independently for wheel and sdist:
 
 ## Real MCP client evidence
 
-`validation/installed_mcp_qualification.py` was run against the installed wheel
-with the MCP Python SDK (`mcp 2.3.0`) over stdio. Evidence:
+The final wheel and sdist were each installed in fresh Python 3.13.12 environments and exercised through the MCP SDK stdio client (`validation/release_qualification_client.py`). The workflow discovered and called all 15 core tools; it tested synthetic mzML/MGF/MSP ingestion, structured chromatograms, reference create/read/release, chemistry, scoring, QC, real async dispatch/poll, cancellation, and bounded errors. A separate final-wheel run with MCP 2.2.0 passed. The query/library fixtures are synthetic software fixtures, not identification evidence. Full result and limitations are in `docs/release-qualification/QUALIFICATION_REPORT.md`.
 
-- Initialization succeeded: server name `MSMCP-MassFlow-Adapter`, version `1.0.2`,
-  protocol `2025-11-25`.
-- `tools/list` returned all 15 tools.
-- `ping` succeeded and reported the optional imaging backend absent without
-  claiming an error.
-- `generate_qc_summary` read a real MGF query and reported bounded coverage.
-- `load_spectrum` returned structured metadata, a `ptr:spectrum:` reference,
-  source digest and software versions.
-- `search_library` — `check_search_status` completed a real MSP library search:
-  Caffeine ranked first at `1.0000`, the 900-precursor and wrong-polarity records
-  were excluded before ranking, and the missing-charge record stayed labelled
-  `unknown`.
-- The report named the library format, spectrum count, digest, scorer, applied
-  precursor tolerance, context-eligibility counts and provenance.
-- No p/q column or significance filter appeared.
-- Structured errors returned `is_error=true` for an out-of-root path, a malformed
-  MSP library, an MS1 query and an out-of-bound spectrum index; the session
-  remained healthy afterwards, which also demonstrates stdio purity.
-- The MCP SDK masks exception detail in the wire error (`Error executing tool …`);
-  the detailed diagnosis is on stderr. This is documented in the README and is a
-  known diagnostic-UX limitation, not a silent success.
+The security correction now caps decompressed `read`, `read1`, and `readinto` requests to the remaining budget plus one sentinel byte before over-budget data can be materialized. The focused deterministic security suite passed 32 tests. Expected invalid tool calls still produce detailed server exceptions on stderr; the MCP wire error is generic and the local path disclosure is a documented diagnostic limitation.
 
 ## PyPI publishing
 
@@ -306,31 +276,28 @@ Repository `janusson/msmcp-site`, reconciled branch `release/site-1.0.2`:
    the default branch include advisories in optional-extras chains (`rdkit`/
    `torch`/`massflow`); the core installed wheel has none of those packages. The
    candidate does not claim a dependency-security audit beyond the core install.
-6. **Default-branch security read-back.** GitHub reported 47 open Dependabot
-   alerts on `main`, including five critical Pillow alerts. The candidate lock now
-   includes patched versions for the existing dependency PRs. Recheck alerts on
-   `main` after an approved merge.
+6. **Default-branch security read-back.** GitHub reported 59 open Dependabot
+   alerts on `main` (5 critical, 24 high, 27 medium, 3 low). The qualified candidate
+   lock includes patched versions for the affected packages, and the MCP minimum
+   is now `2.2.0`. Recheck `main` alerts after an approved merge; optional extras
+   were not comprehensively audited.
 7. **Website deploy trigger.** Merging the site branch to `main` triggers the
    existing Pages workflow by design; do not merge until the owner approves the
    deployment.
 
 ## Recommendation
 
-**GO for the core 1.0.2 candidate, conditional on owner approval.** The core
-server installs cleanly, has no unintended imaging dependency, passes the full
-gate, and completes a genuine installed-client workflow with bounded errors and
-provenance. The website is consistent with the candidate and passes its static
-gate.
+**CONDITIONAL GO for the scoped, similarity-only 1.0.2 candidate after current PR #82 hosted checks and owner approval.** PR #86 is integrated at the qualified code tree; local gates, reproducible artifacts and fresh installed-client tests pass. Production search has no calibrated p/q/FDR claims. Optional extras, experimental significance inference, and MassPilot integration remain outside the validated release scope.
 
-**NO-GO for publishing or deployment** until the owner (a) approves the
-integration PRs, (b) creates the PyPI pending publisher, and (c) authorises the
-site merge. Those are explicit approvals, not follow-up work performed here.
+**NO-GO for tagging, PyPI publication, or website deployment until separately authorized.** The owner must verify PyPI Trusted Publisher registration (`msmcp` / `janusson` / `MSMCP` / `publish.yml` / environment `pypi`) and GitHub environment protection; neither can be confirmed from repository source.
 
 ## Draft review artefacts
 
-- MSMCP draft PR: https://github.com/janusson/MSMCP/pull/82
-  - Review snapshot: PR head `aaef387eacaa01338a94d8ec0373fdf74858ae92`, including the dependency updates, #84 SQLite documentation, and the release-readiness clarifications.
-  - Hosted run [41007714676](https://github.com/janusson/MSMCP/actions/runs/41007714676): `gate` passed on that exact head. The local gate record for the refreshed candidate was `make lint` passed; `make test` 752 passed / 18 skipped / 1 deselected; `make eval` 119/120 passed with the optional DreaMS skip.
+- MSMCP release PR: https://github.com/janusson/MSMCP/pull/82
+  - PR #86 was merged into `release/1.0.2-candidate` at `e9a1599402143dd211fa64adb2b3f260ea574836`; its tree matched the qualified source tree.
+  - Hosted run [41253058734](https://github.com/janusson/MSMCP/actions/runs/41253058734): `gate` passed on the post-merge candidate code tree. PR #82's live head and any later documentation-only check must be verified directly on GitHub before owner approval.
+  - Current local gates: `make lint` passed; `make test` 772 passed / 18 skipped / 1 deselected; `make eval` 119/120 passed with the optional DreaMS skip.
+  - Current artifact hashes and installed MCP evidence are in the qualification report above; the lower historical receipts in earlier versions of this document are superseded.
 - Site draft PR: https://github.com/janusson/msmcp-site/pull/3
   - CI run 40430041353: `Gate` passed (16s), `Build` passed (21s), `Deploy`
     skipped as designed for a pull request
@@ -338,5 +305,4 @@ site merge. Those are explicit approvals, not follow-up work performed here.
 
 ## Stop point
 
-This candidate is proposed for review only. No automatic merge, release, tag,
-PyPI upload or website deployment has been performed.
+PR #82 remains open for final owner review. PR #86 is integrated; no merge to `main`, release tag, PyPI upload, publishing workflow dispatch, or website deployment has been performed.
