@@ -35,6 +35,7 @@ These defects were reproduced against the candidate behavior and corrected only 
 | **P1 — isotope numerical/resource boundary** | Formula work was uncapped (`C100000` parsing took about 0.157 s in the reproduced case); absolute monoisotopic probability underflow made `Se1000` raise `ZeroDivisionError`. | Formula identifiers are capped at 4,096 characters and 10,000 total atoms; convolution uses probabilities relative to the monoisotopic abundance and checks finite arithmetic. Regression coverage verifies bounded rejection and finite selenium-rich output. |
 | **P1 — precursor input finiteness** | Positive-infinity/NaN values are not valid exact masses and can make tolerance arithmetic meaningless. | `validate_precursor` now rejects non-finite as well as non-positive theoretical/experimental masses; parameterized boundary tests cover NaN and both infinities. |
 | **P1 — vulnerable declared MCP floor** | The candidate lock resolved MCP 2.3.0, but `pyproject.toml` permitted MCP `<2.2.0`, within the open advisory’s vulnerable range. The advisory concerns bearer-token server authentication; MSMCP’s advertised transport is stdio. | Raised the minimum to `mcp[cli]>=2.2.0`, the first patched version. An exact 2.2.0 install of the final wheel passed the installed-client workflow. The lock resolves 2.3.0. |
+| **P1 — decompression budget checked after allocation** | Before correction, a deterministic 64 KiB in-memory stream with an 8-byte budget showed underlying requests of `-1`, `-1`, and `65,536` bytes for `read`, `read1`, and `readinto`; the limit exception came only after those reads. This confirms the wrapper could materialize more than its configured limit before refusing. | All three methods now limit the underlying request to the remaining byte budget plus one sentinel byte; accounting rejects the sentinel before `readinto` copies data. Regression tests assert each request is 9 bytes, the source cursor is 9, and ordinary 4-byte sized reads remain unchanged. `tests/test_security.py` passes 32 tests. |
 
 **Disposition:** no confirmed P0 remains in the corrected local snapshot. The P1 defects remain unresolved on the hosted PR #82 head because no qualification commit has been integrated there. This is the release stop condition.
 
@@ -66,7 +67,8 @@ Final run in the qualification worktree, macOS arm64, Python 3.13.12, pytest 9.1
 |---|---|
 | `uv sync --extra dev --locked` | PASS; locked environment audited, no lock drift |
 | `make lint` | PASS; 96 Python files formatted; Ruff clean; mypy clean on 71 source files; basedpyright 0 errors / 0 warnings / 0 notes |
-| `make test` | **768 passed, 18 skipped, 1 deselected** in 9.45 s |
+| `make test` | **772 passed, 18 skipped, 1 deselected** in 9.12 s |
+| `uv run pytest -q tests/test_security.py` | PASS; 32 passed, including three read-budget methods and sized-read preservation |
 | `make eval` | PASS; 119/120 notebook cases passed, one optional real-DreaMS case skipped; wrapper 1 passed / 1 deselected |
 
 The 18 unit skips were 16 optional imaging cases, one RDKit case, and one optional SciPy reference. The eval skip requires optional DreaMS weights. None of these skips is reported as a pass or as validation of an optional extra.
@@ -122,8 +124,8 @@ The builds produced:
 
 | Artifact | SHA-256 |
 |---|---|
-| `msmcp-1.0.2-py3-none-any.whl` | `071a1bd02149e765ec6c70bc6899c243d2eca97581e9f2d63347b5ace8e3a6d9` |
-| `msmcp-1.0.2.tar.gz` | `528f256a1e417785d53f3bb11fc04543441c480d30dfb1590e8b560caba25335` |
+| `msmcp-1.0.2-py3-none-any.whl` | `92500b39002a4676395f9264fa952bab55bd6e32755952eb1ad8ac679c6c9bdf` |
+| `msmcp-1.0.2.tar.gz` | `ca28702d6efae8eb8021233ab27c88923ebf9b346ead4a85d93fcfced8b3916e` |
 
 The sdist had 117 members, included README/CHANGELOG and the validation result referenced by included documentation, and excluded `.cache`, `.worktrees`, `.venv`, release-qualification docs/results, the evaluation output and qualification-only client/performance scripts. The wheel had 35 members. Both wheel and sdist installed and passed the real MCP workflow. The final project requirement is Python `>=3.13`; only Python 3.13.12 was tested here.
 
@@ -142,7 +144,7 @@ Reproduction command, with the final installed wheel and the pinned MassBank ass
   --sha256 cf49e1b293f1c8c1b4a645123638826eea70db656bd76e09ea0c47a1a56fc269
 ```
 
-The harness starts the installed server over stdio and scans the entire 139,006-spectrum, 137,309,196-byte MSP with chunk size 2,000 using a fixed **synthetic** five-peak query. Observed: 11.03 s from client start through report, 4,324-byte report, and 187,875,328 bytes maximum child RSS on macOS (Darwin `ru_maxrss` bytes). The complete machine result is `docs/release-qualification/PERFORMANCE_RECEIPT.json`. This is one bounded workload, not an acceptance threshold, throughput guarantee, or identification result. Repeated-job stability, memory retained after release, and cancellation latency under representative large jobs were not characterized.
+The harness starts the installed server over stdio and scans the entire 139,006-spectrum, 137,309,196-byte MSP with chunk size 2,000 using a fixed **synthetic** five-peak query. On the final wheel after the `_BoundedStream` fix, observed: 12.694 s from client start through report, 4,324-byte report, and 185,417,728 bytes maximum child RSS on macOS (Darwin `ru_maxrss` bytes). The complete machine result is `docs/release-qualification/PERFORMANCE_RECEIPT.json`. This is one bounded workload, not an acceptance threshold, throughput guarantee, or identification result. Repeated-job stability, memory retained after release, and cancellation latency under representative large jobs were not characterized.
 
 ## 9. MassPilot interoperability
 
@@ -175,15 +177,15 @@ The source list is not an authorization to close or merge those PRs. PR #82’s 
 ## 12. Findings, decision and integration path
 
 - **P0:** none confirmed in the corrected local snapshot.
-- **P1:** the cache-inclusive sdist, invalid non-positive scoring coordinates, isotope underflow/unbounded work, non-finite precursor inputs, and vulnerable MCP dependency floor were corrected locally. These remain unresolved in the exact hosted PR #82 head until this qualification diff is integrated.
+- **P1:** the cache-inclusive sdist, invalid non-positive scoring coordinates, isotope underflow/unbounded work, non-finite precursor inputs, vulnerable MCP dependency floor, and decompression read-before-budget behavior were corrected locally. These remain unresolved in the exact hosted PR #82 head until this qualification diff is integrated.
 - **P2:** expected tool-exception tracebacks disclose local paths on stderr; installed-protocol job expiry was not waited out; runtime outbound network behavior was not instrumented; optional extras are not qualified; there is no current MassPilot adapter; no independent real mzML acquisition or broad performance/stability campaign is available. Do not claim network isolation from this qualification.
 - **P3:** further cross-instrument/mode scorer evaluation and optional-extra qualification are future work, not 1.0.2 scope.
 
 **Release decision:** the current hosted PR #82 at `e847aef…` is **NO-GO for publication** because the reproducible P1 corrections above are not present in that head. The corrected local snapshot passed its required source gates, repeated builds, fresh wheel/sdist installs, and installed stdio tests. After the local qualification commit is reviewed and integrated, the scoped similarity-only release is a **CONDITIONAL GO**, subject to hosted CI/artifact re-verification and owner approval. Future statistical inference and actual MassPilot integration are not release blockers for the stated scope.
 
-**Minimal integration sequence (not performed):**
+**Integration status and sequence:** this authorized follow-up branch is the review vehicle; the hosted PR #82 branch has not been modified or merged.
 
-1. Owner reviews the local qualification commit and authorizes a narrow PR targeting `release/1.0.2-candidate`; do not merge #72 or #85 separately and do not rebase the shared candidate branch.
-2. Reconcile edits to `pyproject.toml`, `uv.lock`, `CHANGELOG.md`, `README.md`, scoring/chemistry tools and tests if the candidate moves. Historical #72 integration conflicted in `CHANGELOG.md`, `README.md` and `src/msmcp/tools/search.py`; those paths deserve manual review even though this qualification branch is based on the exact current head.
-3. On the integrated head, rerun hosted CI, repeat the two-build artifact hash/content inspection and fresh installed-client checks. Refresh the stale PR #82 head/check-run/readiness text and obtain explicit owner review.
+1. Review this draft PR targeting `release/1.0.2-candidate`; do not merge #72 or #85 separately and do not rebase the shared candidate branch.
+2. Reconcile edits to `pyproject.toml`, `uv.lock`, `CHANGELOG.md`, `README.md`, scoring/chemistry/security tools and tests if the candidate moves. Historical #72 integration conflicted in `CHANGELOG.md`, `README.md` and `src/msmcp/tools/search.py`; those paths deserve manual review even though this branch is based on the exact current head.
+3. On any eventual integrated head, rerun hosted CI, repeat the two-build artifact hash/content inspection and fresh installed-client checks. Refresh the stale PR #82 head/check-run/readiness text and obtain explicit owner review.
 4. Separately, the owner verifies PyPI pending Trusted Publisher (`msmcp` / `janusson` / `MSMCP` / `publish.yml` / environment `pypi`) and GitHub environment protection before any separately authorized tag or publication. Nothing in this qualification performs those actions.

@@ -47,6 +47,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   resolves MCP 2.3.0; the published requirement now excludes the advisory's
   vulnerable `<2.2.0` range. Exact 2.2.0 compatibility passed the installed
   stdio-client qualification.
+- **Bound decompressed reads before materialization.** `read`, `read1`, and
+  `readinto` now cap each underlying request at the remaining byte budget plus a
+  one-byte overflow sentinel, so gzip readers refuse expansion before an
+  unbounded buffer is returned to the wrapper.
 
 ### Changed
 

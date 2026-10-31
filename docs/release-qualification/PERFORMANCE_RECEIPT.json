@@ -4,10 +4,10 @@
   "library_path": ".cache/massbank/MassBank_NISTformat.msp",
   "library_sha256": "cf49e1b293f1c8c1b4a645123638826eea70db656bd76e09ea0c47a1a56fc269",
   "library_spectra_reported": "139,006",
-  "max_child_rss_bytes_macos": 187875328,
+  "max_child_rss_bytes_macos": 185417728,
   "query": "fixed synthetic performance fixture; not identification evidence",
   "response_bytes": 4324,
-  "search_elapsed_seconds": 11.03,
+  "search_elapsed_seconds": 12.694,
   "server_version": "1.0.2",
   "status": "completed"
 }
