@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
+import os
 import platform
 import time
 from collections.abc import Mapping
@@ -113,7 +114,10 @@ def software_versions() -> dict[str, str]:
     """Return the versions of the packages relevant to reproducibility.
 
     Only distributions that are actually installed appear, so the mapping
-    describes this installation rather than a hypothetical one.
+    describes this installation rather than a hypothetical one. Optional
+    packages (including ``massflow``) are not required or imported here. A
+    distribution version is inventory, not proof that its backend was used
+    or is compatible; source ``backend`` records the reader actually used.
     """
     versions = {"python": platform.python_version()}
     for name in _TRACKED_PACKAGES:
@@ -131,17 +135,36 @@ def file_digest(
     """Return ``"sha256:<hex>"`` for *path*, or ``None`` if it is too large.
 
     Returns ``None`` rather than raising when the path cannot be read: a
-    provenance record is metadata about a result, and must never be the reason
-    a scientific operation fails.
+    provenance record is normally optional metadata. Callers requiring source
+    authentication must reject a null digest. Reads are bounded by limit_bytes
+    plus one look-ahead byte; detected changes during hashing return None.
     """
     resolved = Path(path)
     try:
-        if resolved.stat().st_size > limit_bytes:
+        before = resolved.stat()
+        if before.st_size > limit_bytes:
             return None
         digest = hashlib.sha256()
+        total = 0
         with resolved.open("rb") as handle:
-            while chunk := handle.read(_DIGEST_CHUNK_BYTES):
+            # Bound actual reads, including growth after the initial stat. One
+            # look-ahead byte distinguishes exactly-at-limit from too large.
+            while chunk := handle.read(
+                min(_DIGEST_CHUNK_BYTES, limit_bytes - total + 1)
+            ):
+                total += len(chunk)
+                if total > limit_bytes:
+                    return None
                 digest.update(chunk)
+            after = os.fstat(handle.fileno())
+        current = resolved.stat()
+        attributes = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if total != before.st_size or any(
+            getattr(before, key) != getattr(other, key)
+            for other in (after, current)
+            for key in attributes
+        ):
+            return None
     except OSError:
         return None
     return f"sha256:{digest.hexdigest()}"

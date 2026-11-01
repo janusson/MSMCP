@@ -34,7 +34,7 @@ flowchart TD
     end
 
     Ingest["Ingestion (ingest.py)"]
-    MassFlow["MassFlow (imzML)"]
+    MassFlow["Optional imaging massflow (imzML)"]
     Readers["MSMCP readers (mzML, MGF)"]
 
     Agent --> MCP --> Tools
@@ -114,10 +114,10 @@ Everything else is present in the released version.
 
 | Capability | Where | Notes |
 |---|---|---|
-| MassFlow-backed ingestion | `massflow_io.py`, `ingest.py` | imzML imaging data, via MassFlow's own reader |
-| MSMCP-owned readers | `mzml.py`, `mgf.py` | formats MassFlow does not cover |
+| Optional imaging ingestion | `massflow_io.py`, `ingest.py` | imzML via lowercase `massflow`; requires the `imaging` extra |
+| MSMCP-owned readers | `mzml.py`, `mgf.py` | core mzML/MGF; independent of MassFlow |
 | Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions (on `main`, unreleased) |
-| Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py` | exact mass, isotopes, ppm validation, cosine, QC |
+| Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py`, `tools/chromatograms.py` | exact mass, isotopes, ppm validation, cosine, QC and bounded scan-level TIC/BPC/XIC |
 | Spectral scoring contract | `models/scoring.py` | `SpectrumScorer`; classical (in-house, reference implementation) and embedding scorers behind one interface |
 | Instrument-class defaults | `instruments.py` | every experimental threshold, its default per instrument class, and the provenance of each default (on `main`, unreleased) |
 | Server-side data references | `state/pointers.py`, `state/store.py` | payloads never cross MCP/JSON |
@@ -132,8 +132,9 @@ Everything else is present in the released version.
   mocks), `models/backends.py` (DreaMS, LSM-MS2). Selected through
   `MSMCP_EMBEDDING_BACKEND`; absent by default, and their absence must degrade
   to a clear error, never to a plausible-looking score.
-* **RDKit cheminformatics** — the `chem` extra; without it `annotate_isotopes`
-  falls back to a static table and says so.
+* **RDKit cheminformatics** — the `chem` extra enables SMILES-to-formula
+  conversion. Without it, explicit formula input to `annotate_isotopes` works,
+  while SMILES conversion fails closed; no guessed formula is substituted.
 
 Neither is required for the core server to start, serve, or be tested.
 
@@ -201,7 +202,7 @@ project's array representation. There is no Arrow-shaped hole to fill.
 ## Ingestion
 
 ```
-file -> ingest.resolve_source -> (MassFlow | msmcp reader) -> Spectrum -> DataReference
+file -> ingest.resolve_source -> (optional imaging massflow | msmcp reader) -> Spectrum -> DataReference
 ```
 
 `ingest.resolve_source` chooses the reader from the file extension and records
@@ -209,20 +210,27 @@ which one it picked, because that choice belongs in provenance.
 
 | Format | Reader | Why |
 |---|---|---|
-| `.mzML`, `.mzML.gz` | `msmcp.mzml` | MassFlow 0.1.x ships no mzML reader |
-| `.mgf`, `.mgf.gz` | `msmcp.mgf` | MassFlow ships no MGF reader |
-| `.imzML` (+ `.ibd`) | MassFlow `MSDataManagerImzML` | genuinely supported by MassFlow |
+| `.mzML`, `.mzML.gz` | `msmcp.mzml` | core reader; no MassFlow dependency |
+| `.mgf`, `.mgf.gz` | `msmcp.mgf` | core reader; no MassFlow dependency |
+| `.imzML` (+ `.ibd`) | imaging `massflow.data_manager.MSDataManagerImzML` | optional `imaging` extra |
 | `.raw`, `.d`, `.wiff`, `.mzXML` | refused | recognised, with conversion guidance |
 
 All readers converge on one type, `msmcp.mzml.Spectrum`, so downstream tools
 never branch on format. `Spectrum.coordinate` is populated only for imaging
 sources.
 
-### MassFlow integration
+### Optional imaging integration
 
-MassFlow is used, not wrapped speculatively: MSMCP calls
-`MSDataManagerImzML` and converts the spectra it produces. Two documented
-consequences:
+The `imaging` extra installs lowercase imaging distribution `massflow` (0.1.x),
+not the separate analytical `MassFlow` engine. They share a distribution name,
+not an API; keep them in separate environments. MSMCP lazily calls
+`MSDataManagerImzML` only for imzML reads. Core startup and mzML/MGF do not
+require this package. Missing or incompatible imports raise
+`MissingDependencyError` with install guidance at the Python boundary; the
+current MCP SDK masks its message in the wire-level tool error, while details
+are logged to stderr. `ping` reports installed distribution metadata, not
+backend compatibility. Provenance records the reader actually used. Two
+consequences occur only when the optional imaging backend is imported:
 
 1. **MassFlow reconfigures the root logger on import.** Its logger module
    removes every root handler and installs a `StreamHandler(sys.stdout)`. On
@@ -289,16 +297,14 @@ Statuses use the MCP vocabulary (`mcp.types.TaskStatus`), and
 `Task` (`task_id`, `status`, `status_message`, `created_at`,
 `last_updated_at`, `ttl`, `poll_interval`).
 
-**The installed SDK does not dispatch Tasks.** `mcp` 2.1.1 defines the Tasks
-types but documents them as types-only: `tasks/get`, `tasks/result` and
-`tasks/cancel` are absent from the request unions, so a server cannot answer
-them regardless of what it implements. MSMCP therefore exposes the same
-semantics through its own polling tool (`check_search_status`) and keeps the
-wire representation aligned with the specification.
-
-The alternative — inventing an application-level task protocol — would be
-incompatible with the spec, and is deliberately not done. When the transport
-dispatches Tasks, the mapping is mechanical rather than a redesign.
+The candidate lock resolves `mcp` 2.3.0, which is also the SDK version used by
+the recorded installed-client qualification; package metadata declares the
+broader lower bound `mcp[cli]>=2.0.0`. SDK 2.x supports generic extension request
+registration and capability advertisement, but MSMCP has not registered the
+Tasks extension methods. It exposes job semantics through its own polling tool
+(`check_search_status`) and keeps the wire representation aligned with the MCP
+`Task` shape. The contract test verifies extension hooks, not a Tasks adapter.
+Implementing the Tasks extension remains roadmap issue #7.
 
 ## Security and limits
 
@@ -309,6 +315,7 @@ Every limit is enforced at one place, and fails loudly rather than degrading sil
 | Filesystem root (symlinks resolved) | `security.resolve_path` | `MSMCP_ALLOWED_ROOT` |
 | Per-file size | `security.validate_file_size` | `MSMCP_MAX_FILE_SIZE_BYTES` |
 | Spectra per request | `security.validate_spectrum_count` (refuse) / `tools.qc.generate_qc_summary` (cap + disclose) | `MSMCP_MAX_SPECTRA` |
+| Chromatogram scans per request | `chromatograms.extract_chromatograms` (refuse, no partial result) | per-call `max_spectra`, hard ceiling 5,000 |
 | Live references | `state.pointers.PointerStore` | `MSMCP_MAX_REFERENCES` |
 | Reference bytes | `state.pointers.PointerStore` | `MSMCP_MAX_TOTAL_BYTES` |
 | Reference lifetime | `state.pointers.PointerStore` | `MSMCP_REFERENCE_TTL_SECONDS` |
@@ -345,8 +352,8 @@ during the v1.0 work:
 2. **Job state is in-process.** It does not survive a restart; the poller
    reports a lost job as failed rather than pending, so a client can never spin
    forever.
-3. **MSMCP owns its mzML and MGF readers.** That is a deliberate consequence of
-   MassFlow 0.1.x being imaging-only, not an architectural preference.
+3. **MSMCP owns its mzML and MGF readers.** They are core readers independent of
+   both the optional imaging distribution and the analytical MassFlow engine.
 4. **MS-Numpress-compressed mzML arrays** require the optional `pynumpress`
    package and report a missing-dependency error without it.
 5. **MassFlow materialises one placeholder per pixel** when loading an imzML
@@ -357,6 +364,11 @@ during the v1.0 work:
    most recent deliveries. A job polled again after 1024 later searches re-sends
    its report once before digesting; a durable executor would keep this record
    beside the job instead.
+8. **Distribution is prepared but not published.** The repository's
+   `Dockerfile` is a local, stdio-only packaging starting point and builds from
+   the committed `uv.lock`. There is no registry manifest, published package,
+   signed image, or hosted runtime yet; those require release decisions beyond
+   this source-tree change.
 
 ## Scientific validation
 
@@ -387,7 +399,7 @@ of the server or of the fast test suite.
 
 The release is complete when the repository demonstrates all of the following:
 
-- [x] Real, MassFlow-backed ingestion for imzML, plus MSMCP readers for mzML and MGF
+- [x] Optional imaging-backed imzML ingestion, plus core MSMCP readers for mzML and MGF
 - [x] Robust scientific tool execution with deterministic tests for core calculations
 - [x] Server-side `DataReference`s for large payloads, with no payload serialisation
 - [x] Consistent result representations (structured metadata + references + provenance)
@@ -409,49 +421,47 @@ The release is complete when the repository demonstrates all of the following.
 This is the list a release is judged against; what the software is *for* is the
 scope section above.
 
-### The search null is fitted, not sampled (#12)
+### Calibrated search significance (deferred; #12 / #72)
 
-- [x] The upper tail is fitted to the decoy score distribution and evaluated
-      analytically, so a q-value below the sampled floor is expressible and the
-      per-query cost is no longer linear in library size.
-- [x] A search report names the null model it used and prints the smallest
-      attainable q, so a sampling floor can never be read as a result.
-- [x] The fitted null is validated against the sampled one on a library where
-      both can be computed, with the disagreement quantified rather than
-      asserted.
+Production search does **not** report calibrated significance. The fitted-null
+work in `msmcp.models.null_model` remains for offline research, but it is not
+used by `search_library`: a decoy distribution cannot establish wrong-compound
+null admissibility without independently confirmed identities and a prespecified
+evaluation design. `VALIDATION_SIGNIFICANCE.md` records the withdrawal and the
+conditions for restoration.
 
-*As implemented.* `msmcp.models.null_model` fits a generalised Pareto
-distribution, by the method of moments, to the decoy exceedances above a high
-threshold (peaks-over-threshold). `search_library` draws a **fixed** decoy sample
-(`NULL_SAMPLE_SIZE`, independent of the library) and reads significance above
-the threshold from the fitted survival function, so a p-value below the sampled
-floor is expressible and the **null** cost is constant. The exhaustive scan over
-every spectrum remains O(m) — inherent to searching a library, and now the only
-term still linear in it. The report names the model, its threshold, shape and
-scale, and the smallest attainable q; `tests/test_null_model.py` compares the
-fitted p-values with the sampled ones and asserts the disagreement against a
-bound (max ≈0.05 absolute, mean ≈0.003, on a 500-spectrum library) rather than
-claiming it. The method of moments is a deliberate, scipy-free choice; that test
-is what would catch a fit that stopped tracking its decoys.
+- [x] Production `search_library` reports similarity-ranked candidates with no
+      p/q values, no significance filter and an explicit uncalibrated-status
+      disclosure in its report, digest and provenance.
+- [ ] Restoring a confidence claim requires independently confirmed identities,
+      separate calibration/evaluation compounds and batches, a defined testing
+      family, and prespecified acceptance criteria with uncertainty.
+- [ ] Any restored calibration is validated on held-out data and its failure
+      modes are documented before a result is labelled a discovery.
 
 ### Library format coverage (#2)
 
-- [ ] `get_library_provider` resolves `.mgf`/`.mgf.gz` and a documented local
+- [x] `get_library_provider` resolves `.mgf`/`.mgf.gz` and a documented local
       SQLite peak store, in addition to the MSP/NIST text reader.
-- [ ] Every provider crosses the same `SecurityPolicy` as an acquisition —
+- [x] Every provider crosses the same `SecurityPolicy` as an acquisition —
       allowed root with symlinks resolved, file-size limit, read-only — and is
       probed before dispatch, so a malformed library of any format is a typed
       tool error rather than a failed background job.
-- [ ] The SQLite store is opened read-only by URI (`file:...?mode=ro`), with
+- [x] The SQLite store is opened read-only by URI (`file:...?mode=ro`), with
       extension loading disabled and `ATTACH` refused. It is a binary format
       parsed by a library rather than by this project's own line reader, which
       makes it a different surface from MSP, not merely a third suffix.
-- [ ] The SQLite schema is documented in this repository, including how a user
+- [x] The SQLite schema is documented in this repository, including how a user
       builds a store from a text library.
-- [ ] Banner and provenance name what was opened, for every format: path,
+- [x] Banner and provenance name what was opened, for every format: path,
       format, spectrum count and digest.
 
 ### Acquisition context (#16)
+
+*Partially implemented (#79).* Search now carries MS level, precursor m/z,
+polarity, charge and isolation window from mzML/MGF and gates library
+candidates on them. Collision energy, analyser type, resolution and source
+conditions remain unparsed and are not claimed.
 
 Preserving *how* a spectrum was acquired matters as much as the spectrum itself:
 source settings can be manipulated to produce wildly different results against a

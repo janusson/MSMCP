@@ -24,6 +24,7 @@ import binascii
 import gzip
 import importlib
 import logging
+import math
 import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Iterator
@@ -64,8 +65,26 @@ _ACC_NO_COMPRESSION = "MS:1000576"
 _ACC_MS_LEVEL = "MS:1000511"
 _ACC_SCAN_START_TIME = "MS:1000016"
 _ACC_SELECTED_ION_MZ = "MS:1000744"
+_ACC_CHARGE_STATE = "MS:1000041"
+_ACC_ISOLATION_WINDOW_LOWER = "MS:1000828"
+_ACC_ISOLATION_WINDOW_UPPER = "MS:1000829"
 _ACC_POSITIVE_SCAN = "MS:1000130"
 _ACC_NEGATIVE_SCAN = "MS:1000129"
+_ACC_CENTROID_SPECTRUM = "MS:1000127"
+_ACC_PROFILE_SPECTRUM = "MS:1000128"
+
+_SCAN_TIME_UNITS = {
+    "UO:0000010": "second",
+    "UO:0000031": "minute",
+    "MS:1000038": "minute",  # obsolete PSI-MS term
+    "MS:1000039": "second",  # obsolete PSI-MS term
+}
+_SCAN_TIME_UNIT_NAMES = {
+    "second": "second",
+    "seconds": "second",
+    "minute": "minute",
+    "minutes": "minute",
+}
 
 _NUMPRESS_ACCESSIONS = frozenset({"MS:1002312", "MS:1002313", "MS:1002314"})
 
@@ -82,6 +101,9 @@ class Spectrum:
     ``coordinate`` is populated only for imaging sources (imzML, via MassFlow),
     where a spectrum is identified by its ``(x, y, z)`` pixel rather than by a
     scan index; for LC-MS sources it stays ``None``.
+
+    ``retention_time`` is always in minutes. The source value, accession, and
+    unit name retain the mzML scan-time declaration when one is present.
     """
 
     index: int | None
@@ -98,6 +120,22 @@ class Spectrum:
     spectrum that carries neither the positive- nor the negative-scan cvParam),
     so a tool never has to invent one.
     """
+    charge: int | None = None
+    """Stated precursor charge magnitude, when the source declares one."""
+
+    isolation_window: float | None = None
+    """Stated precursor isolation-window width in m/z, when declared."""
+
+    retention_time_source_value: float | None = None
+    retention_time_source_unit_accession: str | None = None
+    retention_time_source_unit_name: str | None = None
+
+    representation: str | None = None
+    """``"centroid"`` or ``"profile"`` when stated by the spectrum CV terms."""
+
+    native_id: str | None = None
+    """Exact mzML spectrum/@id; never inferred from index or ordinal."""
+    source_warnings: tuple[str, ...] = ()
 
     @property
     def tic(self) -> float:
@@ -108,6 +146,14 @@ class Spectrum:
     def n_peaks(self) -> int:
         """Number of peaks in the spectrum."""
         return int(self.mz.size)
+
+
+@dataclass(frozen=True, slots=True)
+class _ScanStartTime:
+    minutes: float
+    source_value: float
+    source_unit_accession: str | None
+    source_unit_name: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +422,7 @@ def _parse_binary_data_array(
     return _decode_binary(payload, compression=compression, precision=precision), kind
 
 
-def _extract_scan_start_time(elem: ET.Element) -> float | None:
+def _extract_scan_start_time(elem: ET.Element) -> _ScanStartTime | None:
     for scan in elem:
         if _local(scan.tag) != "scan":
             continue
@@ -386,11 +432,90 @@ def _extract_scan_start_time(elem: ET.Element) -> float | None:
                 and cv.get("accession") == _ACC_SCAN_START_TIME
             ):
                 value = _to_float_or_none(cv.get("value"))
-                if value is None:
-                    return None
-                unit = (cv.get("unitName") or "").lower()
-                # Normalise to minutes for the summary; the mzML default is seconds.
-                return value / 60.0 if "second" in unit else value
+                if value is None or not math.isfinite(value):
+                    raise MalformedFileError(
+                        "Scan start time must have a finite numeric value."
+                    )
+                accession = cv.get("unitAccession")
+                name = cv.get("unitName")
+                if accession:
+                    unit = _SCAN_TIME_UNITS.get(accession)
+                    if unit is None:
+                        raise MalformedFileError(
+                            f"Unsupported scan start time unit accession {accession!r}."
+                        )
+                elif name:
+                    unit = _SCAN_TIME_UNIT_NAMES.get(name.strip().lower())
+                    if unit is None:
+                        raise MalformedFileError(
+                            f"Unsupported scan start time unit name {name!r}."
+                        )
+                else:
+                    raise MalformedFileError("Scan start time has no unit.")
+
+                if name:
+                    named_unit = _SCAN_TIME_UNIT_NAMES.get(name.strip().lower())
+                    if named_unit is None:
+                        raise MalformedFileError(
+                            f"Unsupported scan start time unit name {name!r}."
+                        )
+                    if named_unit != unit:
+                        raise MalformedFileError(
+                            "Scan start time unit accession and name conflict."
+                        )
+
+                minutes = value / 60.0 if unit == "second" else value
+                return _ScanStartTime(minutes, value, accession, name)
+    return None
+
+
+def _extract_selected_ion(elem: ET.Element) -> tuple[float | None, int | None]:
+    """Return the selected-ion m/z and charge magnitude, when declared."""
+    for precursor in elem:
+        if _local(precursor.tag) != "precursor":
+            continue
+        for selected_ion_list in precursor:
+            if _local(selected_ion_list.tag) != "selectedIonList":
+                continue
+            for selected_ion in selected_ion_list:
+                if _local(selected_ion.tag) != "selectedIon":
+                    continue
+                mz: float | None = None
+                charge: int | None = None
+                for cv in selected_ion:
+                    if _local(cv.tag) != "cvParam":
+                        continue
+                    if cv.get("accession") == _ACC_SELECTED_ION_MZ:
+                        mz = _to_float_or_none(cv.get("value"))
+                    elif cv.get("accession") == _ACC_CHARGE_STATE:
+                        raw_charge = _to_int_or_none(cv.get("value"))
+                        if raw_charge is not None:
+                            charge = abs(raw_charge)
+                if mz is not None or charge is not None:
+                    return mz, charge
+    return None, None
+
+
+def _extract_isolation_window(elem: ET.Element) -> float | None:
+    """Return the stated isolation-window width (m/z), or ``None``."""
+    for precursor in elem:
+        if _local(precursor.tag) != "precursor":
+            continue
+        for window in precursor:
+            if _local(window.tag) != "isolationWindow":
+                continue
+            lower: float | None = None
+            upper: float | None = None
+            for cv in window:
+                if _local(cv.tag) != "cvParam":
+                    continue
+                if cv.get("accession") == _ACC_ISOLATION_WINDOW_LOWER:
+                    lower = _to_float_or_none(cv.get("value"))
+                elif cv.get("accession") == _ACC_ISOLATION_WINDOW_UPPER:
+                    upper = _to_float_or_none(cv.get("value"))
+            if lower is not None and upper is not None:
+                width = lower + upper
+                return width if math.isfinite(width) and width > 0.0 else None
     return None
 
 
@@ -417,8 +542,12 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
     index = _to_int_or_none(elem.get("index"))
     ms_level: int | None = None
     retention_time: float | None = None
+    scan_time: _ScanStartTime | None = None
     precursor_mz: float | None = None
+    precursor_charge: int | None = None
+    isolation_window: float | None = None
     polarity: str | None = None
+    representations: set[str] = set()
 
     for child in elem:
         tag = _local(child.tag)
@@ -428,10 +557,18 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
             polarity = "positive"
         elif tag == "cvParam" and child.get("accession") == _ACC_NEGATIVE_SCAN:
             polarity = "negative"
+        elif tag == "cvParam" and child.get("accession") == _ACC_CENTROID_SPECTRUM:
+            representations.add("centroid")
+        elif tag == "cvParam" and child.get("accession") == _ACC_PROFILE_SPECTRUM:
+            representations.add("profile")
         elif tag == "scanList":
-            retention_time = _extract_scan_start_time(child)
+            scan_time = _extract_scan_start_time(child)
+            retention_time = scan_time.minutes if scan_time is not None else None
         elif tag == "precursorList":
-            precursor_mz = _extract_precursor_mz(child)
+            precursor_mz, precursor_charge = _extract_selected_ion(child)
+            if precursor_mz is None:
+                precursor_mz = _extract_precursor_mz(child)
+            isolation_window = _extract_isolation_window(child)
 
     binary_data_array_list = _child(elem, "binaryDataArrayList")
     if binary_data_array_list is None:
@@ -455,15 +592,39 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
         raise MalformedFileError(
             "A spectrum is missing an m/z or intensity binary array."
         )
+    if mz.size != intensity.size:
+        raise MalformedFileError(
+            f"Spectrum m/z and intensity arrays have different lengths "
+            f"({mz.size} and {intensity.size})."
+        )
 
     return Spectrum(
         index=index,
+        native_id=elem.get("id"),
+        source_warnings=("declared_array_length_mismatch",)
+        if declared_length is not None
+        and (mz.size != declared_length or intensity.size != declared_length)
+        else (),
         ms_level=ms_level,
         retention_time=retention_time,
         precursor_mz=precursor_mz,
         mz=mz,
         intensity=intensity,
         polarity=polarity,
+        charge=precursor_charge,
+        isolation_window=isolation_window,
+        retention_time_source_value=(
+            scan_time.source_value if scan_time is not None else None
+        ),
+        retention_time_source_unit_accession=(
+            scan_time.source_unit_accession if scan_time is not None else None
+        ),
+        retention_time_source_unit_name=(
+            scan_time.source_unit_name if scan_time is not None else None
+        ),
+        representation=next(iter(representations))
+        if len(representations) == 1
+        else None,
     )
 
 
@@ -473,9 +634,10 @@ def _parse_spectrum(elem: ET.Element) -> Spectrum:
 def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
     """Stream spectra from *path*, one at a time.
 
-    A spectrum whose binary arrays do not supply the ``defaultArrayLength`` it
-    declares is **reported, not refused**: the decoded spectrum is yielded as it
-    is, and one warning names the count once the file has been read through.
+    Unequal decoded m/z and intensity arrays are refused. A spectrum whose
+    paired arrays do not supply the ``defaultArrayLength`` it declares is
+    **reported, not refused**: the decoded spectrum is yielded as it is, and
+    one warning names the count once the file has been read through.
     Refusing the file would make a released server reject data it accepts today
     on the strength of a writer's bookkeeping, while the decoded arrays are what
     every downstream tool actually uses.  The warning is what makes the
@@ -500,6 +662,11 @@ def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
                     ):
                         mismatched_spectra += 1
                     yield spectrum
+                except MalformedFileError as exc:
+                    scan_id = elem.get("id") or f"index={elem.get('index', '?')}"
+                    raise MalformedFileError(
+                        f"{resolved} spectrum {scan_id}: {exc}"
+                    ) from exc
                 finally:
                     elem.clear()
         if mismatched_spectra:

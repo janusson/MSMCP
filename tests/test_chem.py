@@ -15,10 +15,55 @@ from pydantic import ValidationError
 
 from msmcp.tools.chem import (
     _ADDUCT_DB,
+    MAX_FORMULA_ATOMS,
+    MAX_IDENTIFIER_LENGTH,
     NEUTRON_MASS,
     _isotope_pattern,
     _parse_formula,
+    _smiles_to_formula,
 )
+
+# Independent reference data for the adduct convention used in this test.
+# Neutral atomic masses (Da), from NIST/CIAAW evaluated isotopic masses, and
+# CODATA electron mass. An ion mass is the neutral-atom composition minus
+# net_charge * electron_mass. Ionization/binding energies are neglected.
+# These constants are deliberately test-local: production constants and
+# _ADDUCT_DB are not the numerical oracle.
+REFERENCE_ATOM_MASSES = {
+    "H": 1.00782503223,
+    "C": 12.00000000000,
+    "N": 14.00307400443,
+    "O": 15.99491461957,
+    "Na": 22.98976928200,
+    "K": 38.96370648640,
+    "Cl": 34.96885268200,
+}
+REFERENCE_ELECTRON_MASS = 0.000548579909065
+REFERENCE_ADDUCTS = {
+    "[M+H]+": ({"H": 1}, 1),
+    "[M+Na]+": ({"Na": 1}, 1),
+    "[M+K]+": ({"K": 1}, 1),
+    "[M+NH4]+": ({"N": 1, "H": 4}, 1),
+    "[M+H-H2O]+": ({"H": -1, "O": -1}, 1),
+    "[M+2H]2+": ({"H": 2}, 2),
+    "[M+3H]3+": ({"H": 3}, 3),
+    "[M+2Na-H]+": ({"Na": 2, "H": -1}, 1),
+    "[M-H]-": ({"H": -1}, -1),
+    "[M+Cl]-": ({"Cl": 1}, -1),
+    "[M+HCOO]-": ({"C": 1, "H": 1, "O": 2}, -1),
+    "[M+CH3COO]-": ({"C": 2, "H": 3, "O": 2}, -1),
+    "[M-H2O-H]-": ({"H": -3, "O": -1}, -1),
+    "[M+Na-2H]-": ({"Na": 1, "H": -2}, -1),
+}
+
+
+def reference_adduct_shift(adduct: str) -> tuple[float, int]:
+    """Independent neutral-atom/electron mass convention for an adduct."""
+    composition, charge = REFERENCE_ADDUCTS[adduct]
+    neutral_atom_delta = sum(
+        REFERENCE_ATOM_MASSES[element] * count for element, count in composition.items()
+    )
+    return neutral_atom_delta - charge * REFERENCE_ELECTRON_MASS, charge
 
 
 # ---------------------------------------------------------------------------
@@ -35,9 +80,9 @@ class TestPredictAdductOffsetValid:
             ("[M+K]+", "+38.963158", "+1", "positive", "M + 38.963158 Da"),
             ("[M+NH4]+", "+18.033826", "+1", "positive", "M + 18.033826 Da"),
             ("[M+H-H2O]+", "-17.003288", "+1", "positive", "M - 17.003288 Da"),
-            ("[M+2H]2+", "+2.013456", "+2", "positive", "(M + 2.013456) / |2| Da"),
-            ("[M+3H]3+", "+3.020184", "+3", "positive", "(M + 3.020184) / |3| Da"),
-            ("[M+2Na-H]+", "+44.971714", "+1", "positive", "M + 44.971714 Da"),
+            ("[M+2H]2+", "+2.014553", "+2", "positive", "(M + 2.014553) / |2| Da"),
+            ("[M+3H]3+", "+3.021829", "+3", "positive", "(M + 3.021829) / |3| Da"),
+            ("[M+2Na-H]+", "+44.971165", "+1", "positive", "M + 44.971165 Da"),
             ("[M-H]-", "-1.007276", "-1", "negative", "(M - 1.007276) / |-1| Da"),
             ("[M+Cl]-", "+34.969401", "-1", "negative", "(M + 34.969401) / |-1| Da"),
             ("[M+HCOO]-", "+44.998203", "-1", "negative", "(M + 44.998203) / |-1| Da"),
@@ -49,7 +94,7 @@ class TestPredictAdductOffsetValid:
                 "(M + 59.013853) / |-1| Da",
             ),
             ("[M-H2O-H]-", "-19.017841", "-1", "negative", "(M - 19.017841) / |-1| Da"),
-            ("[M+Na-2H]-", "+20.975765", "-1", "negative", "(M + 20.975765) / |-1| Da"),
+            ("[M+Na-2H]-", "+20.974668", "-1", "negative", "(M + 20.974668) / |-1| Da"),
         ],
     )
     def test_known_adduct(
@@ -69,13 +114,37 @@ class TestPredictAdductOffsetValid:
         assert f"m/z offset for neutral M: {offset}\n" in out
         assert f"Formula:  m/z = {offset}" in out
 
-    def test_every_database_entry_is_accepted(
+    def test_every_adduct_matches_independent_neutral_atom_ion_mass_reference(
         self, chem_tools: dict[str, Callable[..., str]]
     ) -> None:
-        """Completeness guard: every canonical adduct in _ADDUCT_DB resolves."""
-        for adduct in _ADDUCT_DB:
+        """Audit every canonical shift without using production constants.
+
+        For a neutral molecule mass M, the ion mass is computed as the
+        neutral-atom delta minus net charge times the electron mass. Expected
+        m/z then uses the absolute charge magnitude. The multiple-charge
+        references pin the cases that previously subtracted electrons twice.
+        """
+        neutral_mass = 500.0
+        for adduct, (_, charge) in REFERENCE_ADDUCTS.items():
+            expected_shift, expected_charge = reference_adduct_shift(adduct)
+            assert expected_charge == charge
+            assert _ADDUCT_DB[adduct]["charge"] == charge
+            assert _ADDUCT_DB[adduct]["shift"] == pytest.approx(
+                expected_shift, abs=5e-9
+            ), adduct
+
             out = chem_tools["predict_adduct_offset"](adduct_string=adduct)
-            assert not out.startswith("REJECTED"), f"{adduct} was rejected"
+            assert f"Exact mass shift (Δ): {expected_shift:+.6f} Da" in out
+            assert f"|{abs(charge)}|" in out or abs(charge) == 1
+
+        # Independent, literature-scale neutral-mass examples for the
+        # multiply charged ions (M = 500 Da), using |z| rather than signed z.
+        assert (
+            neutral_mass + reference_adduct_shift("[M+2H]2+")[0]
+        ) / 2 == pytest.approx(251.007276452, abs=1e-9)
+        assert (
+            neutral_mass + reference_adduct_shift("[M+3H]3+")[0]
+        ) / 3 == pytest.approx(167.673943119, abs=1e-9)
 
     @pytest.mark.parametrize(
         ("given", "canonical"),
@@ -130,12 +199,39 @@ class TestParseFormula:
     def test_multi_digit_count(self) -> None:
         assert _parse_formula("C60") == {"C": 60}
 
+    def test_atom_count_budget_is_enforced(self) -> None:
+        with pytest.raises(
+            ValueError, match=f"maximum of {MAX_FORMULA_ATOMS} total atoms"
+        ):
+            _parse_formula(f"C{MAX_FORMULA_ATOMS + 1}")
+
     def test_salt_formula(self) -> None:
         assert _parse_formula("NaCl") == {"Na": 1, "Cl": 1}
 
     def test_unknown_element_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown element 'Ca'"):
             _parse_formula("CaCl2")
+
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            "C6H12O6!",
+            "C6H12O6?",
+            "C6-H12O6",
+            "C6 H12O6",
+            "6C6H12O6",
+            "C6.5H12O6",
+            "C6H12O6$Na",
+            "C0H2",
+            "C2H0",
+            "C-1H2",
+        ],
+    )
+    def test_malformed_or_nonpositive_formula_counts_are_rejected(
+        self, malformed: str
+    ) -> None:
+        with pytest.raises(ValueError):
+            _parse_formula(malformed)
 
     @pytest.mark.parametrize("empty", ["", "   ", "42"])
     def test_unparseable_input_raises(self, empty: str) -> None:
@@ -271,8 +367,20 @@ class TestIsotopePattern:
         """``max_isotopologue`` sets the number of rows, not just a label."""
         assert len(_isotope_pattern(_parse_formula("C8H10N4O2"), 5)) == 5
         assert len(_isotope_pattern(_parse_formula("C8H10N4O2"), 1)) == 1
-        with pytest.raises(ValueError, match="at least 1"):
+        with pytest.raises(ValueError, match="integer from 1 to 10"):
             _isotope_pattern(_parse_formula("C8H10N4O2"), 0)
+
+    def test_rare_monoisotope_abundance_does_not_underflow(self) -> None:
+        """Relative abundances remain finite when the absolute M probability vanishes."""
+        atom_count = 1_000
+        pattern = _isotope_pattern({"Se": atom_count}, 10)
+        assert all(
+            math.isfinite(mass) and math.isfinite(abundance)
+            for mass, abundance in pattern
+        )
+        assert pattern[0][1] == pytest.approx(1.0)
+        # M+2 is one 76Se substitution; ratios are relative to the 74Se M isotope.
+        assert pattern[2][1] == pytest.approx(atom_count * 0.0937 / 0.0089)
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +397,21 @@ class TestAnnotateIsotopes:
         assert "| M+1         |             181.0668 |             0.0686 |" in out
         assert "| M+2         |             182.0680 |             0.0143 |" in out
 
+    def test_oversized_formula_returns_a_bounded_validation_error(
+        self, chem_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        out = chem_tools["annotate_isotopes"](identifier=f"C{MAX_FORMULA_ATOMS + 1}")
+        assert out.startswith("ERROR:")
+        assert f"maximum of {MAX_FORMULA_ATOMS} total atoms" in out
+
+    def test_oversized_identifier_is_rejected_before_parsing(
+        self, chem_tools: dict[str, Callable[..., str]]
+    ) -> None:
+        with pytest.raises(ValidationError):
+            chem_tools["annotate_isotopes"](
+                identifier="C" * (MAX_IDENTIFIER_LENGTH + 1)
+            )
+
     def test_isotopologues_parameter_reveals_the_halogen_m4(
         self, chem_tools: dict[str, Callable[..., str]]
     ) -> None:
@@ -301,13 +424,40 @@ class TestAnnotateIsotopes:
         with pytest.raises(ValidationError):
             chem_tools["annotate_isotopes"](identifier="CHCl3", isotopologues=11)
 
-    def test_smiles_identifier_resolves_to_formula(
-        self, chem_tools: dict[str, Callable[..., str]]
+    def test_explicit_formula_works_without_rdkit(
+        self,
+        chem_tools: dict[str, Callable[..., str]],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # "CCO" (ethanol) → C2H6O via RDKit or the deterministic dev fallback.
-        out = chem_tools["annotate_isotopes"](identifier="CCO", is_smiles=True)
-        assert "## Isotope Pattern: C2H6O" in out
-        assert "Monoisotopic mass: **46.0419 Da**" in out
+        """Formula parsing is core behavior and must not depend on RDKit."""
+        import sys
+
+        monkeypatch.setitem(sys.modules, "rdkit", None)
+        out = chem_tools["annotate_isotopes"](identifier="C6H12O6")
+        assert "## Isotope Pattern: C6H12O6" in out
+        assert "Monoisotopic mass: **180.0634 Da**" in out
+
+    def test_smiles_conversion_fails_closed_without_rdkit(
+        self,
+        chem_tools: dict[str, Callable[..., str]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unknown SMILES must never pass through as formula text."""
+        import sys
+
+        monkeypatch.setitem(sys.modules, "rdkit", None)
+        assert _smiles_to_formula("CO") is None
+        assert _smiles_to_formula("CCO") is None
+        error = chem_tools["annotate_isotopes"](identifier="CO", is_smiles=True)
+        assert error.startswith("ERROR:")
+        assert "RDKit" in error
+        assert "C6H12O6" in chem_tools["annotate_isotopes"](identifier="C6H12O6")
+
+    def test_rdkit_smiles_conversion_when_available(self) -> None:
+        pytest.importorskip("rdkit")
+        assert _smiles_to_formula("CO") == "CH4O"
+        assert _smiles_to_formula("CCO") == "C2H6O"
+        assert _smiles_to_formula("this is not SMILES") is None
 
     def test_unknown_element_reports_error(
         self, chem_tools: dict[str, Callable[..., str]]

@@ -120,6 +120,19 @@ class TestValidatePrecursor:
                 theoretical_mass=theoretical, experimental_mass=experimental
             )
 
+    @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+    @pytest.mark.parametrize("field", ["theoretical_mass", "experimental_mass"])
+    def test_nonfinite_masses_raise_validation_error(
+        self,
+        sim_tools: dict[str, Callable[..., str]],
+        invalid: float,
+        field: str,
+    ) -> None:
+        masses = {"theoretical_mass": 100.0, "experimental_mass": 100.0}
+        masses[field] = invalid
+        with pytest.raises(ValidationError):
+            sim_tools["validate_precursor"](**masses)
+
 
 # ---------------------------------------------------------------------------
 # _match_peaks — greedy one-to-one matching within tolerance
@@ -229,6 +242,22 @@ class TestCosine:
 # compute_cosine — end-to-end
 # ---------------------------------------------------------------------------
 class TestComputeCosine:
+    @pytest.mark.parametrize("intensity", [1e308, 1e-308])
+    @pytest.mark.parametrize("extra_peak", [False, True])
+    def test_extreme_finite_intensities_preserve_full_vector_cosine(
+        self,
+        sim_tools: dict[str, Callable[..., str]],
+        intensity: float,
+        extra_peak: bool,
+    ) -> None:
+        query = [[100.0, intensity], [200.0, intensity]]
+        reference = [[100.0, intensity], [200.0, intensity]]
+        if extra_peak:
+            query.append([300.0, intensity])
+        out = sim_tools["compute_cosine"](query_peaks=query, reference_peaks=reference)
+        expected = math.sqrt(2.0 / 3.0) if extra_peak else 1.0
+        assert _displayed_score(out) == pytest.approx(expected, abs=5e-5)
+
     def test_identical_spectra(self, sim_tools: dict[str, Callable[..., str]]) -> None:
         peaks = [[100.0, 50.0], [200.0, 100.0], [300.0, 25.0]]
         out = sim_tools["compute_cosine"](query_peaks=peaks, reference_peaks=peaks)
@@ -253,6 +282,25 @@ class TestComputeCosine:
             query_peaks=[[100.0, -1.0]], reference_peaks=[[100.0, 1.0]]
         )
         assert out.startswith("ERROR: Query peak [0] has negative intensity (-1.0)")
+
+    @pytest.mark.parametrize(
+        ("mz", "intensity", "message"),
+        [
+            (0.0, 1.0, "non-positive m/z"),
+            (-100.0, 1.0, "non-positive m/z"),
+            (float("nan"), 1.0, "non-finite m/z"),
+            (100.0, float("nan"), "non-finite intensity"),
+            (float("inf"), 1.0, "non-finite m/z"),
+            (100.0, float("inf"), "non-finite intensity"),
+        ],
+    )
+    def test_invalid_inline_peaks_return_validation_error(
+        self, sim_tools, mz: float, intensity: float, message: str
+    ) -> None:
+        out = sim_tools["compute_cosine"](
+            query_peaks=[[mz, intensity]], reference_peaks=[[100.0, 1.0]]
+        )
+        assert message in out
 
     def test_empty_peak_list_raises_validation_error(
         self, sim_tools: dict[str, Callable[..., str]]

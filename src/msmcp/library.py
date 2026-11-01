@@ -524,6 +524,10 @@ class MGFLibraryProvider(LibraryProvider):
                 metadata["MSLEVEL"] = str(spectrum.ms_level)
             if spectrum.retention_time is not None:
                 metadata["RTINMINUTES"] = str(spectrum.retention_time)
+            if spectrum.charge is not None:
+                metadata["CHARGE"] = str(spectrum.charge)
+            if spectrum.isolation_window is not None:
+                metadata["ISOLATION_WINDOW"] = str(spectrum.isolation_window)
 
             lib_spectrum = LibrarySpectrum(
                 index=spectrum.index or 0,

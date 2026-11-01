@@ -1,7 +1,7 @@
 # Similarity & library-search validation — issue #54
 
-One bounded, reproducible experiment answering two **separate** questions about
-MSMCP's spectral scoring. Status: **PARTIAL** — one slice validated on one
+One bounded, reproducible experiment answering three **separate** questions about
+MSMCP's spectral scoring. Status: **PARTIAL** — one slice evaluated on one
 pinned public library; not a platform, and not a claim about all data.
 
 1. **Implementation agreement** — does `msmcp.models.scoring.ClassicalScorer`
@@ -10,13 +10,18 @@ pinned public library; not a platform, and not a claim about all data.
 2. **Identification recovery** — on held-out spectra, does MSMCP's ranking
    recover the correct compound (top-1 / top-k), with self-matches and duplicate
    leakage removed?
+3. **Ranking impact** — on these same selected queries/references, how often do
+   the two greedy matching rules select different records/compounds or change
+   whether the known compound appears in top-k?
 
 Agreement is **not** accuracy: two implementations agreeing says nothing about
 whether either identifies the right compound. The experiment keeps them apart
 deliberately.
 
 Harness: `validation/similarity_validation.py` (opt-in; not collected by
-`pytest`, not in the fast CI suite). Results: `validation/massbank-2026.03-results.json`.
+`pytest`, not in the fast CI suite). Existing agreement/recovery result:
+`validation/massbank-2026.03-results.json`. Qualification ranking extension:
+`validation/massbank-2026.03-ranking-qualification.json`.
 
 ## Dataset and provenance
 
@@ -110,6 +115,26 @@ is supported is exact agreement in particular aggregate metrics at this scale.
 Near-duplicate strictness moves recovery by ≤ 0.014: leakage is small but not
 zero.
 
+### 3. Paired ranking impact (qualification extension)
+
+The qualification reran the same pinned bundle, seed, query split and scorer
+matrices, then compared stable database-order rankings directly. In the naive
+variant, the top-1 **reference record** differed for 11/250 queries (4.4%); the
+top-1 **compound identity** differed for 6/250 (2.4%). The top-1 known-compound
+hit status differed for 6 queries: MSMCP-only 3 and matchms-only 3. Thus equal
+aggregate top-1 proportions (184/250 for both) conceal per-query disagreement.
+At top-5, known-compound hit status agreed on all 250 naive queries; at top-10,
+it differed for 2 (one scorer-only hit each). Under the strict ≥0.995 near-
+duplicate filter, top-5 hit status differed for 1 query (matchms-only), consistent
+with the existing 1-in-250 aggregate top-5 difference. Mean top-5 reference-record
+set Jaccard was 0.9538 (naive) and 0.9498 (strict).
+
+These are descriptive paired results on this selected MassBank slice only. The
+bundle does not identify acquisition batches, so no batch-clustered uncertainty
+interval is estimated. The query/reference construction is an in-library retrieval
+task; these numbers do not estimate open-set accuracy, FDR, or production search
+performance across instruments.
+
 ## Interpretation
 
 * **Implementation agreement: PASS.** MSMCP's cosine is a faithful greedy
@@ -126,12 +151,12 @@ zero.
   matches **maximum intensity product** first. Minimal reproduction —
   `query = [(100.0, 10.0), (100.01, 20.0)]`, `reference = [(100.0, 15.0)]`,
   ±0.02 Da: MSMCP `0.4472` vs matchms `0.8944` — a **twofold** score difference.
-  This is an intentional design choice, but **not a harmless one**: a twofold
-  difference can change candidate ordering, any applied score threshold
-  (including the 0.995 near-duplicate cutoff used here), and the interpretation a
-  downstream reader puts on a score. How often it changes a *ranking* on
-  realistic spectra is **not measured here** and is recommended as a separately
-  scoped evaluation. **No algorithm change is made in this PR.**
+  In this one pinned slice it changed the top-1 reference record on 11/250
+  queries and top-1 compound on 6/250; top-k true-compound hit discordance was
+  0/250 naive at k=5, 2/250 naive at k=10, and 1/250 strict at k=5. These are
+  observed retrieval differences, not grounds to replace MSMCP's scorer or to
+  claim either scorer is more accurate. Ranking impact outside this slice remains
+  unmeasured. **No production algorithm change is made.**
 * **Identification accuracy: ~74 % top-1 on this protocol.** A property of the
   *method and data*, not proof that 74 % of reported hits are true
   identifications.
@@ -173,15 +198,15 @@ curl -L -o /tmp/MassBank_NISTformat.msp \
 shasum -a 256 /tmp/MassBank_NISTformat.msp   # cf49e1b2…fc269
 
 # 2. Run the experiment (matchms supplied per-command only).
-uv run --with "matchms==0.33.1" python validation/similarity_validation.py \
-    --data /tmp/MassBank_NISTformat.msp --out validation/massbank-2026.03-results.json
+uv run --with "matchms==0.33.1" python validation/similarity_validation.py \\
+    --data /tmp/MassBank_NISTformat.msp --out validation/massbank-2026.03-ranking-qualification.json
 #    or: make validate-similarity MSMCP_VALIDATION_DATA=/tmp/MassBank_NISTformat.msp
 ```
 
 ## Status
 
-**PARTIAL.** One substantive, reproducible slice: implementation agreement
-validated against an independent implementation, and identification recovery
-measured on a pinned public library with leakage guards. Still to do: other ion
-modes/instruments, `ModifiedCosine`, precursor-aware identification, confidence
-intervals, and the statistical calibration tracked separately in #12/#51.
+**PARTIAL.** One reproducible slice now records implementation agreement,
+in-library recovery, and paired ranking differences against matchms on the pinned
+public library. Still to do: other ion modes/instruments, `ModifiedCosine`,
+precursor-aware identification, acquisition-batch grouping/uncertainty, open-set
+identification, and the statistical calibration tracked separately in #12/#51.

@@ -11,6 +11,8 @@ Large acquisitions never enter the conversation: spectra are parsed into **serve
 [![Package manager: uv](https://img.shields.io/badge/uv-managed-9B5DE5?logo=astral&logoColor=white)](https://docs.astral.sh/uv/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+Citation metadata: [CITATION.cff](CITATION.cff). Cite the exact release tag or commit you used; the project has no DOI.
+
 ---
 
 ## Table of contents
@@ -47,16 +49,16 @@ Worse, the chemistry itself is largely unknown. In untargeted studies, the overw
 
 - **Exact-mass rigor** — rejecting plausible-sounding but physically impossible proposals (ppm validation, isotope arithmetic);
 - **Similarity at scale** — scanning huge libraries with classical peak matching *and* learned embeddings that generalise to spectra never seen before;
-- **Statistically honest scoring** — FDR control rather than "looks similar" vibes.
+- **Statistically honest scoring** — similarity ranking today; validated discovery statistics require independent calibration and are not currently claimed.
 
-All of that is deterministic, well-understood computation. **LLMs should reason about it; they should not perform it.**
+MSMCP makes deterministic calculations; statistical interpretation still depends on validated assumptions. **LLMs should reason about evidence, not manufacture it.**
 
 ## The solution: an MCP adapter with a data-reference store
 
 MSMCP is a thin adapter between an LLM host and a stack of analytical engines:
 
 - **Transport layer** — an [MCPServer](https://github.com/modelcontextprotocol/python-sdk) speaking JSON-RPC over stdio, launched as a child process by the LLM host. All diagnostics are logged to stderr; stdout carries only MCP framing.
-- **Ingestion layer** (`src/msmcp/ingest.py`) — one dispatcher that picks the right reader for a file, and one canonical output type. [MassFlow](https://github.com/) is the canonical layer for everything it supports (imzML imaging data); MSMCP owns small readers for the formats MassFlow does not cover (mzML, MGF).
+- **Ingestion layer** (`src/msmcp/ingest.py`) — one dispatcher and one canonical output type. MSMCP's core readers handle mzML/MGF without MassFlow. Optional imzML imaging uses the lowercase `massflow` distribution via the `imaging` extra, not the separate analytical `MassFlow` engine.
 - **Analytical engines** — pure, deterministic, unit-tested Python modules under `src/msmcp/tools/` that perform the actual science: exact-mass arithmetic, adduct shifts, isotope annotation, ppm validation, cosine scoring, QC metrics, and chunked library scanning.
 - **Data-reference store** (`src/msmcp/state/`) — a bounded, thread-safe registry of scientific payloads that stay on the server. This is what lets an agent hand a 100,000-peak spectrum to the next tool as a 30-character string.
 - **Provenance** (`src/msmcp/provenance.py`) — immutable, structured records attached to every derived object: which operation, which parameters, which file (with reader backend and digest), which parent references, which software and model versions.
@@ -79,7 +81,7 @@ for are these:
 | "I think this feature is caffeine — does the chemistry hold up?" | Check the adduct, isotope envelope and precursor mass error | `predict_adduct_offset`, `annotate_isotopes`, `validate_precursor` |
 | "Is my measured precursor consistent with this formula?" | A ppm mass-error gate: pass or reject | `validate_precursor` |
 | "How similar are these two spectra — and what is unexplained?" | Cosine similarity, plus the query peaks with no match | `compute_cosine` |
-| "Search this spectrum against my spectral library." | A ranked, significance-scored hit table | `search_library`, `check_search_status` |
+| "Search this spectrum against my spectral library." | Similarity-ranked candidates; no p-values, q-values, or calibrated error-rate claim | `search_library`, `check_search_status` |
 
 The point is not that the agent *knows* the chemistry. It is that every answer
 comes from deterministic, unit-tested computation, and every answer carries
@@ -150,7 +152,7 @@ flowchart TD
     end
 
     subgraph Ingest["Ingestion (ingest.py)"]
-        MassFlow["MassFlow: imzML imaging"]
+        MassFlow["Optional imaging massflow: imzML"]
         Readers["MSMCP readers: mzML · MGF"]
     end
 
@@ -198,7 +200,10 @@ make all
 ```
 
 The repository ships a **synthetic worked example**, so you can see a real
-library search without sourcing any data of your own:
+library search without sourcing any data of your own. The core installation
+supports mzML/MGF; install `uv sync --extra imaging` from the source checkout only
+if you need the optional imzML importer. Do not install that extra in the same
+environment as the analytical MassFlow engine, which shares the distribution name.
 
 - `examples/caffeine_library.msp` — a 5-compound MSP/NIST text library.
 - `examples/caffeine_spectrum.mgf` — one MS2 spectrum whose peaks duplicate the
@@ -216,11 +221,17 @@ client](#connecting-an-llm-client) — then ask the agent:
 > `examples/caffeine_library.msp` with `instrument_class="orbitrap"`.
 
 You should get a **REAL LIBRARY — READ FROM DISK** banner with caffeine ranked
-first (the report also states the significance and the null model it used):
+first by similarity. This fabricated example demonstrates mechanics only; search
+significance is uncalibrated and the result is not a compound identification:
 
-| Rank | Compound | Score  | Precursor m/z | Formula   |
-|------|----------|--------|---------------|-----------|
-| 1    | Caffeine | 1.0000 | 195.0877      | C8H10N4O2 |
+| Rank | Compound | Score  | Precursor m/z | Formula   | Context |
+|------|----------|--------|---------------|-----------|---------|
+| 1    | Caffeine | 1.0000 | 195.0877      | C8H10N4O2 | matched |
+
+The query is MS2 with precursor m/z 195.0877 and positive polarity, so the
+declared precursor tolerance is applied and the record is context-matched. An
+MS1 query, or an MS2 query whose precursor conflicts with the reference, is not
+reported as a library match.
 
 `uv` is the canonical tool — every command runs through it:
 
@@ -238,6 +249,29 @@ The `Makefile` wraps these into one pipeline: `make lint`, `make test`, `make ev
 
 Re-run `uv sync --extra dev` after changing `pyproject.toml`. The optional `repomix` pack (Node-based) is run as `repomix --style xml --output repomix-output.xml`.
 
+## Container image (pre-release packaging)
+
+The repository includes a minimal `Dockerfile` for local packaging checks. It
+uses the committed `uv.lock` with `uv sync --frozen`, keeps the server on its
+stdio transport, and does not add a network service or runtime credentials:
+
+```bash
+docker build -t msmcp:local .
+docker run --rm -i \
+  -e MSMCP_ALLOWED_ROOT=/data \
+  -v "$PWD/examples:/data:ro" \
+  msmcp:local
+```
+
+When using the worked example above with this container, ask MSMCP to load
+`/data/caffeine_spectrum.mgf` and search it against
+`/data/caffeine_library.msp`; the container sees the mounted directory at
+`/data`, not at the checkout's `examples/` path.
+
+This image is a reproducible container starting point, not a published release
+or registry entry. Package publication, registry metadata, and release signing
+remain separate work under issue #19.
+
 ## Scientific validation
 
 MSMCP keeps its *scientific* claims, its software tests and its identification confidence as separate things, and documents the evidence for each:
@@ -246,6 +280,8 @@ MSMCP keeps its *scientific* claims, its software tests and its identification c
 - [`VALIDATION_SIMILARITY.md`](VALIDATION_SIMILARITY.md) — one bounded experiment comparing MSMCP's scorer against `matchms` on a pinned MassBank release and measuring library recovery on held-out spectra, with its limitations stated plainly.
 
 `make validate-similarity` runs that experiment **opt-in**: it needs the external dataset (`MSMCP_VALIDATION_DATA`) and supplies `matchms` for the one command, so neither the runtime nor the fast test suite depends on it. With no dataset it skips cleanly and downloads nothing.
+
+For a core-only runtime install from the source checkout, use `uv sync` (or `pip install .`). To enable imzML, use `uv sync --extra imaging` (or `pip install '.[imaging]'` from the checkout). To run the optional imaging integration tests, install both extras with `uv sync --extra dev --extra imaging` and run `uv run --extra imaging pytest tests/test_ingest.py`; otherwise those tests skip. This project does not currently claim a published PyPI distribution.
 
 ## Connecting an LLM client
 
@@ -291,7 +327,8 @@ Agent:   check_search_status(job_id="362c0267…")
 
 Agent:   check_search_status(job_id="362c0267…")
   → "## Spectral Library Search Results …
-     | Rank | Compound | Score | FDR (q-value) | Precursor m/z | Formula | …"
+     SIGNIFICANCE UNCALIBRATED
+     | Rank | Compound | Score | Precursor m/z | Formula | …"
 
 Agent:   validate_precursor(theoretical_mass=194.0804, experimental_mass=194.0831)
   → "VALIDATION REJECTED
@@ -314,7 +351,7 @@ The agent carries references, job IDs and verdicts — never spectra.
 
 ## Tool reference
 
-Fourteen tools are exposed to the model: compact Markdown (or a single sentence) for human/LLM reading, and a structured object where a data reference is involved.
+Fifteen tools are exposed to the model: compact Markdown (or a single sentence) for human/LLM reading, and structured objects for data references and chromatograms.
 
 | Tool | Module | Purpose |
 |---|---|---|
@@ -322,14 +359,15 @@ Fourteen tools are exposed to the model: compact Markdown (or a single sentence)
 | `load_mzml_summary` | `tools/io.py` | First-*N*-spectra text summary of a local `.mzML` file |
 | `list_spectra` | `tools/io.py` | Index of a file's spectra — index, MS level, retention time, precursor m/z and peak count — for choosing one to load or search (`ms_level`/`min_peaks` filters, capped by `max_spectra`) |
 | `load_spectrum` | `tools/io.py` | Parse one spectrum from any supported format and register it server-side; returns a `DataReference` plus metadata and provenance |
+| `extract_chromatograms` | `tools/chromatograms.py` | One-pass structured TIC, BPC, and multiple XIC traces from a complete bounded mzML acquisition |
 | `summarise_reference` | `tools/io.py` | Read a referenced spectrum back from server memory (no file re-read) |
 | `release_reference` | `tools/io.py` | Free a reference immediately rather than waiting for expiry |
 | `predict_adduct_offset` | `tools/chem.py` | Exact mass shift for 14 canonical adducts |
-| `annotate_isotopes` | `tools/chem.py` | Exact isotope envelope (M … M+n) from a formula or SMILES; `isotopologues` sets the depth, so a halogen-rich formula's M+4 is reachable |
+| `annotate_isotopes` | `tools/chem.py` | Exact isotope envelope (M … M+n) from a formula or SMILES; `isotopologues` sets the depth, so a halogen-rich formula's M+4 is reachable. Formula/SMILES input is capped at 4,096 characters and 10,000 atoms to bound exact expansion. |
 | `validate_precursor` | `tools/similarity.py` | Mass-error gate at the instrument class's precursor tolerance (5.0 ppm for the default `generic` class) |
-| `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference). The matching window comes from `ms2_tolerance`, or the instrument class when it is unset |
+| `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference). Peak coordinates must be finite positive m/z and intensities finite non-negative values. The matching window comes from `ms2_tolerance`, or the instrument class when it is unset |
 | `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file, using the instrument class's diagnostic-ion window and SNR bands |
-| `search_library` | `tools/search.py` | Asynchronous library search (job executor; classical or real-embedding scoring). MSP/NIST text and MGF libraries are read from disk through the security boundary; unsupported formats use a labelled synthetic fallback. Significance uses a fitted decoy tail, but its q-floor can suppress hits at library scale; reports disclose the model and floor. The **query** is always real data.
+| `search_library` | `tools/search.py` | Asynchronous similarity-ranked library search (job executor; classical or real-embedding scoring). MSP/NIST text and MGF libraries are read from disk through the security boundary; unsupported formats use a labelled synthetic fallback. The **query** is always real data. MS1/non-MS2 queries are refused; for MS2 queries the stated precursor, polarity, charge and adduct are checked before ranking, and only the tolerance actually applied is recorded. Candidates missing a field stay ranked but are labelled *unknown*. Statistical significance is uncalibrated: production search applies no significance filter and reports no p-values or q-values.
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID. The report is delivered once; later polls return a short digest, and `full_report=True` re-requests it |
 | `cancel_search` | `tools/search.py` | Cancel a pending or running search job |
 
@@ -338,12 +376,13 @@ Only `cancel_search` and `release_reference` mutate server state, and both adver
 ## Instrument classes
 
 Several tools apply an experimental threshold: `validate_precursor`'s precursor
-gate, `compute_cosine`'s and `search_library`'s m/z matching window,
-`generate_qc_summary`'s diagnostic-ion window and SNR bands, and
-`search_library`'s significance threshold and small-library floor. None of
-these is a bare literal. Each is resolved from the `instrument_class` argument
-(default `generic`), which names a documented profile in
-`src/msmcp/instruments.py`:
+gate, `compute_cosine`'s and `search_library`'s m/z matching window, and
+`generate_qc_summary`'s diagnostic-ion window and SNR bands. Each is resolved
+from the `instrument_class` argument (default `generic`), which names a
+documented profile in `src/msmcp/instruments.py`. For `search_library`, the
+precursor gate is applied only when the query is MS2 and states a precursor;
+the report and provenance say whether it was applied. Search has no significance
+threshold; historical profile values are metadata only and are not applied:
 
 | Class | Precursor gate | MS2 / diagnostic-ion window | SNR bands |
 |---|---|---|---|
@@ -356,15 +395,17 @@ these is a bare literal. Each is resolved from the `instrument_class` argument
 Accurate-mass classes express the precursor gate in ppm; unit-resolution
 classes (`ion_trap`, `triple_quad`) use a Da window, because a ppm gate shrinks
 below one nominal mass at a few kDa and is meaningless on an instrument that
-cannot resolve fractions of a nominal mass. The FDR threshold (0.05) and the
-small-library floor (2000) are shared across classes — they are properties of
-the statistics, not of the mass analyser.
+cannot resolve fractions of a nominal mass. The older profile's FDR threshold
+and small-library floor do not affect production search; significance is
+uncalibrated. See [VALIDATION_SIGNIFICANCE.md](VALIDATION_SIGNIFICANCE.md).
 
 The class and the values actually applied are always stated in the result: in
 the report body for `validate_precursor`, `compute_cosine` and
 `generate_qc_summary`, and in `Provenance.parameters` for `search_library`. An
 explicit `ms2_tolerance` on `compute_cosine` overrides the class default, and
-the response says which source the window came from. These are documented
+the response says which source the window came from. MSMCP parses stated MS
+level, precursor m/z, polarity, charge and isolation window from mzML/MGF, but
+it does not invent missing acquisition parameters. These are documented
 conventions, not measured acquisition parameters — MSMCP does not yet parse
 instrument model, resolution or calibration from a file (see *Known
 limitations & roadmap*) — so the class is the assumption a result was produced
@@ -378,17 +419,21 @@ The reader is chosen from the file extension; every reader produces the same spe
 |---|---|---|
 | `.mzML`, `.mzML.gz` | `msmcp.mzml` | dependency-free; zlib-compressed binary arrays supported |
 | `.mgf`, `.mgf.gz` | `msmcp.mgf` | strict: an unparseable peak line raises rather than being skipped |
-| `.imzML` (+ `.ibd`) | MassFlow | imaging data; pixel coordinates are preserved on each spectrum |
+| `.imzML` (+ `.ibd`) | optional imaging `massflow` | requires `uv sync --extra imaging`; pixel coordinates are preserved |
 | `.raw`, `.d`, `.wiff`, `.mzXML` | — | recognised and refused, naming the vendor and suggesting MSConvert |
 
-MassFlow is a required dependency, but the installed release (0.1.x) is an **imaging** framework: it reads imzML/zarr/HDF5 and exposes no mzML or MGF reader. MSMCP therefore routes exactly what MassFlow supports through MassFlow, and owns small readers for the rest. That is a documented consequence of the available library, not a preference.
+The optional imaging distribution `massflow` (0.1.x) exposes `massflow.data_manager.MSDataManagerImzML`. It is unrelated to the analytical `MassFlow` engine, despite sharing a distribution name; keep them in separate environments. The `imaging` extra retains the existing imzML importer. It does not add an analytical-engine integration or zarr/HDF5 input support. Core mzML/MGF behavior is independent of both projects.
 
-Two MassFlow behaviours are worth knowing before debugging an unexpected directory or log line:
+Without the extra, imzML reads raise `MissingDependencyError` with source-install guidance rather than fabricating spectra. `ping` still reports `status="ok"`; its legacy `massflow_available` and `massflow_version` fields inventory installed distribution metadata only and do not verify the imaging importer or analytical engine. In the current MCP SDK the exception detail is masked in the wire-level tool error and remains in stderr logs.
+
+Two imaging-backend behaviours are worth knowing; the import is lazy and neither occurs during core startup or `ping`:
 
 - Importing MassFlow's data manager **reconfigures the root logger to write to stdout**, which would corrupt the stdio JSON-RPC framing. `massflow_io` repoints those handlers at stderr on import, and a test asserts that no handler in the process targets stdout after a read.
 - The same import **creates a `logs/` directory** in the working directory. That is library behaviour MSMCP cannot suppress; it is gitignored and documented rather than hidden.
 
 MS-Numpress-compressed mzML arrays require the optional `pynumpress` package and raise a missing-dependency error without it.
+
+The mzML reader normalizes scan start times to minutes from an explicit second or minute unit (`unitAccession` or `unitName`) and retains the source value and unit on each parsed spectrum. It refuses absent, unsupported, or contradictory scan-time units and unequal decoded m/z and intensity arrays. A disagreement between paired decoded arrays and `defaultArrayLength` remains a warning.
 
 ## Glossary
 
@@ -415,9 +460,9 @@ jargon.
 | **Cosine similarity** | A 0–1 score for how well two spectra's matched peaks agree; 1.0 means the matched peaks account for all intensity in both. |
 | **Spectral library** | A collection of reference spectra to search against; MSMCP reads MSP/NIST-style text (`.msp`, `.msp.gz`). |
 | **MSP / NIST text** | The plain-text interchange format most public libraries ship as. |
-| **imzML** | An open format for mass-spectrometry **imaging** data; MSMCP reads it via MassFlow. |
-| **p-value / q-value / FDR** | Significance of a hit, and the false-discovery-rate control across hits. |
-| **Decoy** | A shuffled, non-matching spectrum used to estimate the false-positive background. |
+| **imzML** | An open format for mass-spectrometry **imaging** data; MSMCP reads it with the optional imaging `massflow` extra. |
+| **p-value / q-value / FDR** | Statistical significance and false-discovery-rate concepts. MSMCP does not currently report calibrated search significance. |
+| **Decoy** | A constructed non-matching spectrum sometimes used to estimate a null background; the retained experimental decoy helpers are not used for production search. |
 | **Embedding / foundation model** | A learned vector representation of a spectrum; optional, and requires real model weights. |
 | **Instrument class** | A named assumption set (orbitrap, tof, ion_trap, …) that supplies the default thresholds a scan applies. |
 | **Allowed root** | The single directory subtree every file-reading tool is confined to. |
@@ -435,11 +480,11 @@ Every significant object MSMCP derives carries a structured, immutable provenanc
                "size_bytes": 84213, "digest": "sha256:5b1f…"}],
   "parents": ["ptr:spectrum:9f3c…"],
   "model": null,
-  "software": {"name": "msmcp", "versions": {"python": "3.13.7", "msmcp": "1.0.0", "massflow": "0.1.2", "numpy": "2.3.4"}}
+  "software": {"name": "msmcp", "versions": {"python": "3.13.7", "msmcp": "1.0.2", "numpy": "2.3.4"}}
 }
 ```
 
-A search result can therefore answer, mechanically: which query reference, which file and which reader produced it, with which scoring method and parameters, under which software versions — and, for embedding-scored work, which model and checkpoint. Digests are computed for sources up to 64 MiB; larger files report `digest: null` rather than silently omitting the field.
+A search result can therefore answer, mechanically: which query reference, which file and which reader produced it, with which scoring method and parameters, under which software versions — and, for embedding-scored work, which model and checkpoint. Digests are computed for sources up to 64 MiB; larger files report `digest: null` rather than silently omitting the field. Optional distributions appear only when installed; a `massflow` version does not prove the imaging backend was imported or used. The per-source `backend` records the actual reader.
 
 It is deliberately not a provenance framework: no graph, no query language, no storage. Records travel with the objects they describe.
 
@@ -473,7 +518,9 @@ C/H/N/O compound never has.
 
 Hallucinated adducts (e.g. `[M+H2O]+`) are explicitly rejected with the list of supported ionisation pathways, rather than silently producing plausible-looking numbers.
 
-SMILES → formula conversion uses RDKit when available (`uv sync --extra chem`); without it, `annotate_isotopes` falls back to a small static lookup table and asks the model to submit a formula instead of an unknown SMILES.
+SMILES → formula conversion requires RDKit (`uv sync --extra chem`). If RDKit is unavailable or rejects the input, `annotate_isotopes(is_smiles=True)` fails closed; it never treats a SMILES string such as `CO` as a formula. Explicit formula input (for example `C6H12O6`, with `is_smiles=False`) works in the core installation without RDKit.
+
+Adduct shifts use a single neutral-atom composition convention: the mass change in neutral atoms is corrected once by subtracting the signed net charge times the electron mass. The reported m/z offset divides by `|z|`. Electron binding/ionisation energies are neglected in this mass convention.
 
 ### Example: spectral similarity (classical → embeddings)
 
@@ -503,9 +550,10 @@ user- and agent-facing story.
 
 - **Search names which library answered it**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. A library path in a readable format (MSP/NIST text or MGF, `.msp`/`.msp.gz`/`.mgf`/`.mgf.gz`) is read from disk through the same `SecurityPolicy` as acquisitions — allowed root, size limit, read-only — and is refused with `PathEscapeError` if it resolves outside the allowed root. A path with no reader still falls back to a synthetic library, and the report says which path was used, in a banner ahead of any hit table. Still to come is the local SQLite peak store.
 - **In-process job state**: jobs live in server memory and do not survive a restart; the poller reports a lost job as failed rather than pending. A durable executor is a drop-in `JobExecutor` implementation.
-- **MCP Tasks are not dispatchable by the installed SDK**: `mcp` 2.1.1 ships the Tasks types but omits `tasks/get`, `tasks/result` and `tasks/cancel` from its request unions, so no server can answer them. MSMCP keeps its snapshots in the MCP `Task` shape and exposes the semantics through `check_search_status` instead of inventing a protocol.
-- **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself, because MassFlow 0.1.x is imaging-only. `.imzML` goes through MassFlow. Vendor formats are refused with conversion guidance.
+- **MCP Tasks are not implemented by MSMCP**: the MCP Python SDK supports generic extension request handlers, but MSMCP has not registered the Tasks extension methods. It exposes local job state through `check_search_status`; representing a job snapshot with the MCP `Task` fields does not make it a Tasks-protocol implementation. See [ARCHITECTURE.md](ARCHITECTURE.md) for the tested SDK version and details.
+- **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself without MassFlow. `.imzML` requires the optional imaging extra. Vendor formats are refused with conversion guidance.
 - **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 awaits a public weights release; its adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
+(`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
 - **Whole-slide images**: MassFlow materialises one placeholder per pixel when loading an imzML acquisition, so very large images are bounded by MassFlow's own behaviour.
 - **MS-Numpress-compressed mzML arrays** need the optional `pynumpress` package and report a missing-dependency error without it.
 - **Hardware control is out of scope for this repository, not just for v1.0.** Direct instrument control, actuation and the safety interlock layer that must precede them belong to a **different project**. MSMCP is a data and computation interface; the MCP application layer must never be the only barrier between a model and physical hardware. There is no instrument-control code here and none will be added.
@@ -521,7 +569,7 @@ MSMCP is a **local, single-user server**: the MCP host spawns it as a child proc
 - **Server-side data** — registered references are bounded (`MSMCP_MAX_REFERENCES`, `MSMCP_MAX_TOTAL_BYTES`), expire after `MSMCP_REFERENCE_TTL_SECONDS` (default 3600), are held read-only, and are namespaced. Exceeding a limit refuses the request; it never silently discards data a caller still holds. Reference identifiers are opaque random tokens, never object ids, addresses or paths.
 - **Execution** — concurrent jobs are capped by the executor (default 4). A cancelled job's partial output is discarded rather than returned.
 - **Checkpoint loading** — the LSM-MS2 adapter deserialises a checkpoint file (`torch.jit.load`, falling back to `torch.load` with `weights_only=True`); checkpoint files can execute arbitrary code, so only point `MSMCP_LSM_MS2_CKPT` at files you trust. A checkpoint that needs full-pickle loading is **rejected unless `MSMCP_LSM_MS2_ALLOW_UNSAFE=1` explicitly opts in** — that fallback (`torch.load` without `weights_only`) can execute arbitrary code from the file. The DreaMS adapter downloads pre-trained weights from the upstream repository on first use — pin the `dreams` install to a commit you trust.
-- **Dependency side effects** — importing MassFlow's data manager reconfigures the Python root logger to write to stdout and creates a `logs/` directory in the working directory. MSMCP neutralises the first (it would corrupt the stdio framing) and documents the second. See [Supported input formats](#supported-input-formats).
+- **Optional imaging dependency side effects** — importing the imaging `massflow` data manager reconfigures the Python root logger to write to stdout and creates a `logs/` directory in the working directory. MSMCP neutralises the first (it would corrupt the stdio framing) and documents the second. See [Supported input formats](#supported-input-formats).
 - **No secrets** — the server stores no credentials, requires no API keys, and makes no network calls of its own. This is a design constraint, not a current limitation: MSMCP is intended for onsite, offline use, so remote database adapters are explicitly out of scope (see [ARCHITECTURE.md](ARCHITECTURE.md) → *Out of scope*).
 
 ## Configuration reference
@@ -537,6 +585,15 @@ MSMCP is a **local, single-user server**: the MCP host spawns it as a child proc
 | `MSMCP_EMBEDDING_BACKEND` | `real` | `real` requires real inference; `mock` selects the test/dev-only stand-ins |
 | `MSMCP_LSM_MS2_CKPT` | unset | Path to a bring-your-own LSM-MS2 checkpoint |
 | `MSMCP_LSM_MS2_ALLOW_UNSAFE` | unset | `1` opts into full-pickle checkpoint loading (unsafe) |
+
+`extract_chromatograms` has a separate per-call `max_spectra` ceiling of 10,000;
+it does not change `MSMCP_MAX_SPECTRA` for other tools. The parameter counts
+every source spectrum scanned, including other MS levels and scans outside an
+RT filter. A call that would exceed it fails without returning a partial trace.
+The existing allowed-root and 500 MiB file-size controls still apply.
+
+See [Chromatogram extraction](docs/chromatograms.md) for its structured response
+schema, calculation rules, limitations and MassPilot example.
 
 Instrument-specific thresholds are deliberately **not** environment variables:
 they are the per-call `instrument_class` argument described in

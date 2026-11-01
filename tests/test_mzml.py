@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Callable
 from pathlib import Path
@@ -113,6 +114,142 @@ class TestMzMLParser:
         assert first.ms_level == 1
         assert first.precursor_mz == pytest.approx(300.0)
         assert first.retention_time == pytest.approx(0.0)
+        assert first.retention_time_source_value == pytest.approx(0.0)
+        assert first.retention_time_source_unit_accession == "UO:0000010"
+        assert first.retention_time_source_unit_name == "second"
+
+    def test_scan_time_uses_explicit_name_without_accession(
+        self, valid_mzml: Path, tmp_path: Path
+    ) -> None:
+        source = valid_mzml.read_text()
+        original = 'value="0.0" unitAccession="UO:0000010" unitName="second"'
+        assert original in source
+        path = tmp_path / "name-only.mzML"
+        path.write_text(source.replace(original, 'value="120.0" unitName="second"', 1))
+
+        first = next(iter_spectra(path))
+        assert first.retention_time == pytest.approx(2.0)
+        assert first.retention_time_source_value == pytest.approx(120.0)
+        assert first.retention_time_source_unit_accession is None
+        assert first.retention_time_source_unit_name == "second"
+
+    @pytest.mark.parametrize(
+        ("unit_accession", "source_value", "minutes"),
+        [
+            ("UO:0000010", "120.0", 2.0),  # second
+            ("UO:0000031", "2.0", 2.0),  # minute
+        ],
+    )
+    def test_scan_time_uses_unit_accession_without_unit_name(
+        self,
+        valid_mzml: Path,
+        tmp_path: Path,
+        unit_accession: str,
+        source_value: str,
+        minutes: float,
+    ) -> None:
+        source = valid_mzml.read_text()
+        original = 'value="0.0" unitAccession="UO:0000010" unitName="second"'
+        assert original in source
+        path = tmp_path / "accession-only.mzML"
+        path.write_text(
+            source.replace(
+                original,
+                f'value="{source_value}" unitAccession="{unit_accession}"',
+                1,
+            )
+        )
+
+        first = next(iter_spectra(path))
+        assert first.retention_time == pytest.approx(minutes)
+        assert first.retention_time_source_value == pytest.approx(float(source_value))
+        assert first.retention_time_source_unit_accession == unit_accession
+        assert first.retention_time_source_unit_name is None
+
+    @pytest.mark.parametrize(
+        "replacement",
+        [
+            'value="120.0" unitAccession="UO:0000010" unitName="minute"',
+            'value="120.0" unitAccession="MS:1000038" unitName="second"',
+        ],
+    )
+    def test_scan_time_refuses_conflicting_accession_and_name(
+        self, valid_mzml: Path, tmp_path: Path, replacement: str
+    ) -> None:
+        source = valid_mzml.read_text()
+        original = 'value="0.0" unitAccession="UO:0000010" unitName="second"'
+        assert original in source
+        path = tmp_path / "conflicting-units.mzML"
+        path.write_text(source.replace(original, replacement, 1))
+
+        with pytest.raises(MalformedFileError, match="conflict"):
+            list(iter_spectra(path))
+
+    @pytest.mark.parametrize(
+        "replacement",
+        [
+            'value="120.0"',
+            'value="120.0" unitAccession="UO:9999999" unitName="second"',
+        ],
+    )
+    def test_scan_time_refuses_unidentified_unit(
+        self, valid_mzml: Path, tmp_path: Path, replacement: str
+    ) -> None:
+        source = valid_mzml.read_text()
+        original = 'value="0.0" unitAccession="UO:0000010" unitName="second"'
+        assert original in source
+        path = tmp_path / "unit-unknown.mzML"
+        path.write_text(source.replace(original, replacement, 1))
+
+        with pytest.raises(MalformedFileError, match="unit"):
+            list(iter_spectra(path))
+
+    @pytest.mark.parametrize("source_value", ["NaN", "Infinity"])
+    def test_scan_time_refuses_nonfinite_value(
+        self, valid_mzml: Path, tmp_path: Path, source_value: str
+    ) -> None:
+        source = valid_mzml.read_text()
+        original = 'value="0.0" unitAccession="UO:0000010" unitName="second"'
+        assert original in source
+        path = tmp_path / "nonfinite-time.mzML"
+        path.write_text(
+            source.replace(original, original.replace("0.0", source_value), 1)
+        )
+
+        with pytest.raises(MalformedFileError, match="finite"):
+            list(iter_spectra(path))
+
+    def test_spectrum_refuses_unequal_mz_and_intensity_arrays(
+        self, valid_mzml: Path, tmp_path: Path
+    ) -> None:
+        tree = ET.parse(valid_mzml)
+        namespace = {"mz": "http://psi.hupo.org/ms/mzml"}
+        spectra = tree.findall(".//mz:spectrum", namespace)
+        assert len(spectra) == 3
+        arrays = spectra[1].findall(".//mz:binaryDataArray", namespace)
+        intensity = next(
+            array
+            for array in arrays
+            if any(
+                cv.get("accession") == "MS:1000515"
+                for cv in array.findall("mz:cvParam", namespace)
+            )
+        )
+        binary = intensity.find("mz:binary", namespace)
+        assert binary is not None
+        payload = base64.b64encode(np.asarray([5.0], dtype="<f8").tobytes())
+        binary.text = payload.decode()
+        intensity.set("encodedLength", str(len(payload)))
+        path = tmp_path / "unequal-arrays.mzML"
+        tree.write(path, encoding="utf-8", xml_declaration=True)
+
+        with pytest.raises(
+            MalformedFileError, match=r"m/z.*intensity.*length"
+        ) as excinfo:
+            list(iter_spectra(path))
+        assert path.name in str(excinfo.value)
+        assert "scan=1" in str(excinfo.value)
+        assert "(2 and 1)" in str(excinfo.value)
 
     def test_truncated_file_is_malformed(self, truncated_mzml: Path) -> None:
         with pytest.raises(MalformedFileError):
