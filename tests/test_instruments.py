@@ -197,10 +197,11 @@ class TestComputeCosineInstrumentClass:
 
 
 # ---------------------------------------------------------------------------
-# generate_qc_summary — the diagnostic window and SNR bands are the class's
+# generate_qc_summary — the diagnostic matching window is class-specific;
+# the former SNR bands are retained in profiles but no longer applied by QC.
 # ---------------------------------------------------------------------------
 class TestQCInstrumentClass:
-    def test_default_reproduces_the_v1_0_labels(
+    def test_default_reports_the_diagnostic_window_without_claiming_snr(
         self,
         qc_tools: dict[str, Callable[..., str]],
         valid_mzml: Path,
@@ -211,9 +212,10 @@ class TestQCInstrumentClass:
         )
         out = qc_tools["generate_qc_summary"](str(valid_mzml))
         assert "within ±0.02 Da of the theoretical m/z" in out
-        assert "Spectra < 5 SNR" in out
-        assert "Spectra > 20 SNR" in out
         assert "**Instrument class:** generic" in out
+        assert "Observed Peak-Intensity Distribution" in out
+        assert "Signal-to-Noise Ratio" not in out
+        assert "SNR bands" not in out
 
     def test_a_unit_resolution_class_widens_the_diagnostic_window(
         self,

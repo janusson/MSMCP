@@ -11,8 +11,29 @@ import pytest
 from conftest import _mzml_xml  # type: ignore[import-not-found]
 
 from msmcp.errors import InaccessiblePathError, MalformedFileError
+from msmcp.mzml import Spectrum
 from msmcp.security import SecurityPolicy
 from msmcp.tools import qc
+
+
+def _spectrum_with_intensities(
+    intensities: list[float],
+    *,
+    index: int | None = 0,
+    ms_level: int | None = None,
+    representation: str | None = None,
+) -> Spectrum:
+    intensity = np.asarray(intensities, dtype=np.float64)
+    mz = np.arange(intensity.size, dtype=np.float64) + 50.0
+    return Spectrum(
+        index=index,
+        ms_level=ms_level,
+        retention_time=None,
+        precursor_mz=None,
+        mz=mz,
+        intensity=intensity,
+        representation=representation,
+    )
 
 
 class TestQC:
@@ -96,8 +117,151 @@ class TestQC:
         assert "Total ion current (analysed spectra):" in out
         assert "Mean TIC / analysed spectrum:" in out
         assert "Coverage:** complete" in out
-        assert "Signal-to-Noise Ratio" in out
+        assert "Observed Peak-Intensity Distribution" in out
         assert "Peak Density" in out
+        assert "Evidence and Interpretation Limits" in out
+        assert "not a noise floor, calibrated SNR" in out
+        assert "Isolation purity is not estimated" in out
+        assert "Signal-to-Noise Ratio" not in out
+
+    def test_median_and_unscaled_mad_match_controlled_signal_values(self) -> None:
+        spectrum = _spectrum_with_intensities(
+            [75.0, 80.0, 90.0, 100.0], ms_level=2, representation="centroid"
+        )
+        summary = qc._summarise_peak_intensity(spectrum)
+
+        assert summary.n_values == 4
+        assert summary.n_positive_finite == 4
+        assert summary.median_positive == pytest.approx(85.0)
+        assert summary.mad_positive == pytest.approx(7.5)
+        assert summary.applicability == "descriptive_only"
+        assert summary.representation == "centroid"
+
+    def test_zero_dominated_spectrum_reports_censoring_and_not_a_zero_noise_floor(
+        self,
+    ) -> None:
+        spectrum = _spectrum_with_intensities([0.0, 0.0, 0.0, 0.02])
+        summary = qc._summarise_peak_intensity(spectrum)
+
+        assert summary.n_values == 4
+        assert summary.n_positive_finite == 1
+        assert summary.n_zero == 3
+        assert summary.median_positive == pytest.approx(0.02)
+        assert summary.mad_positive == 0.0
+        assert summary.applicability == "descriptive_only"
+        report = qc._intensity_distribution_report([summary])
+        assert "MAD=0" in report or "| 0.02 | 0 |" in report
+        assert "not a noise floor" in report
+        assert "No k·MAD cutoff is applied" in report
+
+    @pytest.mark.parametrize(
+        ("intensities", "n_zero", "n_negative", "n_nonfinite"),
+        [
+            ([], 0, 0, 0),
+            ([0.0, 0.0], 2, 0, 0),
+            ([float("nan"), float("inf"), float("-inf"), -1.0], 0, 1, 3),
+        ],
+    )
+    def test_no_positive_finite_values_are_not_applicable(
+        self,
+        intensities: list[float],
+        n_zero: int,
+        n_negative: int,
+        n_nonfinite: int,
+    ) -> None:
+        summary = qc._summarise_peak_intensity(
+            _spectrum_with_intensities(intensities, index=None)
+        )
+
+        assert summary.n_positive_finite == 0
+        assert summary.n_zero == n_zero
+        assert summary.n_negative_finite == n_negative
+        assert summary.n_nonfinite == n_nonfinite
+        assert summary.median_positive is None
+        assert summary.mad_positive is None
+        assert summary.applicability == "not_applicable_no_positive_values"
+        report = qc._intensity_distribution_report([summary])
+        assert "not applicable: no finite positive values" in report
+        assert "| not stated | not stated | not stated |" in report
+        assert "N/A" in report
+
+    def test_skewed_and_repeated_values_do_not_become_noise_estimates(self) -> None:
+        summary = qc._summarise_peak_intensity(
+            _spectrum_with_intensities([2.0, 2.0, 2.0, 1000.0])
+        )
+
+        assert summary.median_positive == pytest.approx(2.0)
+        assert summary.mad_positive == 0.0
+        assert summary.applicability == "descriptive_only"
+
+    def test_intensity_statistics_cannot_label_low_peaks_as_baseline_or_fragments(
+        self,
+    ) -> None:
+        observed = [0.1, 0.2, 0.3, 100.0]
+        # The same centroided values could be interpreted as three background
+        # features plus one analyte peak, or as three real low-abundance fragments.
+        background_interpretation = qc._summarise_peak_intensity(
+            _spectrum_with_intensities(observed, ms_level=2, representation="centroid")
+        )
+        fragment_interpretation = qc._summarise_peak_intensity(
+            _spectrum_with_intensities(observed, ms_level=2, representation="centroid")
+        )
+
+        assert background_interpretation.median_positive == pytest.approx(0.25)
+        assert background_interpretation.mad_positive == pytest.approx(0.1)
+        assert fragment_interpretation == background_interpretation
+        assert background_interpretation.applicability == "descriptive_only"
+
+    def test_median_calculation_does_not_overflow_on_large_finite_values(self) -> None:
+        largest = float(np.finfo(np.float64).max)
+        summary = qc._summarise_peak_intensity(
+            _spectrum_with_intensities([largest, largest])
+        )
+
+        assert summary.median_positive == largest
+        assert summary.mad_positive == 0.0
+
+    def test_intensity_summary_does_not_mutate_source_arrays(self) -> None:
+        spectrum = _spectrum_with_intensities([0.0, 1.0, 2.0, float("nan")])
+        spectrum.mz.setflags(write=False)
+        spectrum.intensity.setflags(write=False)
+        mz_before = spectrum.mz.copy()
+        intensity_before = spectrum.intensity.copy()
+
+        qc._summarise_peak_intensity(spectrum)
+
+        np.testing.assert_array_equal(spectrum.mz, mz_before)
+        np.testing.assert_array_equal(spectrum.intensity, intensity_before)
+        assert not spectrum.mz.flags.writeable
+        assert not spectrum.intensity.flags.writeable
+
+    def test_a_weak_positive_diagnostic_match_is_reported_as_an_observation_only(
+        self,
+    ) -> None:
+        mask = qc._diagnostic_mask(
+            np.array([136.0757]), np.array([1.0e-300]), tolerance=0.02
+        )
+
+        assert mask & 1
+        report = qc._diagnostic_fragment_report([mask], 1, 0.02)
+        assert "observed feature" in report
+        assert "not noise-supported" in report
+
+    def test_distribution_display_is_bounded_and_discloses_omitted_rows(self) -> None:
+        summaries = [
+            qc._summarise_peak_intensity(
+                _spectrum_with_intensities([float(index + 1)], index=index)
+            )
+            for index in range(qc._MAX_INTENSITY_ROWS + 3)
+        ]
+
+        report = qc._intensity_distribution_report(summaries)
+
+        assert (
+            "additional spectra were summarised but omitted from the 20-row display cap"
+            in report
+        )
+        assert report.count("| descriptive only; not noise |") == qc._MAX_INTENSITY_ROWS
 
     def test_qc_stops_at_policy_limit_and_discloses_incomplete_coverage(
         self,
