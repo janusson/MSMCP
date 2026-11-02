@@ -37,10 +37,19 @@ noise-floor estimate for the inputs MSMCP currently accepts:
   or instrument-calibrated threshold. A positive peak can be noise; a low peak can
   be real.
 
-Consequently there is **no k parameter and no k·MAD cutoff**. Adding a configurable
-k would create an adjustable heuristic, not a validated noise estimate. A future
-noise-floor method needs a justified noise-only sampling model and independent
-validation on representative acquisition types.
+Median + k·MAD is not intrinsically invalid. It can be useful when the inputs are
+shown to be samples from a sufficiently stable, representative noise-only
+population—for example, an independently justified background region or blank—and
+when censoring, mixtures, and processing do not distort that population. The
+Gaussian consistency factor sometimes applied to MAD also adds a distributional
+assumption; k must be calibrated to a stated error criterion, not chosen as a
+convenient constant. Those prerequisites are not identified in MSMCP's current
+peak arrays.
+
+Consequently there is **no k parameter and no k·MAD cutoff** in this slice. Adding
+a configurable k would create an adjustable heuristic, not a validated noise
+estimate. A future noise-floor method needs a justified noise-only sampling model
+and independent validation on representative acquisition types.
 
 ### Metric specification
 
@@ -70,9 +79,10 @@ instrument-profile window is reported as applied; it is not a ppm-relative error
 bound and has not been validated here against an instrument-specific fragment
 calibration. MS1
 is excluded when MS/MS is available; unknown MS levels are disclosed and used only
-when no declared MS/MS spectra are available. This is a presence/prevalence
+when no declared MS/MS spectra are available. This is a presence/frequency
 heuristic. A weak positive match is still counted as an observed mass coincidence;
-this report does not establish that it exceeds noise.
+frequency is the fraction of eligible spectra with that coincidence, not an
+identification probability. This report does not establish that a match exceeds noise.
 - **Isolation and collision context:** an isolation-window width, where present,
   describes a selection range, not the abundance of ions within that range. The
   current integration branch has no validated co-isolated-ion abundance model,
@@ -110,9 +120,13 @@ bounded by the existing spectrum limit and report rows by the 20-row cap.
 per-spectrum median/MAD, counts, and explicit applicability. The former
 "Signal-to-Noise Ratio" section is removed because its denominator (median positive
 recorded intensity) is not a measured noise sample. Diagnostic mass matches are
-labelled observed features, and an evidence-limits section states that there is no
-noise-floor, isolation-purity, identification-confidence, probability, or FDR
-calculation.
+labelled observed features. The report also surfaces the existing scalar isolation
+width (when available), explicitly distinguishes that metadata from purity, and
+never emits a purity score. The **Metric Provenance and Inference Limits** section
+travels with the source/reader and processed-subset report and states that there is
+no noise-floor, isolation-purity, identification-confidence, probability, or FDR
+calculation. The return type remains the existing text report; no separate
+machine-readable QC provenance object is introduced in this slice.
 
 The report itself records the metric provenance: source format/backend, processed
 coverage, positive-finite selection rule, median and unscaled MAD definitions,
@@ -129,7 +143,8 @@ values or arrays are changed.
 | Diagnostic m/z accuracy | Existing absolute-Da presence matching retained | Applied tolerance is stated; no ppm-relative/validated fragment-error calibration added here |
 | Noise-supported fragment evidence / relative intensity criterion | Not implemented | Positive intensity alone can be noise; no validated cutoff or blank-derived distribution |
 | MS-level applicability | Implemented by PR #87, which remains an unmerged base dependency | MS1 excluded where MS/MS is available; unknown-level fallback disclosed |
-| Isolation purity / co-isolation risk estimate | Not implemented | A window width is not abundance or purity; requires MS1 precursor/isotope data and validated model |
+| Legacy isolation-window width visibility | Implemented, limited | Reports the existing scalar width in m/z where present; current Spectrum field does not retain target/offset pair |
+| Isolation purity / co-isolation risk estimate | Not implemented | A window width is not abundance or purity; requires linked MS1 precursor/co-isolate evidence and a validated model |
 | Instrument acquisition metadata from issue #16 | Not integrated | Issue #16 remains open; its code is local-only and is not used by this branch |
 | Compound confidence, probability, calibrated FDR | Not implemented | No independent labelled calibration/evaluation set or prespecified error-rate validation |
 

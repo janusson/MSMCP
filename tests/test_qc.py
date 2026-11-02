@@ -119,9 +119,12 @@ class TestQC:
         assert "Coverage:** complete" in out
         assert "Observed Peak-Intensity Distribution" in out
         assert "Peak Density" in out
-        assert "Evidence and Interpretation Limits" in out
+        assert "Metric Provenance and Inference Limits" in out
         assert "not a noise floor, calibrated SNR" in out
+        assert "Isolation Window Metadata (not purity)" in out
+        assert "available for 0/3 analysed spectra" in out
         assert "Isolation purity is not estimated" in out
+        assert "not an identification probability" in out
         assert "Signal-to-Noise Ratio" not in out
 
     def test_median_and_unscaled_mad_match_controlled_signal_values(self) -> None:
@@ -246,6 +249,54 @@ class TestQC:
         report = qc._diagnostic_fragment_report([mask], 1, 0.02)
         assert "observed feature" in report
         assert "not noise-supported" in report
+
+    def test_source_window_offsets_reach_report_only_as_a_width(
+        self,
+        qc_tools: dict[str, Callable[..., str]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = tmp_path / "isolation-window.mzML"
+        xml = _mzml_xml(
+            [{"mz": [100.0], "intensity": [25.0], "ms_level": 2, "precursor_mz": 300.0}]
+        )
+        selected_ion_list = (
+            '<selectedIonList count="1"><selectedIon>'
+            '<cvParam cvRef="MS" accession="MS:1000744" '
+            'name="selected ion m/z" value="300.0"/>'
+            "</selectedIon></selectedIonList>"
+        )
+        isolation_window = (
+            "<isolationWindow>"
+            '<cvParam cvRef="MS" accession="MS:1000827" '
+            'name="isolation window target m/z" value="300.2"/>'
+            '<cvParam cvRef="MS" accession="MS:1000828" '
+            'name="isolation window lower offset" value="0.4"/>'
+            '<cvParam cvRef="MS" accession="MS:1000829" '
+            'name="isolation window upper offset" value="0.6"/>'
+            "</isolationWindow>"
+        )
+        assert selected_ion_list in xml
+        path.write_text(
+            xml.replace(selected_ion_list, isolation_window + selected_ion_list, 1),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(qc, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path))
+
+        report = qc_tools["generate_qc_summary"](str(path))
+
+        assert "Spectrum 0: width 1 m/z" in report
+        assert "not the isolation target or the raw offset pair" in report
+        assert "purity is not estimated" in report
+        assert "300.2" not in report
+
+    def test_window_width_is_reported_without_becoming_a_purity_score(self) -> None:
+        report = qc._isolation_window_report([(4, 1.25)], n_total=5, n_unusable=0)
+
+        assert "width 1.25 m/z" in report
+        assert "not the isolation target" in report
+        assert "purity is not estimated" in report
+        assert "purity score" not in report
 
     def test_distribution_display_is_bounded_and_discloses_omitted_rows(self) -> None:
         summaries = [
@@ -393,15 +444,9 @@ class TestQC:
         out = qc_tools["generate_qc_summary"](str(path))
 
         # Tyrosine immonium (present in MS1 only) must NOT be counted as a fragment
-        assert (
-            "|   0  | Tyrosine immonium         |        136.0757 |        0 |"
-            "       0.0% |" in out
-        )
-        # Histidine immonium (present in 1 of 2 MS2 scans) must have 50.0% prevalence, not 33.3%
-        assert (
-            "|   3  | Histidine immonium        |        110.0713 |        1 |"
-            "      50.0% |" in out
-        )
+        assert "| 0 | Tyrosine immonium | 136.0757 | 0 | 0.0% |" in out
+        # One of two evaluated MS2 spectra contains the reference mass.
+        assert "| 3 | Histidine immonium | 110.0713 | 1 | 50.0% |" in out
         # Report must disclose that MS1 spectra were excluded and how many MS/MS spectra were evaluated
         assert "2 MS/MS spectra" in out
         assert "1 MS1 spectrum excluded" in out
@@ -477,8 +522,8 @@ class TestQC:
         monkeypatch.setattr(qc, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path))
         out = qc_tools["generate_qc_summary"](str(path))
 
-        assert "### Diagnostic Fragment Analysis" in out
-        assert "evaluated only for tandem ms" in out.lower()
+        assert "### Observed Diagnostic m/z Matches" in out
+        assert "matching is evaluated only for tandem ms" in out.lower()
         assert "0 ms/ms spectra available" in out.lower()
 
     def test_qc_nonpositive_declared_ms_level_is_not_treated_as_unknown(
@@ -542,9 +587,6 @@ class TestQC:
         monkeypatch.setattr(qc, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path))
         out = qc_tools["generate_qc_summary"](str(path))
 
-        assert "### Diagnostic Fragment Analysis" in out
+        assert "### Observed Diagnostic m/z Matches" in out
         assert "MS level was absent or unparseable in the input" in out
-        assert (
-            "|   3  | Histidine immonium        |        110.0713 |        1 |"
-            "      50.0% |" in out
-        )
+        assert "| 3 | Histidine immonium | 110.0713 | 1 | 50.0% |" in out

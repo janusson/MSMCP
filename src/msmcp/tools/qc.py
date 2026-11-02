@@ -221,6 +221,39 @@ def _intensity_distribution_report(
     return "\n".join(lines)
 
 
+def _isolation_window_report(
+    windows: list[tuple[int | None, float]],
+    *,
+    n_total: int,
+    n_unusable: int,
+) -> str:
+    """Expose the legacy scalar isolation width without implying purity."""
+    lines = [
+        "### Isolation Window Metadata (not purity)",
+        "",
+        f"A finite positive scalar width was available for {len(windows)}/{n_total} "
+        "analysed spectra.",
+    ]
+    displayed = windows[:_MAX_INTENSITY_ROWS]
+    for index, width in displayed:
+        label = "not stated" if index is None else str(index)
+        lines.append(f"- Spectrum {label}: width {width:g} m/z.")
+    if len(windows) > len(displayed):
+        lines.append(
+            f"{len(windows) - len(displayed)} additional widths omitted from the "
+            f"{len(displayed)}-row display cap."
+        )
+    if n_unusable:
+        lines.append(f"Unusable non-finite/non-positive width values: {n_unusable}.")
+    lines.append(
+        "This is the existing scalar from the first complete isolation-window entry "
+        "(lower + upper offset); it is not the isolation target or the raw offset "
+        "pair. Width alone gives no co-isolated ion abundances, so purity is "
+        "not estimated."
+    )
+    return "\n".join(lines)
+
+
 def _diagnostic_mask(
     mz: np.ndarray,
     intensity: np.ndarray,
@@ -280,12 +313,14 @@ def _diagnostic_fragment_report(
     not_applicable_message: str | None = None,
 ) -> str:
     lines = [
-        "### Diagnostic Fragment Analysis",
+        "### Observed Diagnostic m/z Matches",
         "",
         f"Presence is a finite positive m/z with finite positive intensity within ±{tolerance:g} Da of the "
         "theoretical m/z.",
         "A positive match is an observed feature, not noise-supported fragment "
         "evidence or a compound identification; background and interference can also match.",
+        "Match frequency is a fraction of eligible spectra with a catalogue m/z "
+        "coincidence, not an identification probability.",
     ]
     if not_applicable_message is not None:
         lines.extend(["", not_applicable_message])
@@ -296,17 +331,15 @@ def _diagnostic_fragment_report(
     lines.extend(
         [
             "",
-            "| Bit | Diagnostic Ion            | Theoretical m/z | Spectra  | Prevalence |",
-            "|-----|---------------------------|-----------------|----------|------------|",
+            "| Bit | Catalogue label (not assignment) | Reference m/z | Spectra matched | Match frequency |",
+            "|---:|---|---:|---:|---:|",
         ]
     )
 
     for name, mass, bit in _DIAGNOSTIC_IONS:
         count = sum(1 for m in masks if m & (1 << bit))
         pct = count / n_evaluated * 100 if n_evaluated > 0 else 0.0
-        lines.append(
-            f"| {bit:>3}  | {name:<25} | {mass:>15.4f} | {count:>8} | {pct:>9.1f}% |"
-        )
+        lines.append(f"| {bit} | {name} | {mass:.4f} | {count} | {pct:.1f}% |")
 
     return "\n".join(lines)
 
@@ -315,10 +348,14 @@ def _interpretation_limits_report() -> str:
     """Separate observed features from unsupported chemical or noise claims."""
     return "\n".join(
         [
-            "### Evidence and Interpretation Limits",
+            "### Metric Provenance and Inference Limits",
             "",
-            "- The intensity table describes recorded values; it does not estimate "
-            "background noise or calibrated SNR.",
+            "The statements below apply to the metrics for the processed subset and "
+            "source/reader named above.",
+            "",
+            "- The intensity table describes recorded values; its provenance rule "
+            "and parameters are stated with the table. It does not estimate background "
+            "noise or calibrated SNR.",
             "- Diagnostic entries are positive finite m/z coincidences in the stated "
             "MS-level context. They are not noise-supported detections or an "
             "identification.",
@@ -394,6 +431,8 @@ def register_tools(mcp: Any) -> None:
         n_total = 0
         total_tic = 0.0
         intensity_summaries: list[_PeakIntensitySummary] = []
+        isolation_windows: list[tuple[int | None, float]] = []
+        n_unusable_isolation_windows = 0
         n_peaks_list: list[int] = []
         n_ms1 = 0
         n_ms2_plus = 0
@@ -408,6 +447,12 @@ def register_tools(mcp: Any) -> None:
                 tic = spectrum.tic
                 total_tic += tic
                 intensity_summaries.append(_summarise_peak_intensity(spectrum))
+                width = spectrum.isolation_window
+                if width is not None:
+                    if np.isfinite(width) and width > 0.0:
+                        isolation_windows.append((spectrum.index, float(width)))
+                    else:
+                        n_unusable_isolation_windows += 1
                 n_peaks_list.append(spectrum.n_peaks)
                 level = spectrum.ms_level
                 if level == 1:
@@ -554,6 +599,12 @@ def register_tools(mcp: Any) -> None:
                 _peak_density_report(n_peaks_list),
                 "",
                 diag_report,
+                "",
+                _isolation_window_report(
+                    isolation_windows,
+                    n_total=n_total,
+                    n_unusable=n_unusable_isolation_windows,
+                ),
                 "",
                 _interpretation_limits_report(),
             ]
