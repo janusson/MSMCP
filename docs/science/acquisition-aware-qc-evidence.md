@@ -52,7 +52,8 @@ validation on representative acquisition types.
 | Unscaled MAD | `median(abs(P - median(P)))` | Same source intensity scale | `n > 0` | Descriptive spread only; no 1.4826 factor, k multiplier, or noise meaning is applied |
 | Applicability | `descriptive_only` if `n > 0`; otherwise `not_applicable_no_positive_values` | categorical | Always | No fallback numeric zero for an empty/zero-only/non-finite spectrum |
 
-No statistic is normalised across spectra or files. The report displays at most 20
+MSMCP does not rescale these values; any source-side scaling or normalization is
+unknown. No statistic is normalised across spectra or files. The report displays at most 20
 per-spectrum rows in reader order and states how many rows were omitted; metrics
 are still calculated for every spectrum in the processed subset. The only
 selection parameter is the fixed, reported finite-positive rule. The existing

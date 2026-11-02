@@ -207,7 +207,8 @@ def _intensity_distribution_report(
             "For each spectrum, the median and raw (unscaled) median absolute deviation "
             "are computed over finite intensities > 0 only. Zero, negative, and "
             "non-finite values are excluded from those statistics and counted above. "
-            "Intensity scale and units are source-dependent and are not normalised.",
+            "Intensity scale and units are source-dependent; MSMCP does not rescale "
+            "them or infer whether the source pre-normalised them.",
             "These are descriptive statistics of recorded array values, not a noise "
             "floor, calibrated SNR, threshold, or cross-acquisition quality score. "
             "No k·MAD cutoff is applied. Sparse, zero-censored, or highly skewed peak "
