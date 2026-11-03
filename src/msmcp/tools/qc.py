@@ -99,7 +99,10 @@ def _diagnostic_mask(
     pos_mz = mz[valid]
     mask = 0
     for _, mass, bit in _DIAGNOSTIC_IONS:
-        if np.any(np.abs(pos_mz - mass) <= tolerance):
+        # Preserve the inclusive boundary when float subtraction rounds one ULP high.
+        lower = np.nextafter(mass - tolerance, -np.inf)
+        upper = np.nextafter(mass + tolerance, np.inf)
+        if np.any((pos_mz >= lower) & (pos_mz <= upper)):
             mask |= 1 << bit
     return mask
 

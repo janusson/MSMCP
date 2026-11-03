@@ -158,6 +158,21 @@ class TestQC:
         mask = qc._diagnostic_mask(mz, intensity, tolerance=0.02)
         assert mask == 0
 
+    def test_diagnostic_mask_includes_exact_tolerance_edges(self) -> None:
+        mass = 136.0757
+        tolerance = 0.02
+        mz = np.array([mass - tolerance, mass + tolerance])
+        intensity = np.array([1.0, 1.0])
+
+        mask = qc._diagnostic_mask(mz, intensity, tolerance)
+        two_ulps_outside = np.nextafter(np.nextafter(mass + tolerance, np.inf), np.inf)
+        outside_mask = qc._diagnostic_mask(
+            np.array([two_ulps_outside]), np.array([1.0]), tolerance
+        )
+
+        assert mask & 1
+        assert not outside_mask & 1
+
     def test_qc_diagnostic_fragment_excludes_ms1_and_calculates_ms2_prevalence(
         self,
         qc_tools: dict[str, Callable[..., str]],
