@@ -158,20 +158,31 @@ class TestQC:
         mask = qc._diagnostic_mask(mz, intensity, tolerance=0.02)
         assert mask == 0
 
-    def test_diagnostic_mask_includes_exact_tolerance_edges(self) -> None:
-        mass = 136.0757
+    @pytest.mark.parametrize("direction", [-1.0, 1.0])
+    @pytest.mark.parametrize(("name", "mass", "bit"), qc._DIAGNOSTIC_IONS)
+    def test_diagnostic_mask_includes_exact_tolerance_edges(
+        self,
+        name: str,
+        mass: float,
+        bit: int,
+        direction: float,
+    ) -> None:
         tolerance = 0.02
-        mz = np.array([mass - tolerance, mass + tolerance])
-        intensity = np.array([1.0, 1.0])
+        mz = np.array([mass + direction * tolerance])
 
-        mask = qc._diagnostic_mask(mz, intensity, tolerance)
-        two_ulps_outside = np.nextafter(np.nextafter(mass + tolerance, np.inf), np.inf)
+        mask = qc._diagnostic_mask(mz, np.array([1.0]), tolerance)
+
+        assert mask & (1 << bit), (
+            f"{name} at its exact {direction:+g} Da edge was missed"
+        )
+        outward = np.inf if direction > 0.0 else -np.inf
+        two_ulps_outside = np.nextafter(np.nextafter(mz[0], outward), outward)
         outside_mask = qc._diagnostic_mask(
             np.array([two_ulps_outside]), np.array([1.0]), tolerance
         )
-
-        assert mask & 1
-        assert not outside_mask & 1
+        assert not outside_mask & (1 << bit), (
+            f"{name} two ULPs outside its {direction:+g} Da edge matched"
+        )
 
     def test_qc_diagnostic_fragment_excludes_ms1_and_calculates_ms2_prevalence(
         self,
