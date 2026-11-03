@@ -266,6 +266,7 @@ def register_tools(mcp: Any) -> None:
         n_ms1 = 0
         n_ms2_plus = 0
         n_unknown_level = 0
+        n_invalid_level = 0
         diag_masks_ms2: list[int] = []
         diag_masks_unknown: list[int] = []
         spectra = source.iter_spectra()
@@ -286,13 +287,15 @@ def register_tools(mcp: Any) -> None:
                             spectrum.mz, spectrum.intensity, diagnostic_tolerance
                         )
                     )
-                else:
+                elif level is None:
                     n_unknown_level += 1
                     diag_masks_unknown.append(
                         _diagnostic_mask(
                             spectrum.mz, spectrum.intensity, diagnostic_tolerance
                         )
                     )
+                else:
+                    n_invalid_level += 1
         finally:
             close = getattr(spectra, "close", None)
             if callable(close):
@@ -345,6 +348,11 @@ def register_tools(mcp: Any) -> None:
             if n_unknown_level == 1
             else f"{n_unknown_level} spectra"
         )
+        invalid_level_str = (
+            f"{n_invalid_level} invalid declared MS level value"
+            if n_invalid_level == 1
+            else f"{n_invalid_level} invalid declared MS level values"
+        )
 
         not_applicable_message: str | None = None
         context_note: str | None = None
@@ -354,33 +362,48 @@ def register_tools(mcp: Any) -> None:
         if n_ms2_plus > 0:
             diag_report_masks = diag_masks_ms2
             n_diag_evaluated = n_ms2_plus
-            if n_ms1 > 0 and n_unknown_level > 0:
-                context_note = (
-                    f"Evaluated across {ms2_str} ({ms1_str} excluded; "
-                    f"{unk_str} with unstated MS level omitted)."
+            excluded = []
+            if n_ms1:
+                excluded.append(f"{ms1_str} excluded")
+            if n_unknown_level:
+                excluded.append(
+                    f"{unk_str} with absent or unparseable MS level omitted"
                 )
-            elif n_ms1 > 0:
-                context_note = f"Evaluated across {ms2_str} ({ms1_str} excluded)."
-            elif n_unknown_level > 0:
-                context_note = f"Evaluated across {ms2_str} ({unk_str} with unstated MS level omitted)."
-            else:
-                context_note = f"Evaluated across {ms2_str}."
+            if n_invalid_level:
+                excluded.append(f"{invalid_level_str} (<1) omitted")
+            context_note = f"Evaluated across {ms2_str}"
+            if excluded:
+                context_note += " (" + "; ".join(excluded) + ")"
+            context_note += "."
         elif n_unknown_level > 0:
             diag_report_masks = diag_masks_unknown
             n_diag_evaluated = n_unknown_level
-            if n_ms1 > 0:
-                context_note = (
-                    f"Evaluated across {unk_str} with unstated MS level "
-                    f"({ms1_str} excluded; 0 declared MS/MS spectra)."
-                )
-            else:
-                context_note = (
-                    f"MS level was unstated in the input; evaluated across {unk_str}."
-                )
+            excluded = []
+            if n_ms1:
+                excluded.append(f"{ms1_str} excluded")
+            if n_invalid_level:
+                excluded.append(f"{invalid_level_str} (<1) excluded")
+            context_note = (
+                f"MS level was absent or unparseable in the input; evaluated across "
+                f"{unk_str}"
+            )
+            if excluded:
+                context_note += " (" + "; ".join(excluded) + ")"
+            context_note += "."
+        elif n_invalid_level:
+            excluded = []
+            if n_ms1:
+                excluded.append(f"{ms1_str} declared MS1")
+            excluded.append(f"{invalid_level_str} (<1)")
+            not_applicable_message = (
+                "No eligible diagnostic spectra: "
+                + "; ".join(excluded)
+                + ". No declared MS/MS or absent/unparseable-level spectra are available."
+            )
         else:
             not_applicable_message = (
-                "Diagnostic immonium and oxonium fragment analysis is applicable "
-                f"only to tandem MS (MS/MS, MS2+) spectra. All {n_total:,} analysed "
+                "Diagnostic reference-mass matching is evaluated only for tandem "
+                f"MS (MS/MS, MS2+) spectra. All {n_total:,} analysed "
                 "spectra are declared MS1; 0 MS/MS spectra available."
             )
 

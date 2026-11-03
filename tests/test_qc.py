@@ -150,13 +150,13 @@ class TestQC:
         with pytest.raises(InaccessiblePathError):
             qc_tools["generate_qc_summary"](str(tmp_path / "missing.mzML"))
 
-    def test_diagnostic_mask_requires_positive_intensity(self) -> None:
-        """A zero- or negative-intensity peak at a diagnostic m/z is not a detected ion."""
-        mz = np.array([136.0757, 120.0808])
-        # zero intensity and negative intensity
-        intensity = np.array([0.0, -10.0])
+    def test_diagnostic_mask_requires_finite_positive_intensity(self) -> None:
+        """Zero, negative and non-finite intensities are not observed matches."""
+        mz = np.array([136.0757, 120.0808, 159.0917, 110.0713, 129.1135])
+        intensity = np.array([0.0, -10.0, np.nan, np.inf, -np.inf])
         mask = qc._diagnostic_mask(mz, intensity, tolerance=0.02)
         assert mask == 0
+        assert qc._diagnostic_mask(np.array([]), np.array([]), tolerance=0.02) == 0
 
     @pytest.mark.parametrize("direction", [-1.0, 1.0])
     @pytest.mark.parametrize(("name", "mass", "bit"), qc._DIAGNOSTIC_IONS)
@@ -232,6 +232,61 @@ class TestQC:
         assert "2 MS/MS spectra" in out
         assert "1 MS1 spectrum excluded" in out
 
+    def test_qc_ms3_spectra_are_eligible_tandem_spectra(
+        self,
+        qc_tools: dict[str, Callable[..., str]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = tmp_path / "ms3.mzML"
+        path.write_text(
+            _mzml_xml(
+                [
+                    {"mz": [70.0651], "intensity": [5.0], "ms_level": 3},
+                    {"mz": [110.0713], "intensity": [5.0], "ms_level": 2},
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(qc, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path))
+
+        out = qc_tools["generate_qc_summary"](str(path))
+
+        assert "2 MS/MS spectra" in out
+        assert (
+            f"| {5:>3}  | {'Proline immonium':<25} | {70.0651:>15.4f} | "
+            f"{1:>8} | {50.0:>9.1f}% |" in out
+        )
+        assert (
+            f"| {3:>3}  | {'Histidine immonium':<25} | {110.0713:>15.4f} | "
+            f"{1:>8} | {50.0:>9.1f}% |" in out
+        )
+
+    def test_qc_unknown_level_is_excluded_from_denominator_when_ms2_exists(
+        self,
+        qc_tools: dict[str, Callable[..., str]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = tmp_path / "mixed-known-unknown.mgf"
+        path.write_text(
+            "BEGIN IONS\nMSLEVEL=2\n110.0713 10\nEND IONS\n"
+            "BEGIN IONS\n136.0757 10\nEND IONS\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(qc, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path))
+
+        out = qc_tools["generate_qc_summary"](str(path))
+
+        assert "Evaluated across 1 MS/MS spectrum" in out
+        assert "1 spectrum with absent or unparseable MS level omitted" in out
+        assert (
+            "|   3  | Histidine immonium        |        110.0713 |        1 |" in out
+        )
+        assert (
+            "|   0  | Tyrosine immonium         |        136.0757 |        0 |" in out
+        )
+
     def test_qc_diagnostic_fragment_ms1_only_file(
         self,
         qc_tools: dict[str, Callable[..., str]],
@@ -249,8 +304,45 @@ class TestQC:
         out = qc_tools["generate_qc_summary"](str(path))
 
         assert "### Diagnostic Fragment Analysis" in out
-        assert "applicable only to tandem ms" in out.lower()
+        assert "evaluated only for tandem ms" in out.lower()
         assert "0 ms/ms spectra available" in out.lower()
+
+    def test_qc_nonpositive_declared_ms_level_is_not_treated_as_unknown(
+        self,
+        qc_tools: dict[str, Callable[..., str]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = tmp_path / "invalid-ms-level.mgf"
+        path.write_text(
+            "BEGIN IONS\nMSLEVEL=0\n110.0713 10\nEND IONS\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(qc, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path))
+
+        out = qc_tools["generate_qc_summary"](str(path))
+
+        assert "invalid declared MS level" in out
+        assert "MS level was unstated in the input" not in out
+        assert "No eligible diagnostic spectra" in out
+
+    def test_qc_unparseable_declared_ms_level_is_disclosed_as_unavailable(
+        self,
+        qc_tools: dict[str, Callable[..., str]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        path = tmp_path / "unparseable-ms-level.mgf"
+        path.write_text(
+            "BEGIN IONS\nMSLEVEL=not-an-integer\n110.0713 10\nEND IONS\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(qc, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path))
+
+        out = qc_tools["generate_qc_summary"](str(path))
+
+        assert "MS level was absent or unparseable" in out
+        assert "evaluated across 1 spectrum" in out.lower()
 
     def test_qc_diagnostic_fragment_unstated_ms_level(
         self,
@@ -277,7 +369,7 @@ class TestQC:
         out = qc_tools["generate_qc_summary"](str(path))
 
         assert "### Diagnostic Fragment Analysis" in out
-        assert "MS level was unstated in the input" in out
+        assert "MS level was absent or unparseable in the input" in out
         assert (
             "|   3  | Histidine immonium        |        110.0713 |        1 |"
             "      50.0% |" in out
