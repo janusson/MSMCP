@@ -184,6 +184,16 @@ class TestQC:
             f"{name} two ULPs outside its {direction:+g} Da edge matched"
         )
 
+    def test_diagnostic_match_report_disclaims_noise_support_and_identity(self) -> None:
+        mask = qc._diagnostic_mask(
+            np.array([136.0757]), np.array([1.0]), tolerance=0.02
+        )
+
+        report = qc._diagnostic_fragment_report([mask], 1, 0.02)
+
+        assert "not noise-supported" in report
+        assert "not a compound identification" in report
+
     def test_qc_diagnostic_fragment_excludes_ms1_and_calculates_ms2_prevalence(
         self,
         qc_tools: dict[str, Callable[..., str]],

@@ -173,6 +173,8 @@ def _diagnostic_fragment_report(
         "",
         f"Presence is defined as a peak with positive intensity within ±{tolerance:g} Da of the "
         "theoretical m/z.",
+        "A positive match is not noise-supported fragment evidence and is not a "
+        "compound identification; background and interference can also match.",
     ]
     if not_applicable_message is not None:
         lines.extend(["", not_applicable_message])
