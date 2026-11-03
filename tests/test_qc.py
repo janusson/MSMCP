@@ -472,14 +472,8 @@ class TestQC:
         out = qc_tools["generate_qc_summary"](str(path))
 
         assert "2 MS/MS spectra" in out
-        assert (
-            f"| {5:>3}  | {'Proline immonium':<25} | {70.0651:>15.4f} | "
-            f"{1:>8} | {50.0:>9.1f}% |" in out
-        )
-        assert (
-            f"| {3:>3}  | {'Histidine immonium':<25} | {110.0713:>15.4f} | "
-            f"{1:>8} | {50.0:>9.1f}% |" in out
-        )
+        assert "| 5 | Proline immonium | 70.0651 | 1 | 50.0% |" in out
+        assert "| 3 | Histidine immonium | 110.0713 | 1 | 50.0% |" in out
 
     def test_qc_unknown_level_is_excluded_from_denominator_when_ms2_exists(
         self,
@@ -499,12 +493,8 @@ class TestQC:
 
         assert "Evaluated across 1 MS/MS spectrum" in out
         assert "1 spectrum with absent or unparseable MS level omitted" in out
-        assert (
-            "|   3  | Histidine immonium        |        110.0713 |        1 |" in out
-        )
-        assert (
-            "|   0  | Tyrosine immonium         |        136.0757 |        0 |" in out
-        )
+        assert "| 3 | Histidine immonium | 110.0713 | 1 | 100.0% |" in out
+        assert "| 0 | Tyrosine immonium | 136.0757 | 0 | 0.0% |" in out
 
     def test_qc_diagnostic_fragment_ms1_only_file(
         self,
