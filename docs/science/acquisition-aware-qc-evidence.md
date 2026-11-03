@@ -2,7 +2,7 @@
 
 ## Integration state and scope
 
-At implementation time, GitHub `main` is `77bf970`. PR #87 is **open and unmerged**; this worktree is deliberately based on PR #87's head (`8a77135`) so the new report builds on its MS/MS applicability and positive-intensity correction without changing that PR. Issue #16 is also **open with no associated PR**. The acquisition-context implementation at local commit `d9723d2` is not on `main` or a remote branch, so this slice neither imports nor assumes that unmerged code.
+At final review, GitHub `main` is `77bf970`. PR #87 is **open and unmerged** at head `e030809`, based on `main`; it contains the MS/MS applicability and positive-intensity corrections plus the reviewed tolerance-edge and MS-level fixes. PR #88 is stacked on that current PR #87 head, so its diff contains only the incremental issue #17 reporting changes. Issue #16 is also **open with no associated PR**. Its acquisition-context implementation at local commit `d9723d2` is not on `main` or a remote branch, so this slice neither imports nor assumes that unmerged code.
 
 This is one bounded issue #17 improvement: replace the unsupported SNR/noise-floor interpretation with a per-spectrum description of the intensity values that MSMCP actually receives. It does **not** claim that median or MAD estimates noise.
 
