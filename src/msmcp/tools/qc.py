@@ -317,8 +317,8 @@ def _diagnostic_fragment_report(
         "",
         f"Presence is a finite positive m/z with finite positive intensity within ±{tolerance:g} Da of the "
         "theoretical m/z.",
-        "A positive match is an observed feature, not noise-supported fragment "
-        "evidence or a compound identification; background and interference can also match.",
+        "A positive match is an observed feature only. It is not noise-supported "
+        "fragment evidence and is not a compound identification; background and interference can also match.",
         "Match frequency is a fraction of eligible spectra with a catalogue m/z "
         "coincidence, not an identification probability.",
     ]
