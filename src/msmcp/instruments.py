@@ -3,8 +3,8 @@
 Audit F7 (``docs/audit/2026-09-22-standard-audit.md``) found that the
 thresholds which encode the experimental question were module-level literals:
 a 5.0 ppm precursor gate, a 0.02 Da peak-match window, a 0.02 Da diagnostic-ion
-window, SNR cut-offs of 5 and 20, and an FDR threshold / small-library floor of
-0.05 / 2000.  The consequence is that an analysis cannot be re-run under
+window, legacy SNR fields of 5 and 20, and an FDR threshold / small-library
+floor of 0.05 / 2000.  The consequence is that an analysis cannot be re-run under
 different instrument assumptions without editing source, and the value that was
 *actually used* is invisible in the result it produced.
 
@@ -38,8 +38,9 @@ Constant provenance (the basis for the defaults)
     logic: 0.02 Da for the generic default, tighter for accurate-mass classes,
     and a unit-mass window (0.5-0.7 Da) for unit-resolution classes.
 ``snr_low`` / ``snr_high``
-    The 5 / 20 SNR cut-offs are MSMCP's v1.0 reporting bands, shared across
-    classes until there is per-class noise data to justify otherwise.
+    Legacy 5 / 20 fields are retained in profile objects for compatibility.
+    QC no longer applies them: centroided peak intensities do not supply a
+    validated background-noise estimate or SNR scale.
 ``fdr_threshold`` / ``small_library_threshold``
     0.05 is the conventional Benjamini-Hochberg FDR threshold; 2000 is the
     library size below which MSMCP switches from the FDR branch to the
@@ -134,42 +135,42 @@ class InstrumentProfile:
 
 
 _GENERIC_PROVENANCE = (
-    "MSMCP v1.0 defaults — the literals audit F7 replaced: a 5.0 ppm precursor "
-    "gate, a 0.02 Da MS2 window, a 0.02 Da diagnostic-ion window, SNR cut-offs "
-    "of 5 and 20, a 0.05 Benjamini-Hochberg FDR threshold and a 2000-spectrum "
-    "FDR small-library floor.  Retained as the default so existing analyses and "
-    "reports stay reproducible; it is a convention, not an instrument claim."
+    "MSMCP v1.0 defaults — a 5.0 ppm precursor gate, a 0.02 Da MS2 window and "
+    "a 0.02 Da diagnostic-ion window. Legacy 5/20 SNR fields are retained for "
+    "compatibility but are not applied by QC because no calibrated noise floor "
+    "is available. The 0.05 FDR threshold and 2000-spectrum floor remain profile "
+    "metadata, not instrument claims."
 )
 
 _ORBITRAP_PROVENANCE = (
     "High-resolution accurate-mass class.  A 5.0 ppm precursor gate is the "
     "conservative end of the few-ppm external-calibration accuracy typical of "
     "Orbitrap-class instruments; the MS2 and diagnostic-ion windows tighten to "
-    "0.01 Da to match that resolution.  SNR cut-offs and the FDR / "
-    "small-library thresholds follow the shared defaults (they are properties "
-    "of the statistics and the v1.0 reporting bands, not of the mass analyser)."
+    "0.01 Da to match that resolution. Legacy SNR fields remain in the profile "
+    "for compatibility but are not applied by QC; FDR / small-library values "
+    "are shared statistical metadata, not properties of the mass analyser."
 )
 
 _TOF_PROVENANCE = (
     "Time-of-flight accurate-mass class.  Reflectron TOF instruments typically "
     "quote 5-15 ppm, so the precursor gate is 15.0 ppm and the MS2 / "
-    "diagnostic-ion windows widen to 0.05 Da.  SNR cut-offs and the FDR / "
-    "small-library thresholds are shared."
+    "diagnostic-ion windows widen to 0.05 Da. Legacy SNR fields remain in the "
+    "profile but are not applied by QC; FDR / small-library values are shared."
 )
 
 _ION_TRAP_PROVENANCE = (
     "Unit-resolution ion-trap class.  Mass accuracy is not quoted in ppm, so "
     "the precursor gate is a 0.5 Da window, as are the MS2 and diagnostic-ion "
     "windows — a 5 ppm gate is meaningless on an instrument that cannot resolve "
-    "fractions of a nominal mass.  SNR cut-offs and the FDR / small-library "
-    "thresholds are shared."
+    "fractions of a nominal mass. Legacy SNR fields remain in the profile but "
+    "are not applied by QC; FDR / small-library values are shared."
 )
 
 _TRIPLE_QUAD_PROVENANCE = (
     "Unit-resolution tandem (triple-quadrupole) class.  A 0.7 Da window is the "
     "conventional unit-mass tolerance for precursor, fragment and "
-    "diagnostic-ion matching.  SNR cut-offs and the FDR / small-library "
-    "thresholds are shared."
+    "diagnostic-ion matching. Legacy SNR fields remain in the profile but are "
+    "not applied by QC; FDR / small-library values are shared."
 )
 
 _PROFILES: dict[str, InstrumentProfile] = {

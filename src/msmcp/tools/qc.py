@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import itertools
 import logging
-from typing import Annotated, Any
+from dataclasses import dataclass
+from typing import Annotated, Any, Literal
 
 import numpy as np
 from mcp.types import ToolAnnotations
@@ -18,6 +19,7 @@ from msmcp.instruments import (
     InstrumentClass,
     get_profile,
 )
+from msmcp.mzml import Spectrum
 from msmcp.security import DEFAULT_POLICY
 
 logger = logging.getLogger("msmcp.tools.qc")
@@ -67,22 +69,189 @@ _DIAGNOSTIC_IONS: list[tuple[str, float, int]] = [
 # ======================================================================
 # Metric helpers
 # ======================================================================
-def _estimate_snr(intensity: np.ndarray) -> float:
-    """Estimate per-spectrum SNR as base peak ÷ median positive intensity.
+_MAX_INTENSITY_ROWS = 20
 
-    This is a transparent, assumption-light proxy: the base peak is treated
-    as signal and the median of the positive intensities as the noise floor.
-    It is reported as an *estimate*, not a calibrated instrument SNR.
+
+@dataclass(frozen=True, slots=True)
+class _PeakIntensitySummary:
+    """Descriptive distribution statistics for one spectrum's recorded intensities."""
+
+    spectrum_index: int | None
+    ms_level: int | None
+    representation: str | None
+    n_values: int
+    n_positive_finite: int
+    n_zero: int
+    n_negative_finite: int
+    n_nonfinite: int
+    median_positive: float | None
+    mad_positive: float | None
+    applicability: Literal["descriptive_only", "not_applicable_no_positive_values"]
+
+
+def _finite_median(values: np.ndarray) -> float | None:
+    """Compute a median without overflowing when averaging two finite values."""
+    count = int(values.size)
+    if count == 0:
+        return None
+    middle = count // 2
+    if count % 2:
+        partitioned = np.partition(values, middle)
+        return float(partitioned[middle])
+    partitioned = np.partition(values, (middle - 1, middle))
+    lower = float(partitioned[middle - 1])
+    upper = float(partitioned[middle])
+    return lower + (upper - lower) * 0.5
+
+
+def _summarise_peak_intensity(spectrum: Spectrum) -> _PeakIntensitySummary:
+    """Summarise observed values, not background noise or SNR.
+
+    Only finite positive values enter the median and unscaled MAD. Zero,
+    negative, and non-finite entries are counted separately, so an all-zero or
+    empty spectrum is not converted into a reassuring numerical zero.
     """
-    positive = intensity[intensity > 0.0]
-    if positive.size == 0:
-        return 0.0
+    intensity = np.asarray(spectrum.intensity, dtype=np.float64)
+    finite = np.isfinite(intensity)
+    positive = intensity[finite & (intensity > 0.0)]
+    n_nonfinite = int(np.count_nonzero(~finite))
+    n_zero = int(np.count_nonzero(finite & (intensity == 0.0)))
+    n_negative = int(np.count_nonzero(finite & (intensity < 0.0)))
 
-    signal = float(np.max(positive))
-    noise = float(np.median(positive))
-    if noise <= 0.0:
-        return float("inf") if signal > 0.0 else 0.0
-    return signal / noise
+    if positive.size == 0:
+        return _PeakIntensitySummary(
+            spectrum_index=spectrum.index,
+            ms_level=spectrum.ms_level,
+            representation=spectrum.representation,
+            n_values=intensity.size,
+            n_positive_finite=0,
+            n_zero=n_zero,
+            n_negative_finite=n_negative,
+            n_nonfinite=n_nonfinite,
+            median_positive=None,
+            mad_positive=None,
+            applicability="not_applicable_no_positive_values",
+        )
+
+    median = _finite_median(positive)
+    assert median is not None
+    deviations = np.abs(positive - median)
+    mad = _finite_median(deviations)
+    assert mad is not None
+    return _PeakIntensitySummary(
+        spectrum_index=spectrum.index,
+        ms_level=spectrum.ms_level,
+        representation=spectrum.representation,
+        n_values=intensity.size,
+        n_positive_finite=int(positive.size),
+        n_zero=n_zero,
+        n_negative_finite=n_negative,
+        n_nonfinite=n_nonfinite,
+        median_positive=median,
+        mad_positive=mad,
+        applicability="descriptive_only",
+    )
+
+
+def _intensity_distribution_report(
+    summaries: list[_PeakIntensitySummary],
+) -> str:
+    """Report descriptive intensity statistics without calling them a noise floor."""
+    applicable = sum(
+        summary.applicability == "descriptive_only" for summary in summaries
+    )
+    lines = [
+        "### Observed Peak-Intensity Distribution",
+        "",
+        f"Finite positive intensity values were present in {applicable}/{len(summaries)} "
+        "analysed spectra.",
+        "",
+        "| Spectrum index | MS level | Representation | Positive / total | Zero | Negative | "
+        "Non-finite | Median positive | Unscaled MAD | Applicability |",
+        "|---:|---:|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    displayed = summaries[:_MAX_INTENSITY_ROWS]
+    for summary in displayed:
+        index = (
+            "not stated"
+            if summary.spectrum_index is None
+            else str(summary.spectrum_index)
+        )
+        level = "not stated" if summary.ms_level is None else f"MS{summary.ms_level}"
+        representation = summary.representation or "not stated"
+        median = (
+            "N/A"
+            if summary.median_positive is None
+            else f"{summary.median_positive:.4g}"
+        )
+        mad = "N/A" if summary.mad_positive is None else f"{summary.mad_positive:.4g}"
+        applicability = (
+            "descriptive only; not noise"
+            if summary.applicability == "descriptive_only"
+            else "not applicable: no finite positive values"
+        )
+        lines.append(
+            f"| {index} | {level} | {representation} | "
+            f"{summary.n_positive_finite}/{summary.n_values} | {summary.n_zero} | "
+            f"{summary.n_negative_finite} | {summary.n_nonfinite} | "
+            f"{median} | {mad} | {applicability} |"
+        )
+    if len(summaries) > len(displayed):
+        lines.append(
+            f"{len(summaries) - len(displayed)} additional spectra were summarised "
+            f"but omitted from the {len(displayed)}-row display cap."
+        )
+    lines.extend(
+        [
+            "",
+            "For each spectrum, the median and raw (unscaled) median absolute deviation "
+            "are computed over finite intensities > 0 only. Zero, negative, and "
+            "non-finite values are excluded from those statistics and counted above. "
+            "Intensity scale and units are source-dependent; MSMCP does not rescale "
+            "them or infer whether the source pre-normalised them.",
+            "These are descriptive statistics of recorded array values, not a noise "
+            "floor, calibrated SNR, threshold, or cross-acquisition quality score. "
+            "No k·MAD cutoff is applied. Sparse, zero-censored, or highly skewed peak "
+            "lists can have MAD=0 or otherwise misleading distributions.",
+            f"Metric provenance: finite-positive filter (>0); median; unscaled MAD; "
+            f"{_MAX_INTENSITY_ROWS}-row display cap; calculations cover all "
+            f"{len(summaries)} analysed spectra.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _isolation_window_report(
+    windows: list[tuple[int | None, float]],
+    *,
+    n_total: int,
+    n_unusable: int,
+) -> str:
+    """Expose the legacy scalar isolation width without implying purity."""
+    lines = [
+        "### Isolation Window Metadata (not purity)",
+        "",
+        f"A finite positive scalar width was available for {len(windows)}/{n_total} "
+        "analysed spectra.",
+    ]
+    displayed = windows[:_MAX_INTENSITY_ROWS]
+    for index, width in displayed:
+        label = "not stated" if index is None else str(index)
+        lines.append(f"- Spectrum {label}: width {width:g} m/z.")
+    if len(windows) > len(displayed):
+        lines.append(
+            f"{len(windows) - len(displayed)} additional widths omitted from the "
+            f"{len(displayed)}-row display cap."
+        )
+    if n_unusable:
+        lines.append(f"Unusable non-finite/non-positive width values: {n_unusable}.")
+    lines.append(
+        "This is the existing scalar from the first complete isolation-window entry "
+        "(lower + upper offset); it is not the isolation target or the raw offset "
+        "pair. Width alone gives no co-isolated ion abundances, so purity is "
+        "not estimated."
+    )
+    return "\n".join(lines)
 
 
 def _diagnostic_mask(
@@ -110,31 +279,6 @@ def _diagnostic_mask(
 # ======================================================================
 # Report sections
 # ======================================================================
-def _snr_report(snr_values: list[float], low: float, high: float) -> str:
-    arr = np.asarray(snr_values, dtype=np.float64)
-    if arr.size == 0:
-        return "### Signal-to-Noise Ratio\n\nNo spectra were available."
-
-    mean_snr = float(np.mean(arr))
-    median_snr = float(np.median(arr))
-    min_snr = float(np.min(arr))
-    max_snr = float(np.max(arr)) if np.isfinite(arr).all() else float("inf")
-    pct_low = float(np.sum(arr < low) / arr.size * 100)
-    pct_high = float(np.sum(arr > high) / arr.size * 100)
-
-    return (
-        "### Signal-to-Noise Ratio (estimated)\n\n"
-        "| Metric              | Value     |\n"
-        "|---------------------|----------|\n"
-        f"| Mean SNR            | {mean_snr:>8.1f} |\n"
-        f"| Median SNR          | {median_snr:>8.1f} |\n"
-        f"| Min SNR             | {min_snr:>8.1f} |\n"
-        f"| Max SNR             | {max_snr:>8.1f} |\n"
-        f"| Spectra < {low:g} SNR     | {pct_low:>7.1f}% |\n"
-        f"| Spectra > {high:g} SNR    | {pct_high:>7.1f}% |\n\n"
-        "Estimator: base-peak intensity ÷ median positive intensity.  This is "
-        "a transparent proxy, not a calibrated instrument SNR."
-    )
 
 
 def _peak_density_report(n_peaks_list: list[int]) -> str:
@@ -169,12 +313,14 @@ def _diagnostic_fragment_report(
     not_applicable_message: str | None = None,
 ) -> str:
     lines = [
-        "### Diagnostic Fragment Analysis",
+        "### Observed Diagnostic m/z Matches",
         "",
-        f"Presence is defined as a peak with positive intensity within ±{tolerance:g} Da of the "
+        f"Presence is a finite positive m/z with finite positive intensity within ±{tolerance:g} Da of the "
         "theoretical m/z.",
-        "A positive match is not noise-supported fragment evidence and is not a "
-        "compound identification; background and interference can also match.",
+        "A positive match is an observed feature only. It is not noise-supported "
+        "fragment evidence and is not a compound identification; background and interference can also match.",
+        "Match frequency is a fraction of eligible spectra with a catalogue m/z "
+        "coincidence, not an identification probability.",
     ]
     if not_applicable_message is not None:
         lines.extend(["", not_applicable_message])
@@ -185,19 +331,41 @@ def _diagnostic_fragment_report(
     lines.extend(
         [
             "",
-            "| Bit | Diagnostic Ion            | Theoretical m/z | Spectra  | Prevalence |",
-            "|-----|---------------------------|-----------------|----------|------------|",
+            "| Bit | Catalogue label (not assignment) | Reference m/z | Spectra matched | Match frequency |",
+            "|---:|---|---:|---:|---:|",
         ]
     )
 
     for name, mass, bit in _DIAGNOSTIC_IONS:
         count = sum(1 for m in masks if m & (1 << bit))
         pct = count / n_evaluated * 100 if n_evaluated > 0 else 0.0
-        lines.append(
-            f"| {bit:>3}  | {name:<25} | {mass:>15.4f} | {count:>8} | {pct:>9.1f}% |"
-        )
+        lines.append(f"| {bit} | {name} | {mass:.4f} | {count} | {pct:.1f}% |")
 
     return "\n".join(lines)
+
+
+def _interpretation_limits_report() -> str:
+    """Separate observed features from unsupported chemical or noise claims."""
+    return "\n".join(
+        [
+            "### Metric Provenance and Inference Limits",
+            "",
+            "The statements below apply to the metrics for the processed subset and "
+            "source/reader named above.",
+            "",
+            "- The intensity table describes recorded values; its provenance rule "
+            "and parameters are stated with the table. It does not estimate background "
+            "noise or calibrated SNR.",
+            "- Diagnostic entries are positive finite m/z coincidences in the stated "
+            "MS-level context. They are not noise-supported detections or an "
+            "identification.",
+            "- Isolation purity is not estimated. An isolation-window width alone "
+            "does not report the abundance of co-isolated ions; MS level alone does "
+            "not establish a particular activation pathway.",
+            "- No identification confidence, probability, or false-discovery rate "
+            "is calculated by this QC report.",
+        ]
+    )
 
 
 # ======================================================================
@@ -224,10 +392,11 @@ def register_tools(mcp: Any) -> None:
             InstrumentClass | None,
             Field(
                 description=(
-                    "Instrument class whose documented defaults set the "
-                    "diagnostic-ion matching window and the SNR reporting "
-                    f"bands (default '{DEFAULT_INSTRUMENT_CLASS}': ±0.02 Da, "
-                    "5/20 SNR).  One of: " + ", ".join(INSTRUMENT_CLASS_NAMES) + "."
+                    "Instrument class whose documented default sets the "
+                    f"diagnostic-ion m/z window (default '{DEFAULT_INSTRUMENT_CLASS}': "
+                    "±0.02 Da). It does not set a noise floor. One of: "
+                    + ", ".join(INSTRUMENT_CLASS_NAMES)
+                    + "."
                 ),
             ),
         ] = None,
@@ -237,18 +406,16 @@ def register_tools(mcp: Any) -> None:
         Reads .mzML, .mzML.gz, .mgf and .imzML (imaging) files; the reader is
         chosen from the file extension. Scans at most the configured per-request
         spectrum limit and reports when full-acquisition coverage is unconfirmed.
-        Metrics include total-ion-current counts, per-spectrum peak density, an
-        *estimated* signal-to-noise ratio (base peak / median positive
-        intensity, a transparent proxy rather than a calibrated instrument
-        SNR), and the prevalence of ten diagnostic immonium and oxonium
-        fragment ions.
+        Metrics include total-ion-current counts, peak density, a per-spectrum
+        summary of the observed intensity distribution (median and unscaled MAD
+        over finite positive values), and diagnostic m/z coincidences.
 
-        The two experimental thresholds — the diagnostic-ion matching window
-        and the SNR bands used for the low/high prevalence rows — come from the
-        named `instrument_class` (default 'generic': +/-0.02 Da and 5/20 SNR,
-        MSMCP's v1.0 values), and the values actually applied are stated in the
-        report, so a QC verdict is never separated from the assumption behind
-        it.
+        The intensity statistics are descriptive only. The available arrays do
+        not identify background-only observations, so these statistics are not
+        interpreted as a noise floor or SNR and no k·MAD cutoff is applied.
+        The `instrument_class` sets only the diagnostic-ion matching window;
+        this is stated in the report. Positive-intensity mass matches are not
+        noise-supported fragment evidence or chemical identification.
 
         Use it to judge whether an acquisition is worth searching. Unlike
         `load_mzml_summary`, it may scan up to the configured spectrum limit;
@@ -263,7 +430,9 @@ def register_tools(mcp: Any) -> None:
         spectrum_limit = DEFAULT_POLICY.max_spectra
         n_total = 0
         total_tic = 0.0
-        snr_values: list[float] = []
+        intensity_summaries: list[_PeakIntensitySummary] = []
+        isolation_windows: list[tuple[int | None, float]] = []
+        n_unusable_isolation_windows = 0
         n_peaks_list: list[int] = []
         n_ms1 = 0
         n_ms2_plus = 0
@@ -277,7 +446,13 @@ def register_tools(mcp: Any) -> None:
                 n_total += 1
                 tic = spectrum.tic
                 total_tic += tic
-                snr_values.append(_estimate_snr(spectrum.intensity))
+                intensity_summaries.append(_summarise_peak_intensity(spectrum))
+                width = spectrum.isolation_window
+                if width is not None:
+                    if np.isfinite(width) and width > 0.0:
+                        isolation_windows.append((spectrum.index, float(width)))
+                    else:
+                        n_unusable_isolation_windows += 1
                 n_peaks_list.append(spectrum.n_peaks)
                 level = spectrum.ms_level
                 if level == 1:
@@ -332,8 +507,7 @@ def register_tools(mcp: Any) -> None:
             f"**Total ion current (analysed spectra):** {total_tic:.6e}",
             f"**Mean TIC / analysed spectrum:** {mean_tic:.6e}",
             f"**Instrument class:** {profile.instrument_class} "
-            f"(diagnostic-ion window ±{diagnostic_tolerance:g} Da, "
-            f"SNR bands {profile.snr_low:g}/{profile.snr_high:g})",
+            f"(diagnostic-ion window ±{diagnostic_tolerance:g} Da)",
             "",
             "---",
             "",
@@ -420,11 +594,19 @@ def register_tools(mcp: Any) -> None:
         report = "\n".join(
             [
                 *header,
-                _snr_report(snr_values, profile.snr_low, profile.snr_high),
+                _intensity_distribution_report(intensity_summaries),
                 "",
                 _peak_density_report(n_peaks_list),
                 "",
                 diag_report,
+                "",
+                _isolation_window_report(
+                    isolation_windows,
+                    n_total=n_total,
+                    n_unusable=n_unusable_isolation_windows,
+                ),
+                "",
+                _interpretation_limits_report(),
             ]
         )
 
