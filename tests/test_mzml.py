@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import importlib
+import struct
 import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Callable
@@ -562,6 +563,32 @@ class TestLoadMzMLSummary:
 # ---------------------------------------------------------------------------
 # Zero-length arrays: real acquisitions contain legally empty scans
 # ---------------------------------------------------------------------------
+def _numpress_mzml(*, declared_length: int) -> str:
+    """Render one spectrum whose Numpress arrays carry only their headers."""
+    header = base64.b64encode(struct.pack(">d", 1.0)).decode()
+
+    def array(accession: str, compression: str) -> str:
+        return (
+            "<binaryDataArray>"
+            f'<cvParam cvRef="MS" accession="{accession}" name="array"/>'
+            '<cvParam cvRef="MS" accession="MS:1000523" name="64-bit float"/>'
+            f'<cvParam cvRef="MS" accession="{compression}" name="compression"/>'
+            f"<binary>{header}</binary>"
+            "</binaryDataArray>"
+        )
+
+    return (
+        '<?xml version="1.0"?><mzML xmlns="http://psi.hupo.org/ms/mzml"><run>'
+        f'<spectrumList count="1"><spectrum index="0" id="scan=1" '
+        f'defaultArrayLength="{declared_length}">'
+        '<cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="2"/>'
+        '<binaryDataArrayList count="2">'
+        + array("MS:1000514", "MS:1002312")  # m/z, Numpress linear
+        + array("MS:1000515", "MS:1002314")  # intensity, Numpress SLOF
+        + "</binaryDataArrayList></spectrum></spectrumList></run></mzML>"
+    )
+
+
 class TestEmptyBinaryArrays:
     """An empty array is data (no peaks), not a missing payload.
 
@@ -613,6 +640,34 @@ class TestEmptyBinaryArrays:
         """
         with pytest.raises(MalformedFileError, match="declares"):
             list(iter_spectra(mzml_declares_peaks_with_empty_payload))
+
+    def test_numpress_header_only_payload_declaring_peaks_is_malformed(
+        self, tmp_path: Path
+    ) -> None:
+        """A Numpress stream truncated to its header decodes to no values.
+
+        The payload is present and structurally valid, so the missing-payload
+        check does not fire, but the spectrum declares peaks and supplies none.
+        That is the corruption case, not stale length bookkeeping, and must not
+        reach downstream analysis as an empty spectrum.
+        """
+        path = tmp_path / "header_only.mzML"
+        path.write_text(_numpress_mzml(declared_length=5), encoding="utf-8")
+
+        with pytest.raises(MalformedFileError, match="decodes to no values"):
+            list(iter_spectra(path))
+
+    def test_numpress_header_only_payload_for_an_empty_scan_parses(
+        self, tmp_path: Path
+    ) -> None:
+        """A declaration of zero peaks is consistent with a header-only array."""
+        path = tmp_path / "empty.mzML"
+        path.write_text(_numpress_mzml(declared_length=0), encoding="utf-8")
+
+        spectra = list(iter_spectra(path))
+        assert len(spectra) == 1
+        assert spectra[0].mz.size == 0
+        assert spectra[0].intensity.size == 0
 
 
 # ---------------------------------------------------------------------------

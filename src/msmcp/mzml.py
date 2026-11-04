@@ -501,9 +501,10 @@ def _parse_binary_data_array(
     entirely, which the schema permits (``minOccurs="0"``).
 
     Emptiness and corruption are told apart by the spectrum's declared
-    ``defaultArrayLength``: an *empty* payload in a spectrum that declares peaks
-    is still an error, on the same principle as an MSP ``Num Peaks`` header that
-    disagrees with the peak lines beneath it.
+    ``defaultArrayLength``: an *empty* payload, or a payload that decodes to no
+    values, in a spectrum that declares peaks is still an error, on the same
+    principle as an MSP ``Num Peaks`` header that disagrees with the peak lines
+    beneath it.  This includes a Numpress stream truncated to its header.
 
     The decoded length *is* compared against the declaration, by
     :func:`iter_spectra` rather than here, and it is **reported rather than
@@ -549,12 +550,18 @@ def _parse_binary_data_array(
             )
         return _empty_array(), kind
 
-    return _decode_binary(
+    decoded = _decode_binary(
         payload,
         compression=compression,
         precision=precision,
         max_bytes=max_bytes,
-    ), kind
+    )
+    if declared_length and decoded.size == 0:
+        raise MalformedFileError(
+            f"A spectrum declares {declared_length} peaks but its {kind} "
+            "array decodes to no values."
+        )
+    return decoded, kind
 
 
 def _extract_scan_start_time(elem: ET.Element) -> _ScanStartTime | None:
