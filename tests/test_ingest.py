@@ -124,7 +124,7 @@ class TestMassFlowImzML:
         second = list(massflow_io.iter_spectra(imzml_fixture))
         assert [s.tic for s in first] == pytest.approx([s.tic for s in second])
 
-    def test_massflow_version_is_reported(self) -> None:
+    def test_massflow_version_is_reported(self, imzml_fixture: Path) -> None:
         assert massflow_io.massflow_version() is not None
 
     # -- the stdio boundary ------------------------------------------------

@@ -1,0 +1,325 @@
+{
+  "dataset_accession": "MSV000089046",
+  "manifest_sha256": "486f65e5d0ec1d449c47dc3e5aaee2eaed4aa9119f1c7df07c491c38218293b4",
+  "source_commit": "64cb1db69a2b6ba1369ee4eb7c6bd296979a3c56",
+  "source_files_sha256": {
+    "pyproject.toml": "11ee40eac34630ba1df49c085634025469d6615436718d1ce13038c068a312f2",
+    "src/msmcp/__init__.py": "e47a2b78d832d600685f241b2bf077359c60afc1bbbb31e93988c2d078724bb1",
+    "src/msmcp/chromatograms.py": "d242ecdc093719f7ccd3b3cf139917127084e18f8855e8e70230df8f45325950",
+    "src/msmcp/errors.py": "6a2bccdd1356c95729425b5c87f873ec32959b74db1fd34f028bf7e6a4250c56",
+    "src/msmcp/execution/__init__.py": "2a9a90f213672cfeb8aa565fe6ab021371c997cbd3db662e04c03b022c4c609f",
+    "src/msmcp/execution/executor.py": "8ae86459a49388df73ad5cb57a142df006ee06b6212e7177c07c551dc2efe8d7",
+    "src/msmcp/ingest.py": "62e652429d9f5dcc3a1a72f81eee57abbe4966e5448dbf344d0b71ca99283248",
+    "src/msmcp/instruments.py": "75bf4b49ac1e5afeb78fdd3a37d4f75e91b13f141111d5de6ec0f1057b419259",
+    "src/msmcp/library.py": "3009c078b03b21c6bdd95b914b9e158b9c242db5f72316bf3f03acc5638e5c36",
+    "src/msmcp/massflow_io.py": "45a83223be04a81cdf29050a551dda7512db048abde49d2b74a00f5c13ecd9f3",
+    "src/msmcp/mgf.py": "c1b05788611f228df90268e1898a3fa9282afbc907a2bc82f236b277f85694e2",
+    "src/msmcp/models/__init__.py": "64710a1cab27e020d0564d9b88eeb4b98ca508a237a88c22363cd06fd2b0128b",
+    "src/msmcp/models/backends.py": "2fff9192a29b95a413accc1e2b2a01c9afaae1311c3978c96e2af1afe88ef3a4",
+    "src/msmcp/models/embeddings.py": "136823329361faacaafd99da95615522a0af801c26151c2a7561fee1abfeb0c6",
+    "src/msmcp/models/null_model.py": "87f23ce48146d5965402b42e3d87175dde1dd4dfcd1c0a5f70ff5c9646f592b9",
+    "src/msmcp/models/scoring.py": "0b1a50333248826c919819c97cb225f77008a65057048606f22582d6f9e8d04e",
+    "src/msmcp/mzml.py": "902b9be79889a8396f603337ed544c73134d118db196df2b9b5a7b7d734ac3a1",
+    "src/msmcp/provenance.py": "ca2997acede93a1a97ba48bf2f32f4b21bfcc038fcc8149138063cd6c36a52ea",
+    "src/msmcp/security.py": "67e6d7b8918a1ea8b42ccabe45491f6d7f2c1ac91311373d3f287339ec11840b",
+    "src/msmcp/server.py": "f24045265ee1646707e5c4029205395e44245da22da799e7a221e2e806a05b7a",
+    "src/msmcp/state/__init__.py": "b1368d6638b11799ee5775574f4a1587b4cd0acacf2f2d677fbf14430159ae8a",
+    "src/msmcp/state/pointers.py": "f9f8f0dbc272a69e0ccda0455e506f760c2aac34124893552af316b536697cfa",
+    "src/msmcp/state/store.py": "38baa13d37e15a8071c49e0b965ff043b343dbd7e99aac53b793b671b81f697c",
+    "src/msmcp/tools/__init__.py": "e9d2b4fc4c4db5fea089e7cef4f103db951d94084c79e01f65fb707c394c4a44",
+    "src/msmcp/tools/chem.py": "d8adf41d2a191752f320301e1b1a66ac85a965e7b7753d8031d5e3ff676afa9e",
+    "src/msmcp/tools/chromatograms.py": "92b9c77c84496962b2adaaedb3712ba53f7fc97dc973772ebc6e8311de177a15",
+    "src/msmcp/tools/io.py": "a5d3d944fe5679459dc828ae93994c100ddda004407dace1e6274dfca7199212",
+    "src/msmcp/tools/qc.py": "1976a8009c31fcbb579c71820afce522e956441a259d79e25ecacb6d7d7cfc3f",
+    "src/msmcp/tools/search.py": "c0d013e6a919c827f15806f9fbf78034765e1672931cfa006624ad07c439474d",
+    "src/msmcp/tools/similarity.py": "89e82515c8e701963c5817f7e83ba1481e75740abb91ca8b8337ae141ac2d8e3",
+    "src/msmcp/tools/system.py": "5a4fc0d862e10667f4304ef508dccffc24f836c403992f22f07fd414fb507f1a",
+    "uv.lock": "380c475b1412dd314b883b965915815e54be100fac56cab6ceae57b84bc89438",
+    "validation/chromatograms/verify_public.py": "e913f4c460b19b53144dec5ba9083a001f0f56b0b234a6321bfb6777aea47cbf"
+  },
+  "source_tree_status": "",
+  "package_path": "/Users/ericjanusson/Programming/msmcp/.worktrees/chromatogram-correctness/src/msmcp/__init__.py",
+  "environment_prefix": "/Users/ericjanusson/Programming/msmcp/.worktrees/chromatogram-correctness/.venv",
+  "python": "3.13.12",
+  "packages": {
+    "msmcp": "1.0.0",
+    "mcp": "2.1.1",
+    "numpy": "2.4.6",
+    "pydantic": "2.13.4",
+    "massflow": "0.1.2"
+  },
+  "targets_mz": [
+    195.0877,
+    223.0634,
+    297.0822,
+    299.0614
+  ],
+  "tolerance_ppm": 5,
+  "comparison": {
+    "relative_tolerance": 1e-12,
+    "absolute_tolerance": 1e-08
+  },
+  "files": {
+    "Orbi_P_E2_CSSM10uMA.mzML": {
+      "scanned_spectra": 8357,
+      "ms1_points": 2090,
+      "numerical": {
+        "RT_min": {
+          "compared": 2090,
+          "max_abs_error": 0.0
+        },
+        "TIC": {
+          "compared": 2090,
+          "max_abs_error": 0.0
+        },
+        "BPC": {
+          "compared": 2090,
+          "max_abs_error": 0.0
+        },
+        "XIC_195.0877": {
+          "compared": 2090,
+          "max_abs_error": 0.0
+        },
+        "XIC_223.0634": {
+          "compared": 2090,
+          "max_abs_error": 0.0
+        },
+        "XIC_297.0822": {
+          "compared": 2090,
+          "max_abs_error": 0.0
+        },
+        "XIC_299.0614": {
+          "compared": 2090,
+          "max_abs_error": 0.0
+        }
+      },
+      "representative_xic_maxima": [
+        {
+          "target_mz": 195.0877,
+          "scan_ordinal": 1540,
+          "native_id": "controllerType=0 controllerNumber=1 scan=1541",
+          "retention_time_min": 2.3570816,
+          "reference_xic": 521639936.0,
+          "mcp_xic": 521639936.0,
+          "reference_tic": 670816871.7578125,
+          "mcp_tic": 670816871.7578125,
+          "zero_xic_points": 8
+        },
+        {
+          "target_mz": 223.0634,
+          "scan_ordinal": 5436,
+          "native_id": "controllerType=0 controllerNumber=1 scan=5437",
+          "retention_time_min": 8.325776,
+          "reference_xic": 181618.25,
+          "mcp_xic": 181618.25,
+          "reference_tic": 113253752.71191406,
+          "mcp_tic": 113253752.71191406,
+          "zero_xic_points": 2033
+        },
+        {
+          "target_mz": 297.0822,
+          "scan_ordinal": 5436,
+          "native_id": "controllerType=0 controllerNumber=1 scan=5437",
+          "retention_time_min": 8.325776,
+          "reference_xic": 210226.265625,
+          "mcp_xic": 210226.265625,
+          "reference_tic": 113253752.71191406,
+          "mcp_tic": 113253752.71191406,
+          "zero_xic_points": 2069
+        },
+        {
+          "target_mz": 299.0614,
+          "scan_ordinal": 3448,
+          "native_id": "controllerType=0 controllerNumber=1 scan=3449",
+          "retention_time_min": 5.2746183,
+          "reference_xic": 15533.6611328125,
+          "mcp_xic": 15533.6611328125,
+          "reference_tic": 77245532.1640625,
+          "mcp_tic": 77245532.1640625,
+          "zero_xic_points": 2088
+        }
+      ],
+      "acquisition": {
+        "scanned_spectra": 8357,
+        "spectrum_counts_by_ms_level": {
+          "1": 2090,
+          "2": 6267
+        },
+        "selected_ms_level": 1,
+        "selected_ms_level_spectra": 2090,
+        "retention_time_coverage_min": {
+          "start_min": 0.007626783,
+          "end_min": 12.801647
+        },
+        "retention_time_units": "minutes",
+        "representation_counts": {
+          "centroid": 8357,
+          "profile": 0,
+          "unknown": 0
+        },
+        "selected_representation_counts": {
+          "centroid": 2090,
+          "profile": 0,
+          "unknown": 0
+        },
+        "polarity_counts": {
+          "positive": 8357,
+          "negative": 0,
+          "unknown": 0
+        },
+        "selected_polarity_counts": {
+          "positive": 2090,
+          "negative": 0,
+          "unknown": 0
+        },
+        "empty_peak_array_spectra": 0,
+        "selected_empty_peak_array_spectra": 0,
+        "missing_retention_time_spectra": 0
+      },
+      "warnings": [
+        "Intensity units are input-defined; absolute intensities may not be comparable across acquisitions or instrument settings.",
+        "No smoothing, normalization, baseline correction, alignment, blank subtraction, or identification was applied."
+      ],
+      "source": {
+        "file_path": "/private/tmp/masspilot-MSV000089046/Orbi_P_E2_CSSM10uMA.mzML",
+        "format": "mzML",
+        "reader_backend": "msmcp.mzml",
+        "size_bytes": 70767082,
+        "digest": "sha256:91a112752847048be77dc07ad2550af7ada9e02bbfcf71d365593f3d7fe6989b"
+      },
+      "repeated_call_equal_except_provenance_timestamp": true,
+      "stdio_extraction_seconds": 1.037858708994463
+    },
+    "Orbi_P_E2_EXBLANKA.mzML": {
+      "scanned_spectra": 7916,
+      "ms1_points": 2100,
+      "numerical": {
+        "RT_min": {
+          "compared": 2100,
+          "max_abs_error": 0.0
+        },
+        "TIC": {
+          "compared": 2100,
+          "max_abs_error": 0.0
+        },
+        "BPC": {
+          "compared": 2100,
+          "max_abs_error": 0.0
+        },
+        "XIC_195.0877": {
+          "compared": 2100,
+          "max_abs_error": 0.0
+        },
+        "XIC_223.0634": {
+          "compared": 2100,
+          "max_abs_error": 0.0
+        },
+        "XIC_297.0822": {
+          "compared": 2100,
+          "max_abs_error": 0.0
+        },
+        "XIC_299.0614": {
+          "compared": 2100,
+          "max_abs_error": 0.0
+        }
+      },
+      "representative_xic_maxima": [
+        {
+          "target_mz": 195.0877,
+          "scan_ordinal": 1424,
+          "native_id": "controllerType=0 controllerNumber=1 scan=1425",
+          "retention_time_min": 2.3506991,
+          "reference_xic": 1972385.75,
+          "mcp_xic": 1972385.75,
+          "reference_tic": 42136319.356933594,
+          "mcp_tic": 42136319.356933594,
+          "zero_xic_points": 28
+        },
+        {
+          "target_mz": 223.0634,
+          "scan_ordinal": 1288,
+          "native_id": "controllerType=0 controllerNumber=1 scan=1289",
+          "retention_time_min": 2.1371908,
+          "reference_xic": 472221.15625,
+          "mcp_xic": 472221.15625,
+          "reference_tic": 37311956.64941406,
+          "mcp_tic": 37311956.64941406,
+          "zero_xic_points": 2055
+        },
+        {
+          "target_mz": 297.0822,
+          "scan_ordinal": 5767,
+          "native_id": "controllerType=0 controllerNumber=1 scan=5768",
+          "retention_time_min": 9.3240378,
+          "reference_xic": 28176.638671875,
+          "mcp_xic": 28176.638671875,
+          "reference_tic": 52055544.611083984,
+          "mcp_tic": 52055544.611083984,
+          "zero_xic_points": 2088
+        },
+        {
+          "target_mz": 299.0614,
+          "scan_ordinal": 0,
+          "native_id": "controllerType=0 controllerNumber=1 scan=1",
+          "retention_time_min": 0.0084314179,
+          "reference_xic": 0.0,
+          "mcp_xic": 0.0,
+          "reference_tic": 35592150.38024902,
+          "mcp_tic": 35592150.38024902,
+          "zero_xic_points": 2100
+        }
+      ],
+      "acquisition": {
+        "scanned_spectra": 7916,
+        "spectrum_counts_by_ms_level": {
+          "1": 2100,
+          "2": 5816
+        },
+        "selected_ms_level": 1,
+        "selected_ms_level_spectra": 2100,
+        "retention_time_coverage_min": {
+          "start_min": 0.0084314179,
+          "end_min": 12.80298
+        },
+        "retention_time_units": "minutes",
+        "representation_counts": {
+          "centroid": 7916,
+          "profile": 0,
+          "unknown": 0
+        },
+        "selected_representation_counts": {
+          "centroid": 2100,
+          "profile": 0,
+          "unknown": 0
+        },
+        "polarity_counts": {
+          "positive": 7916,
+          "negative": 0,
+          "unknown": 0
+        },
+        "selected_polarity_counts": {
+          "positive": 2100,
+          "negative": 0,
+          "unknown": 0
+        },
+        "empty_peak_array_spectra": 0,
+        "selected_empty_peak_array_spectra": 0,
+        "missing_retention_time_spectra": 0
+      },
+      "warnings": [
+        "Intensity units are input-defined; absolute intensities may not be comparable across acquisitions or instrument settings.",
+        "No smoothing, normalization, baseline correction, alignment, blank subtraction, or identification was applied."
+      ],
+      "source": {
+        "file_path": "/private/tmp/masspilot-MSV000089046/Orbi_P_E2_EXBLANKA.mzML",
+        "format": "mzML",
+        "reader_backend": "msmcp.mzml",
+        "size_bytes": 65242379,
+        "digest": "sha256:93eddd49a943beed5c24dd3b96e1fa10fd2a1c85e17dec12532abffc5e8aa71f"
+      },
+      "repeated_call_equal_except_provenance_timestamp": true,
+      "stdio_extraction_seconds": 0.902320541033987
+    }
+  },
+  "output_schema_sha256": "ab4d76e75faa52921ae4ab5a29860d941e4a4df38a52b1c2ae5580fcaa02302c"
+}

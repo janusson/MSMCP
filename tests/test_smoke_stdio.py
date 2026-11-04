@@ -40,6 +40,7 @@ EXPECTED_TOOLS = {
     "load_mzml_summary",
     "list_spectra",
     "load_spectrum",
+    "extract_chromatograms",
     "summarise_reference",
     "release_reference",
     "predict_adduct_offset",

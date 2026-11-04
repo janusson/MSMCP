@@ -31,11 +31,14 @@ class PingResponse(BaseModel):
     status: str = Field(description="'ok' when the server is operational.")
     message: str = Field(description="Human-readable status message.")
     massflow_available: bool = Field(
-        description="True when the optional `massflow` backend imported."
+        description=(
+            "True when `massflow` distribution metadata is installed; does not "
+            "verify the optional imzML backend or analytical MassFlow engine."
+        )
     )
     massflow_version: str | None = Field(
         default=None,
-        description="Installed MassFlow version, or null when it is absent.",
+        description="Installed `massflow` distribution version, or null when absent.",
     )
 
 
@@ -50,11 +53,13 @@ def register_tools(mcp: Any) -> None:
         annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
     )
     def ping() -> PingResponse:
-        """Check that the server is running and its dependencies import.
+        """Check that the core server is running.
 
-        Takes no arguments.  Reports whether `massflow` is available and which
-        version is installed.  Call it first when another MSMCP tool fails in an
-        unexpected way, to tell a broken environment apart from bad arguments.
+        Takes no arguments. The optional `massflow` distribution is reported
+        from installed metadata without importing it; absence is normal for
+        core mzML/MGF installs. These fields do not verify imzML compatibility
+        or the separate analytical MassFlow engine. Backend import failures
+        are reported when reading imzML, with imaging-extra install guidance.
         """
         from msmcp.massflow_io import massflow_version
 

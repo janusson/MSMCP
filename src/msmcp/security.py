@@ -272,30 +272,41 @@ class _BoundedStream(io.BufferedIOBase):
     def seekable(self) -> bool:
         return False
 
+    def _raise_exceeded(self) -> None:
+        raise FileSizeExceededError(
+            f"Decompressed input exceeds the configured maximum of "
+            f"{self._max_bytes} bytes; refusing to read further.  A "
+            f"compressed file is bounded by its inflated size, not only by "
+            f"the bytes on disk."
+        )
+
+    def _read_size(self, size: int | None) -> int:
+        if self._read_bytes > self._max_bytes:
+            self._raise_exceeded()
+        maximum = self._max_bytes - self._read_bytes + 1
+        if size is None or size < 0:
+            return maximum
+        return min(size, maximum)
+
     def _account(self, count: int) -> None:
         self._read_bytes += count
         if self._read_bytes > self._max_bytes:
-            raise FileSizeExceededError(
-                f"Decompressed input exceeds the configured maximum of "
-                f"{self._max_bytes} bytes; refusing to read further.  A "
-                f"compressed file is bounded by its inflated size, not only by "
-                f"the bytes on disk."
-            )
+            self._raise_exceeded()
 
     def read(self, size: int | None = -1) -> bytes:
-        data = self._stream.read(-1 if size is None else size)
+        data = self._stream.read(self._read_size(size))
         self._account(len(data))
         return data
 
     def read1(self, size: int | None = -1) -> bytes:
-        data = self._stream.read1(-1 if size is None else size)
+        data = self._stream.read1(self._read_size(size))
         self._account(len(data))
         return data
 
     def readinto(self, buffer: Any) -> int:
-        data = self._stream.read(len(buffer))
-        buffer[: len(data)] = data
+        data = self._stream.read(self._read_size(len(buffer)))
         self._account(len(data))
+        buffer[: len(data)] = data
         return len(data)
 
     def close(self) -> None:

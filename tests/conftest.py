@@ -26,7 +26,7 @@ import pytest
 # that exercise the real-inference pipeline inject stub models explicitly.
 os.environ["MSMCP_EMBEDDING_BACKEND"] = "mock"
 
-from msmcp.tools import chem, io, qc, search, similarity
+from msmcp.tools import chem, chromatograms, io, qc, search, similarity
 
 
 def _enforce_environment_isolation() -> None:
@@ -143,6 +143,14 @@ def qc_tools() -> dict[str, Callable[..., str]]:
     return mcp.tools
 
 
+@pytest.fixture(scope="session")
+def chromatogram_tools() -> dict[str, Callable[..., Any]]:
+    """Structured chromatogram tool keyed by ``extract_chromatograms``."""
+    mcp = FakeMCP[Any]()
+    chromatograms.register_tools(mcp)
+    return mcp.tools
+
+
 # ---------------------------------------------------------------------------
 # mzML fixtures — a valid file and a truncated/malformed file
 # ---------------------------------------------------------------------------
@@ -228,15 +236,29 @@ def _mzml_xml(spectra: list[dict[str, Any]]) -> str:
                 'name="negative scan" value=""/>'
             )
 
+        representation_xml = ""
+        representation = spec.get("representation")
+        if representation == "centroid":
+            representation_xml = (
+                '<cvParam cvRef="MS" accession="MS:1000127" '
+                'name="centroid spectrum" value=""/>'
+            )
+        elif representation == "profile":
+            representation_xml = (
+                '<cvParam cvRef="MS" accession="MS:1000128" '
+                'name="profile spectrum" value=""/>'
+            )
+
         spectrum_xml.append(
             f'<spectrum index="{index}" id="scan={index}" '
             f'defaultArrayLength="{spec.get("declared_length", len(spec["mz"]))}">'
             f'<cvParam cvRef="MS" accession="MS:1000511" name="ms level" '
             f'value="{ms_level}"/>'
             f"{polarity_xml}"
+            f"{representation_xml}"
             f'<scanList count="1"><scan>'
             f'<cvParam cvRef="MS" accession="MS:1000016" name="scan start time" '
-            f'value="{rt}" unitAccession="MS:1000038" unitName="second"/>'
+            f'value="{rt}" unitAccession="UO:0000010" unitName="second"/>'
             f"</scan></scanList>"
             f"{precursor_xml}"
             f'<binaryDataArrayList count="2">'
@@ -271,6 +293,54 @@ def valid_mzml(tmp_path: Path) -> Path:
         {"mz": [102.0, 202.0, 302.0, 402.0], "intensity": [1.0, 2.0, 3.0, 4.0]},
     ]
     path.write_text(_mzml_xml(spectra), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def ms2_query_mzml(tmp_path: Path) -> Path:
+    """A well-formed MS2 query file with stated precursors and ion modes."""
+    path = tmp_path / "ms2_query.mzML"
+    spectra: list[dict[str, Any]] = [
+        {
+            "mz": [100.0, 200.0, 300.0],
+            "intensity": [10.0, 20.0, 30.0],
+            "ms_level": 2,
+            "precursor_mz": 300.0,
+            "polarity": "positive",
+        },
+        {
+            "mz": [101.0, 201.0],
+            "intensity": [5.0, 5.0],
+            "ms_level": 2,
+            "precursor_mz": 200.0,
+            "polarity": "positive",
+        },
+        {
+            "mz": [102.0, 202.0, 302.0, 402.0],
+            "intensity": [1.0, 2.0, 3.0, 4.0],
+            "ms_level": 2,
+            "precursor_mz": 400.0,
+            "polarity": "positive",
+        },
+    ]
+    path.write_text(_mzml_xml(spectra), encoding="utf-8")
+    return path
+
+
+@pytest.fixture()
+def mzml_with_representation_metadata(tmp_path: Path) -> Path:
+    """Centroid, profile and unknown representations in three spectra."""
+    path = tmp_path / "representations.mzML"
+    path.write_text(
+        _mzml_xml(
+            [
+                {"mz": [100.0], "intensity": [1.0], "representation": "centroid"},
+                {"mz": [100.0], "intensity": [2.0], "representation": "profile"},
+                {"mz": [100.0], "intensity": [3.0]},
+            ]
+        ),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -439,10 +509,14 @@ def gzipped_mgf(tmp_path: Path) -> Path:
 def imzml_fixture(tmp_path: Path) -> Path:
     """A tiny 2-pixel imzML acquisition written with pyimzml.
 
-    pyimzml ships with MassFlow (its imzML parser dependency), so the fixture
-    is produced by the same ecosystem that reads it back; the test is skipped
-    rather than faked when that dependency is absent.
+    The optional imaging extra supplies both the reader and pyimzml writer.
+    Skip real imaging integration rather than faking it in a core-only install.
     """
+    pytest.importorskip(
+        "massflow.data_manager",
+        reason="optional imaging backend is absent (uv sync --extra imaging)",
+        exc_type=ImportError,
+    )
     pyimzml_writer = pytest.importorskip(
         "pyimzml.ImzMLWriter", reason="pyimzml (a MassFlow dependency) is absent"
     )

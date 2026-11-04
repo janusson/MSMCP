@@ -10,7 +10,7 @@ delegated to an orchestrator.
 Honesty about the data
 ----------------------
 The **library** side is real whenever ``database_file`` names a format MSMCP can
-read: an MSP/NIST-style text library is resolved through the same
+read: an MSP/NIST-style text or MGF library is resolved through the same
 :class:`~msmcp.security.SecurityPolicy` as acquisitions (allowed root, size
 limit, read-only) and searched for real — see :mod:`msmcp.library`.  A path with
 no reader falls back to a deterministic in-memory library seeded from the path
@@ -58,8 +58,14 @@ from msmcp.instruments import (
 from msmcp.library import LibraryInfo, LibraryProvider
 from msmcp.models import get_embedder
 from msmcp.models.backends import LSM_MS2_CKPT_ENV
-from msmcp.models.null_model import TailFit, fit_upper_tail
-from msmcp.models.scoring import ClassicalScorer, SpectrumScorer, get_scorer
+from msmcp.models.scoring import (
+    ClassicalScorer,
+    SpectrumScorer,
+    get_scorer,
+)
+from msmcp.models.scoring import (
+    _validate_peak_list as _validate_score_peak_list,
+)
 from msmcp.mzml import Spectrum
 from msmcp.provenance import ModelInfo, Provenance, SourceRef, provenance_for
 from msmcp.state import store as reference_store
@@ -92,7 +98,9 @@ class SearchInput(BaseModel):
     scoring_method: ScoringMethod = "classical"
     chunk_size: int = Field(default=2000, ge=100, le=10000)
     instrument_class: InstrumentClass | None = None
-    spectrum_index: int | None = Field(default=None, ge=0)
+    spectrum_index: int | None = Field(
+        default=None, ge=0, le=security.DEFAULT_POLICY.max_spectra - 1
+    )
 
     @model_validator(mode="after")
     def _exactly_one_query_source(self) -> SearchInput:
@@ -119,6 +127,45 @@ class SearchInput(BaseModel):
         return self
 
 
+@dataclass(frozen=True, slots=True)
+class QueryContext:
+    """Acquisition context that a query spectrum declares, if any.
+
+    Library search is only context-aware when the query actually carries the
+    fields that make it comparable to a library record.  ``ms_level`` and
+    ``precursor_mz`` come from the source file/reference; ``polarity``,
+    ``charge`` and ``isolation_window`` are carried when the reader found them.
+    A direct peak-list reference has none of these, which is recorded as
+    ``source="unknown"`` rather than guessed.
+    """
+
+    ms_level: int | None = None
+    precursor_mz: float | None = None
+    polarity: str | None = None
+    charge: int | None = None
+    adduct: str | None = None
+    isolation_window: float | None = None
+    source: Literal["file", "reference", "unknown"] = "unknown"
+
+    @property
+    def usable_for_library_search(self) -> bool:
+        """True when the query is MS2 evidence with a stated precursor."""
+        return self.ms_level == 2 and self.precursor_mz is not None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-safe record for provenance."""
+        return {
+            "ms_level": self.ms_level,
+            "precursor_mz": self.precursor_mz,
+            "polarity": self.polarity,
+            "charge": self.charge,
+            "adduct": self.adduct,
+            "isolation_window": self.isolation_window,
+            "source": self.source,
+            "usable_for_library_search": self.usable_for_library_search,
+        }
+
+
 class StatusInput(BaseModel):
     """Validated input for check_search_status and cancel_search."""
 
@@ -137,20 +184,9 @@ class PollInput(BaseModel):
 
 
 # ======================================================================
-# Null model — how significance is calibrated
+# Legacy decoy helpers retained for offline investigation and regression tests.
+# Production search does not call them: wrong-compound calibration is unvalidated.
 # ======================================================================
-# A FIXED number of decoy scores is drawn per query, independent of the library
-# size, and the upper tail of that sample is fitted with a generalised Pareto
-# distribution (see :mod:`msmcp.models.null_model`).
-#
-# This is roadmap #12.  The previous design drew 40 decoys per library spectrum,
-# so the statistical cost grew linearly with the library (2.9 s at 2,200
-# spectra, ~130 s at 10⁵ on the audit's measurement) and the empirical floor
-# 1/(n_null + 1) capped the smallest expressible q at ≈0.025.  A fitted tail has
-# no such floor, and the cost is constant because the sample size is.  Each
-# decoy is one scorer call against peaks already in memory; raising this sharpens
-# the tail estimate at that same linear cost, but it no longer tracks the
-# library.
 NULL_SAMPLE_SIZE: Final[int] = 20_000
 
 _NULL_BATCH: Final[int] = 5_000
@@ -506,17 +542,27 @@ def _peaks_from_reference(reference: str) -> list[tuple[float, float]]:
     return [(float(mz), float(intensity)) for mz, intensity in peaks]
 
 
-def _reference_polarity(reference: str) -> str | None:
-    """Ion mode of a stored spectrum reference, or ``None`` when it has none.
+def _context_from_spectrum(
+    spectrum: Spectrum, source: Literal["file", "reference"]
+) -> QueryContext:
+    """Copy the acquisition context a parsed spectrum actually declares."""
+    return QueryContext(
+        ms_level=spectrum.ms_level,
+        precursor_mz=spectrum.precursor_mz,
+        polarity=spectrum.polarity,
+        charge=getattr(spectrum, "charge", None),
+        isolation_window=getattr(spectrum, "isolation_window", None),
+        source=source,
+    )
 
-    A peak-list reference carries no ion mode, and a spectrum whose file did
-    not state one reports ``None``; either way no polarity is invented.
-    """
+
+def _reference_context(reference: str) -> QueryContext:
+    """Context from a spectrum reference; unknown for a raw peak list."""
     try:
         spectrum = reference_store.resolve_spectrum(reference)
     except ReferenceKindError:
-        return None
-    return getattr(spectrum, "polarity", None)
+        return QueryContext(source="unknown")
+    return _context_from_spectrum(spectrum, "reference")
 
 
 def _spectrum_label(spectrum: Spectrum, spectrum_index: int) -> str:
@@ -541,14 +587,13 @@ def _spectrum_label(spectrum: Spectrum, spectrum_index: int) -> str:
 
 def _peaks_from_file(
     file_path: str, spectrum_index: int
-) -> tuple[list[tuple[float, float]], str, str | None]:
+) -> tuple[list[tuple[float, float]], str, QueryContext]:
     """Read one spectrum of *file_path* as a real experimental peak list.
 
-    Returns the peaks, a label naming the spectrum they came from, and the ion
-    mode when the file states one (``None`` otherwise).  The file is opened
-    through the ingestion layer, so the query of a search is always genuine data
-    and a missing or malformed file fails loudly instead of quietly producing a
-    synthetic stand-in.
+    Returns the peaks, a label naming their source and the stated ion mode. The file
+    is opened through the ingestion layer, so the query of a search is always
+    genuine data and a missing or malformed file fails loudly instead of quietly
+    producing a synthetic stand-in.
 
     The spectrum is selected by index **and reported**, because the first
     spectrum of a real LC-MS/MS file is normally an MS1 survey scan: a search
@@ -557,7 +602,14 @@ def _peaks_from_file(
     in real acquisitions — is refused rather than dispatched, since a search
     with no query peaks cannot return anything meaningful.
     """
-    source = ingest.resolve_source(file_path)
+    policy = ingest.DEFAULT_POLICY
+    if spectrum_index >= policy.max_spectra:
+        raise security.SpectrumCountExceededError(
+            f"spectrum_index={spectrum_index} requires reading {spectrum_index + 1} "
+            f"spectra, exceeding the configured max_spectra={policy.max_spectra} "
+            "request limit."
+        )
+    source = ingest.resolve_source(file_path, policy)
     for current, candidate in enumerate(source.iter_spectra()):
         if current != spectrum_index:
             continue
@@ -572,7 +624,11 @@ def _peaks_from_file(
                 f"real acquisitions; call `load_mzml_summary` to find a "
                 f"populated one and pass its index."
             )
-        return peaks, _spectrum_label(candidate, spectrum_index), candidate.polarity
+        return (
+            peaks,
+            _spectrum_label(candidate, spectrum_index),
+            _context_from_spectrum(candidate, "file"),
+        )
 
     raise SpectrumIndexError(
         f"'{file_path}' contains no spectrum at index {spectrum_index}.  The "
@@ -602,6 +658,7 @@ class SearchRequest:
     instrument_class: str | None = None
     query_spectrum_index: int | None = None
     query_polarity: str | None = None
+    query_context: QueryContext | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -619,11 +676,16 @@ class SearchSummary:
     query_peaks: int
     query_source: str
     mode: str
-    threshold: float
+    threshold: float | None
     n_hits: int
     top_compound: str | None
     top_score: float | None
     top_significance: float | None
+    query_context_status: str = "unavailable"
+    precursor_tolerance_applied: bool = False
+    n_context_matched: int = 0
+    n_context_unknown: int = 0
+    n_context_excluded: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -672,6 +734,138 @@ def _library_scan_dict(spectrum: library.LibrarySpectrum) -> dict[str, Any]:
         "precursor_mz": spectrum.precursor_mz,
         "peaks": list(spectrum.peaks),
         "polarity": spectrum.polarity,
+        "metadata": dict(spectrum.metadata),
+    }
+
+
+_ADDUCT_KEYS: Final[frozenset[str]] = frozenset(
+    {"ADDUCT", "PRECURSORTYPE", "PRECURSORIONTYPE", "IONTYPE"}
+)
+_CHARGE_KEYS: Final[frozenset[str]] = frozenset(
+    {"CHARGE", "PRECURSORCHARGE", "IONCHARGE", "Z"}
+)
+
+
+def _normalised_metadata_key(raw: str) -> str:
+    """Collapse a library metadata key to uppercase alphanumerics."""
+    return "".join(character for character in raw.upper() if character.isalnum())
+
+
+def _metadata_value(metadata: dict[str, str], keys: frozenset[str]) -> str | None:
+    """Return the first metadata value whose normalised key is in *keys*."""
+    for key, value in metadata.items():
+        if _normalised_metadata_key(key) in keys and value.strip():
+            return value.strip()
+    return None
+
+
+def _library_charge(metadata: dict[str, str]) -> int | None:
+    """Charge magnitude declared by a library record, if any."""
+    raw = _metadata_value(metadata, _CHARGE_KEYS)
+    if raw is None:
+        return None
+    try:
+        charge = abs(int(raw.rstrip("+-")))
+    except ValueError:
+        return None
+    return charge or None
+
+
+def _library_adduct(metadata: dict[str, str]) -> str | None:
+    """Adduct/ion type declared by a library record, if any."""
+    return _metadata_value(metadata, _ADDUCT_KEYS)
+
+
+def _normalise_adduct(value: str) -> str:
+    """Compare adducts without depending on spaces or bracket style."""
+    return "".join(character for character in value.upper() if character.isalnum())
+
+
+def _precursor_delta(
+    query_mz: float,
+    candidate_mz: float,
+    tolerance: Any,
+) -> tuple[bool, float]:
+    """Return ``(within_tolerance, delta)`` in the profile's declared unit."""
+    if tolerance.unit == "ppm":
+        delta = (candidate_mz - query_mz) / query_mz * 1_000_000.0
+    else:
+        delta = candidate_mz - query_mz
+    return abs(delta) <= tolerance.value, delta
+
+
+def _assess_eligibility(
+    context: QueryContext,
+    candidate: dict[str, Any],
+    profile: InstrumentProfile,
+) -> dict[str, Any]:
+    """Decide whether *candidate* is compatible with the query context.
+
+    The policy is deliberately conservative and visible: an MS1 query is not
+    MS/MS evidence and is refused before dispatch; a candidate whose stated
+    precursor is outside the profile window, or whose stated polarity, charge
+    or adduct conflicts with the query, is excluded before ranking.  A candidate
+    that simply does not state one of those fields stays in the ranking but is
+    labelled ``unknown``, never promoted to a context-matched identification.
+    """
+    if context.ms_level == 1 or context.ms_level not in (None, 2):
+        return {
+            "status": "excluded",
+            "reason": "query_is_not_ms2",
+            "precursor_applied": False,
+        }
+
+    unknown: list[str] = []
+    excluded: list[str] = []
+    precursor_applied = False
+    precursor_delta: float | None = None
+
+    if context.precursor_mz is None:
+        unknown.append("query precursor m/z not stated")
+    else:
+        candidate_mz = candidate.get("precursor_mz")
+        if candidate_mz is None:
+            unknown.append("reference precursor m/z not stated")
+        else:
+            precursor_applied = True
+            within, precursor_delta = _precursor_delta(
+                context.precursor_mz, float(candidate_mz), profile.precursor_tolerance
+            )
+            if not within:
+                excluded.append("precursor outside declared tolerance")
+
+    if context.polarity is not None:
+        candidate_polarity = candidate.get("polarity")
+        if candidate_polarity is None:
+            unknown.append("reference polarity not stated")
+        elif candidate_polarity != context.polarity:
+            excluded.append("polarity mismatch")
+
+    if context.charge is not None:
+        candidate_charge = _library_charge(candidate.get("metadata") or {})
+        if candidate_charge is None:
+            unknown.append("reference charge not stated")
+        elif candidate_charge != context.charge:
+            excluded.append("charge mismatch")
+
+    if context.adduct is not None:
+        candidate_adduct = _library_adduct(candidate.get("metadata") or {})
+        if candidate_adduct is None:
+            unknown.append("reference adduct not stated")
+        elif _normalise_adduct(candidate_adduct) != _normalise_adduct(context.adduct):
+            excluded.append("adduct mismatch")
+
+    if excluded:
+        status = "excluded"
+    elif unknown:
+        status = "unknown"
+    else:
+        status = "matched"
+    return {
+        "status": status,
+        "reason": "; ".join(excluded or unknown) or None,
+        "precursor_applied": precursor_applied,
+        "precursor_delta": precursor_delta,
     }
 
 
@@ -682,8 +876,8 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     library format (:mod:`msmcp.library`, routed through the security boundary);
     otherwise a deterministic synthetic library is generated and the report
     says so.  The query spectrum is real data resolved before dispatch.  The
-    chunked scan, scoring, FDR/p-value estimation and report formatting are the
-    same on either path.
+    chunked scan, similarity ranking and report formatting are the same on either
+    path. Significance is uncalibrated for every library size.
 
     This function is CPU-bound; the executor runs it on a worker thread so the
     MCP event loop stays responsive.
@@ -693,9 +887,31 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     chunk_size = request.chunk_size
     profile = get_profile(request.instrument_class)
     ms2_tolerance_da = profile.ms2_tolerance_da
+    context = request.query_context or QueryContext(
+        polarity=request.query_polarity,
+        source=(
+            "file"
+            if request.experimental_file
+            else "reference"
+            if request.spectrum_reference
+            else "unknown"
+        ),
+    )
+    if context.ms_level == 1:
+        raise MsmcpError(
+            "the query spectrum is an MS1 survey scan. Library search compares "
+            "MS2 fragment spectra, so an MS1 spectrum is not evidence for an "
+            "MS2 library match. Choose an MS2 spectrum with `list_spectra` or "
+            "`load_mzml_summary` and pass its index."
+        )
+    if context.ms_level not in (None, 2):
+        raise MsmcpError(
+            f"the query spectrum is MS{context.ms_level}. This library search "
+            "compares MS2 fragment spectra; choose an MS2 spectrum."
+        )
 
     scorer = _build_scorer(scoring_method, ms2_tolerance_da)
-    # A real library (MSP/NIST text) is read through the security boundary; a
+    # A real library (MSP/NIST text or MGF) is read through the security boundary; a
     # path with no reader falls back to the labelled synthetic library.
     provider = _library_provider_for(database_file)
     library_info: LibraryInfo | None = None
@@ -706,9 +922,6 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     else:
         n_spectra, library_seed = _library_spec(database_file)
         conn = _build_mock_database(n_spectra=n_spectra, seed=library_seed)
-    # The null draw is deterministic too, so a report is reproducible: same
-    # library path in, same p-values out.
-    rng = random.Random(_stable_seed(database_file) + 1)
     try:
         exp_peaks = list(request.experimental_peaks)
         if not exp_peaks:
@@ -718,33 +931,19 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             )
         logger.info("Scoring %d real query peaks", len(exp_peaks))
 
-        small_library_threshold = profile.small_library_threshold
-        use_fdr = n_spectra >= small_library_threshold
-
-        small_lib_warning = ""
-        if not use_fdr:
-            small_lib_warning = (
-                f"⚠️  **SCIENTIFIC WARNING**\n"
-                f"The spectral library contains only **{n_spectra}** spectra "
-                f"(< {small_library_threshold} threshold).\n"
-                f"Target-Decoy FDR estimation is unreliable with small "
-                f"libraries.\n"
-                f"→ Automatically switching to **empirical p-value** "
-                f"calculation instead.\n\n"
-            )
-
-        target_scores: list[float] = []
+        # Wrong-compound null admissibility is unvalidated. Return candidates
+        # by similarity without statistical discovery claims. Context-incompatible
+        # candidates are excluded before ranking; context-unknown candidates stay
+        # in the ranking but are labelled as such.
         target_meta: list[dict[str, Any]] = []
-        # Peaks of permutable library spectra, kept for the null model below so
-        # the decoy draws cost no further SQL.
-        peaks_cache: dict[Any, list[tuple[float, float]]] = {}
-
-        logger.info(
-            "Scanning %d spectra in chunks of %d (%s mode)",
-            n_spectra,
-            chunk_size,
-            "FDR" if use_fdr else "p-value",
-        )
+        eligibility_counts: dict[str, int] = {
+            "matched": 0,
+            "unknown": 0,
+            "excluded": 0,
+        }
+        exclusion_reasons: dict[str, int] = {}
+        precursor_gate_applied = False
+        logger.info("Scanning %d spectra in chunks of %d", n_spectra, chunk_size)
 
         def _chunks() -> Iterator[tuple[int, list[dict[str, Any]]]]:
             if provider is not None:
@@ -756,10 +955,17 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
 
         for chunk_id, chunk in _chunks():
             for spec in chunk:
+                assessment = _assess_eligibility(context, spec, profile)
+                status = str(assessment["status"])
+                eligibility_counts[status] += 1
+                precursor_gate_applied = precursor_gate_applied or bool(
+                    assessment["precursor_applied"]
+                )
+                if status == "excluded":
+                    reason = str(assessment["reason"])
+                    exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
+                    continue
                 score = scorer.score(exp_peaks, spec["peaks"])
-                target_scores.append(score)
-                if _permutable(spec["peaks"]):
-                    peaks_cache[spec["id"]] = list(spec["peaks"])
                 target_meta.append(
                     {
                         "id": spec["id"],
@@ -768,93 +974,14 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                         "precursor_mz": spec["precursor_mz"],
                         "score": score,
                         "polarity": spec.get("polarity"),
+                        "context_status": status,
+                        "context_reason": assessment["reason"],
+                        "precursor_delta": assessment["precursor_delta"],
                     }
                 )
             logger.debug("Chunk %d: processed %d spectra", chunk_id, len(chunk))
 
-        null_scores: list[float] = []
-        # Draw a FIXED number of decoys from the spectra already scored above —
-        # no extra SQL, and the same library the target scores came from.  The
-        # sample size is independent of the library size, so the null cost is
-        # constant rather than linear in the library (#12).
-        pool = [meta["id"] for meta in target_meta if peaks_cache.get(meta["id"])]
-        if pool:
-            logger.info(
-                "Null model: drawing %d decoy scores from %d permutable spectra",
-                NULL_SAMPLE_SIZE,
-                len(pool),
-            )
-            # Scored in batches: score_many is the interface's amortised path and
-            # keeps the query side prepared across a whole batch of decoys.
-            remaining = NULL_SAMPLE_SIZE
-            while remaining > 0:
-                batch = min(remaining, _NULL_BATCH)
-                decoys = [
-                    _decoy_spectrum(peaks_cache[pool[rng.randrange(len(pool))]], rng)
-                    for _ in range(batch)
-                ]
-                null_scores.extend(scorer.score_many(exp_peaks, decoys))
-                remaining -= batch
-        unpermutable = n_spectra - len(pool)
-        if unpermutable:
-            logger.debug(
-                "Null model: %d spectra have no permutable intensity pattern",
-                unpermutable,
-            )
-        if not null_scores:
-            logger.warning(
-                "Null model: no permutable spectra in a library of %d — "
-                "p-values cannot be calibrated and no hit can pass",
-                n_spectra,
-            )
-
-        n_null_actual = len(null_scores)
-        report_threshold = profile.fdr_threshold
-        null_fit: TailFit | None = (
-            fit_upper_tail(null_scores) if n_null_actual >= 2 else None
-        )
-
-        if use_fdr:
-            if null_fit is not None:
-                p_values = null_fit.p_values(target_scores)
-                q_floor = null_fit.smallest_attainable_q(n_spectra)
-                null_line = (
-                    f"Null model: {null_fit.describe()}.  Significance is read "
-                    f"from the fitted upper tail (no sampling floor); smallest "
-                    f"attainable q-value **{q_floor:.2e}**."
-                )
-            else:
-                # No permutable spectra, so no null could be calibrated: nothing
-                # can pass, and the report says why rather than inventing zeros.
-                p_values = [1.0] * len(target_scores)
-                null_line = (
-                    "Null model: **none** — no permutable decoy spectra, so "
-                    "significance cannot be calibrated and no hit can pass."
-                )
-            q_values = _benjamini_hochberg(p_values)
-            hits = [
-                {**meta, "q_value": qv}
-                for meta, qv in zip(target_meta, q_values, strict=True)
-                if qv <= report_threshold
-            ]
-            hits.sort(key=lambda h: h["score"], reverse=True)
-            method_line = f"FDR threshold (Benjamini-Hochberg): {report_threshold}"
-        else:
-            p_values = _estimate_empirical_p(target_scores, null_scores)
-            hits = [
-                {**meta, "p_value": pv}
-                for meta, pv in zip(target_meta, p_values, strict=True)
-                if pv <= report_threshold
-            ]
-            hits.sort(key=lambda h: h["score"], reverse=True)
-            method_line = f"Empirical p-value threshold: {report_threshold}"
-            p_floor = 1.0 / (n_null_actual + 1) if n_null_actual else 1.0
-            null_line = (
-                f"Null model: {n_null_actual:,} decoy scores from permuted-intensity "
-                f"library spectra; smallest attainable p-value **{p_floor:.2e}** "
-                f"(no multiplicity correction is applied in this mode)."
-            )
-
+        hits = sorted(target_meta, key=lambda h: h["score"], reverse=True)
         top_n = min(len(hits), 20)
         lines = _report_banner(request, database_file, n_spectra, library_info)
 
@@ -868,88 +995,103 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 f"Query spectrum: `{request.experimental_file}` "
                 f"({len(exp_peaks)} real peaks, read from disk)"
             )
-        if request.query_polarity:
-            query_line += f", ion mode: {request.query_polarity}"
         lines.append(query_line)
+        context_parts: list[str] = []
+        if context.ms_level is not None:
+            context_parts.append(f"MS{context.ms_level}")
+        if context.precursor_mz is not None:
+            context_parts.append(f"precursor m/z {context.precursor_mz:.4f}")
+        if context.polarity is not None:
+            context_parts.append(f"ion mode {context.polarity}")
+        if context.charge is not None:
+            context_parts.append(f"charge {context.charge}")
+        if context.isolation_window is not None:
+            context_parts.append(f"isolation window {context.isolation_window:g} m/z")
+        if context_parts:
+            lines.append("Query context: " + ", ".join(context_parts))
+        else:
+            lines.append(
+                "Query context: unavailable (direct peak list; fragment-only "
+                "exploratory ranking, not a context-aware library match)"
+            )
         lines.append(
             f"Scoring method: {_scoring_label(scoring_method, ms2_tolerance_da)}"
         )
         lines.append(
             f"Instrument class: {profile.instrument_class} "
-            f"(MS2 window ±{ms2_tolerance_da:g} Da, "
-            f"significance threshold {report_threshold:g})"
+            f"(MS2 window ±{ms2_tolerance_da:g} Da)"
         )
         lines.append("")
 
-        if small_lib_warning:
-            lines.append(small_lib_warning)
-
-        lines.append(method_line)
-        lines.append(null_line)
+        lines.extend(
+            [
+                "> ⚠️ **SIGNIFICANCE UNCALIBRATED.** Wrong-compound null "
+                "admissibility and false-discovery-rate control have not been validated. "
+                "These are similarity-ranked candidates; no p-values, q-values, "
+                "or 5% error-rate guarantee are provided.",
+                "",
+            ]
+        )
+        if precursor_gate_applied:
+            lines.append(
+                "Context gate: precursor m/z within "
+                f"±{profile.precursor_tolerance.describe()}; polarity, charge and "
+                "adduct compared when both query and reference state them."
+            )
+        else:
+            lines.append(
+                "Context gate: precursor tolerance not applied — the query does "
+                "not state a usable MS2 precursor m/z. Ranking is fragment-only "
+                "exploratory and is not a context-aware library match."
+            )
+        reason_text = (
+            ", ".join(
+                f"{reason} ({count})" for reason, count in exclusion_reasons.items()
+            )
+            or "none"
+        )
+        lines.append(
+            f"Context eligibility: {eligibility_counts['matched']} matched, "
+            f"{eligibility_counts['unknown']} unknown, "
+            f"{eligibility_counts['excluded']} excluded before ranking "
+            f"(reasons: {reason_text})."
+        )
         lines.append("")
 
         if not hits:
             lines.append(
-                "**No hits passed the significance threshold.**\n\n"
-                "Consider widening the precursor mass tolerance or "
-                "re-acquiring the spectrum with higher signal-to-noise."
+                "**No context-eligible or context-unknown library candidates.**"
             )
         else:
-            lines.append(f"Showing the top {top_n} of {len(hits)} hit(s):")
-            lines.append("")
-            if use_fdr:
+            lines.extend(
+                [
+                    f"Showing the top {top_n} of {len(hits)} candidate(s), "
+                    "ranked by similarity; no significance filter applied:",
+                    "",
+                    "| Rank | Compound | Score | Precursor m/z | Formula | Polarity | Context |",
+                    "|------|----------|-------|---------------|---------|----------|---------|",
+                ]
+            )
+            for i, h in enumerate(hits[:top_n], start=1):
                 lines.append(
-                    "| Rank | Compound         | Score  | FDR (q-value) | Precursor m/z | Formula    | Polarity   |"
+                    f"| {i} | {h['compound_name']} | {h['score']:.4f} | "
+                    f"{_cell_precursor(h['precursor_mz'])} | "
+                    f"{_cell_formula(h['formula'])} | "
+                    f"{_cell_polarity(h.get('polarity'), context.polarity)} | "
+                    f"{_cell_context(h)} |"
                 )
-                lines.append(
-                    "|------|-----------------|--------|---------------|---------------|------------|------------|"
-                )
-                for i, h in enumerate(hits[:top_n], start=1):
-                    lines.append(
-                        f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | "
-                        f"{h['q_value']:.4f}       | "
-                        f"{_cell_precursor(h['precursor_mz']):>13} | "
-                        f"{_cell_formula(h['formula']):<10} | "
-                        f"{_cell_polarity(h.get('polarity'), request.query_polarity):<10} |"
-                    )
-            else:
-                lines.append(
-                    "| Rank | Compound         | Score  | p-value   | Precursor m/z | Formula    | Polarity   |"
-                )
-                lines.append(
-                    "|------|-----------------|--------|-----------|---------------|------------|------------|"
-                )
-                for i, h in enumerate(hits[:top_n], start=1):
-                    lines.append(
-                        f"| {i:<4} | {h['compound_name']:<15} | {h['score']:.4f} | "
-                        f"{h['p_value']:.4f}   | "
-                        f"{_cell_precursor(h['precursor_mz']):>13} | "
-                        f"{_cell_formula(h['formula']):<10} | "
-                        f"{_cell_polarity(h.get('polarity'), request.query_polarity):<10} |"
-                    )
-
-            lines.append("")
-            total_passing = len(hits)
-            if total_passing > top_n:
-                lines.append(
-                    f"{total_passing} hits passed the threshold ({top_n} shown above)."
-                )
-            else:
-                lines.append(f"{total_passing} hit(s) passed the threshold.")
-            mismatch = [
-                h
-                for h in hits[:top_n]
-                if request.query_polarity
-                and h.get("polarity")
-                and h["polarity"] != request.query_polarity
-            ]
-            if mismatch:
-                lines.append("")
-                lines.append(
-                    f"⚠ {len(mismatch)} of the hits shown declare the opposite "
-                    f"ion mode to the query (query: {request.query_polarity}).  "
-                    f"Polarity is reported, not filtered — an opposite-polarity "
-                    f"match is unlikely to be the same compound."
+            unknown_shown = sum(
+                1 for hit in hits[:top_n] if hit["context_status"] == "unknown"
+            )
+            if unknown_shown:
+                lines.extend(
+                    [
+                        "",
+                        f"⚠ {unknown_shown} of the candidates shown do not state all "
+                        "the context needed to verify compatibility. They remain "
+                        "ranked as exploratory candidates, not context-matched "
+                        "identifications.",
+                    ]
                 )
 
         provenance = _search_provenance(
@@ -958,9 +1100,10 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             len(exp_peaks),
             library_info,
             profile,
-            null_fit,
-            n_null_actual,
-            use_fdr,
+            context=context,
+            eligibility_counts=eligibility_counts,
+            exclusion_reasons=exclusion_reasons,
+            precursor_gate_applied=precursor_gate_applied,
         )
         lines.append("")
         lines.append("---")
@@ -985,7 +1128,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             "_run_scan(db=%r, n=%d, mode=%s) -> %d hits (top %.4f)",
             database_file,
             n_spectra,
-            "FDR" if use_fdr else "p-value",
+            "uncalibrated similarity ranking",
             len(hits),
             hits[0]["score"] if hits else 0.0,
         )
@@ -997,16 +1140,19 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             query_source=request.spectrum_reference
             or request.experimental_file
             or "unknown",
-            mode="FDR" if use_fdr else "empirical p-value",
-            threshold=report_threshold,
+            mode="uncalibrated similarity ranking",
+            threshold=None,
             n_hits=len(hits),
             top_compound=hits[0]["compound_name"] if hits else None,
             top_score=hits[0]["score"] if hits else None,
-            top_significance=(
-                hits[0]["q_value"]
-                if hits and use_fdr
-                else (hits[0]["p_value"] if hits else None)
+            top_significance=None,
+            query_context_status=(
+                "matched" if context.usable_for_library_search else "unavailable"
             ),
+            precursor_tolerance_applied=precursor_gate_applied,
+            n_context_matched=eligibility_counts["matched"],
+            n_context_unknown=eligibility_counts["unknown"],
+            n_context_excluded=eligibility_counts["excluded"],
         )
         return SearchOutcome(
             report="\n".join(lines), provenance=provenance, summary=summary
@@ -1037,8 +1183,8 @@ def _report_banner(
             ">",
             f"> The library below was read from disk as {library_info.format} "
             f"({library_info.version or 'text'}) and searched for real.  Hits are "
-            f"candidate library matches ranked by the stated scorer and "
-            f"significance model, not validated compound identifications.",
+            f"candidate library matches ranked by the stated scorer, "
+            f"not validated compound identifications.",
             ">",
             f"> Library digest: `{digest}`",
             "",
@@ -1054,8 +1200,8 @@ def _report_banner(
         "searched against is synthetic: no reader recognises this library path, "
         "so it was not opened and the library was generated in memory.",
         ">",
-        "> Treat this as a demonstration of the scanning, scoring and FDR "
-        "machinery applied to a real query.  Do not report these compounds "
+        "> Treat this as a demonstration of scanning and similarity ranking "
+        "applied to a real query.  Do not report these compounds "
         "as findings.",
         "",
         "## Spectral Library Search Results",
@@ -1072,17 +1218,17 @@ def _search_provenance(
     n_query_peaks: int,
     library_info: LibraryInfo | None,
     profile: InstrumentProfile,
-    null_fit: TailFit | None,
-    n_null: int,
-    use_fdr: bool,
+    *,
+    context: QueryContext,
+    eligibility_counts: dict[str, int],
+    exclusion_reasons: dict[str, int],
+    precursor_gate_applied: bool,
 ) -> Provenance:
     """Build the provenance record for one search.
 
-    The record carries the experimental thresholds the scan actually applied —
-    the MS2 window, the significance threshold and the small-library floor —
-    together with the instrument class they were defaulted from and that class's
-    documented provenance, so a report can be read back against the assumption
-    it was produced under (audit F7).
+    Record the applied scoring window and uncalibrated status. The historical
+    FDR threshold and small-library floor remain profile metadata for backwards
+    compatibility; neither is applied as a filter or a calibration criterion.
     """
     sources = []
     if request.experimental_file:
@@ -1101,29 +1247,37 @@ def _search_provenance(
         "query_is_real_data": True,
         "instrument_class": profile.instrument_class,
         "ms2_tolerance_da": profile.ms2_tolerance_da,
-        "precursor_tolerance": profile.precursor_tolerance.to_dict(),
+        "declared_precursor_tolerance": profile.precursor_tolerance.to_dict(),
+        "precursor_tolerance_applied": precursor_gate_applied,
+        "precursor_tolerance_used": (
+            profile.precursor_tolerance.to_dict() if precursor_gate_applied else None
+        ),
+        "precursor_tolerance_reason": (
+            "applied to MS2 query with stated precursor"
+            if precursor_gate_applied
+            else "not applied: query MS2 precursor context unavailable"
+        ),
+        "query_context": context.to_dict(),
+        "eligibility_policy": "ms2_precursor_polarity_charge_adduct.v1",
+        "eligibility_counts": dict(eligibility_counts),
+        "eligibility_exclusion_reasons": dict(exclusion_reasons),
         "fdr_threshold": profile.fdr_threshold,
         "small_library_threshold": profile.small_library_threshold,
         "instrument_defaults_provenance": profile.provenance,
-        "null_decoy_scores": n_null,
+        "null_decoy_scores": 0,
+        "null_model": "none (uncalibrated; similarity ranking only)",
+        "search_result_contract": "msmcp.search.similarity.v1",
+        "significance_status": "uncalibrated",
+        "significance_threshold": None,
+        "multiple_testing_method": None,
+        "fdr_control_validated": False,
+        "significance_filter_applied": False,
+        "candidate_ranking": "descending similarity score",
     }
-    if null_fit is not None:
-        parameters["null_model"] = null_fit.model
-        parameters["null_threshold"] = null_fit.threshold
-        parameters["null_shape_xi"] = null_fit.xi
-        parameters["null_scale_sigma"] = null_fit.sigma
-        parameters["null_smallest_attainable_q"] = null_fit.smallest_attainable_q(
-            n_spectra
-        )
-    elif use_fdr:
-        # FDR mode with no permutable decoys: the null could not be calibrated.
-        parameters["null_model"] = "none (no permutable decoys; uncalibrated)"
-    else:
-        parameters["null_model"] = "empirical decoy sample (p-value mode)"
     if request.query_spectrum_index is not None:
         parameters["query_spectrum_index"] = request.query_spectrum_index
-    if request.query_polarity is not None:
-        parameters["query_polarity"] = request.query_polarity
+    if context.polarity is not None:
+        parameters["query_polarity"] = context.polarity
     if library_info is None:
         parameters["library_synthetic"] = True
         parameters["database_file_not_opened"] = request.database_file
@@ -1194,24 +1348,51 @@ def _cell_formula(value: Any) -> str:
     return str(value) if value else "—"
 
 
-def _cell_polarity(value: Any, query_polarity: str | None) -> str:
-    """Render a hit's ion mode, flagging a mismatch with the query's.
-
-    A hit is flagged with a warning marker when it declares an ion mode opposite
-    to the query's; polarity is reported, never used to filter, so a caller
-    keeps every hit and decides for itself.
-    """
-    if not value:
-        return "—"
-    polarity = str(value)
-    if query_polarity and polarity != query_polarity:
-        return f"{polarity} ⚠"
-    return polarity
-
-
 def _cell_precursor(value: Any) -> str:
     """Render a precursor m/z cell, or an em dash when it is unknown."""
     return f"{value:.4f}" if isinstance(value, int | float) else "—"
+
+
+def _cell_polarity(value: Any, query_polarity: str | None) -> str:
+    """Render a hit's stated ion mode, marking a mismatch without filtering."""
+    if not value:
+        return "—"
+    polarity = str(value)
+    return (
+        f"{polarity} ⚠" if query_polarity and polarity != query_polarity else polarity
+    )
+
+
+def _context_note(context: QueryContext) -> str:
+    """One-line description of the query context for a dispatch reply."""
+    parts: list[str] = []
+    if context.ms_level is not None:
+        parts.append(f"MS{context.ms_level}")
+    if context.precursor_mz is not None:
+        parts.append(f"precursor m/z {context.precursor_mz:.4f}")
+    if context.polarity is not None:
+        parts.append(f"ion mode {context.polarity}")
+    if context.charge is not None:
+        parts.append(f"charge {context.charge}")
+    if context.isolation_window is not None:
+        parts.append(f"isolation window {context.isolation_window:g} m/z")
+    if not parts:
+        return (
+            "unavailable (direct peak list); the search is fragment-only "
+            "exploratory and not context-aware"
+        )
+    if not context.usable_for_library_search:
+        return ", ".join(parts) + " (precursor gate unavailable)"
+    return ", ".join(parts) + " (precursor gate enabled)"
+
+
+def _cell_context(hit: dict[str, Any]) -> str:
+    """Render a hit's context status without overstating a match."""
+    status = str(hit.get("context_status") or "unknown")
+    if status == "matched":
+        return "matched"
+    reason = hit.get("context_reason")
+    return f"unknown: {reason}" if reason else "unknown"
 
 
 def _digest_lines(job_id: str, summary: SearchSummary) -> str:
@@ -1232,7 +1413,7 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
             else f"`{summary.top_compound}`, score {summary.top_score:.4f}"
         )
     else:
-        top = "none passed the threshold"
+        top = "no library candidates"
 
     if summary.library_synthetic:
         library_line = (
@@ -1256,7 +1437,11 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
             "",
             library_line,
             f"- Query: {summary.query_peaks} real peaks from `{summary.query_source}`",
-            f"- {summary.mode} threshold {summary.threshold}: {summary.n_hits} hit(s)",
+            f"- {summary.mode}: {summary.n_hits} candidate(s)",
+            f"- Context: {summary.n_context_matched} matched, "
+            f"{summary.n_context_unknown} unknown, "
+            f"{summary.n_context_excluded} excluded before ranking",
+            "> ⚠️ **SIGNIFICANCE UNCALIBRATED.** No error-rate guarantee.",
             f"- Top hit: {top}",
             "",
             "Poll again with `full_report=True` to fetch the full report; other "
@@ -1314,7 +1499,7 @@ def register_tools(mcp: Any) -> None:
             Field(
                 min_length=1,
                 description="Path to the spectral library.  MSP/NIST-style "
-                "text (.msp, .msp.gz) is read from disk through the security "
+                "text (.msp, .msp.gz) and MGF (.mgf, .mgf.gz) are read from disk through the security "
                 "boundary; any other path falls back to a labelled synthetic "
                 "library.",
             ),
@@ -1331,6 +1516,7 @@ def register_tools(mcp: Any) -> None:
             int | None,
             Field(
                 ge=0,
+                le=ingest.DEFAULT_POLICY.max_spectra - 1,
                 description="Zero-based index of the spectrum to search inside "
                 "experimental_file (default 0).  A real LC-MS/MS file starts "
                 "with an MS1 survey scan, so check which spectrum you want with "
@@ -1369,8 +1555,7 @@ def register_tools(mcp: Any) -> None:
                 description=(
                     "Instrument class whose documented defaults set the "
                     "experimental thresholds this scan applies — the MS2 m/z "
-                    "window, the significance threshold and the small-library "
-                    f"FDR floor (default '{DEFAULT_INSTRUMENT_CLASS}').  The "
+                    f"window (default '{DEFAULT_INSTRUMENT_CLASS}').  The "
                     "class and the values used are recorded in the report and "
                     "its provenance.  One of: "
                     + ", ".join(INSTRUMENT_CLASS_NAMES)
@@ -1382,7 +1567,7 @@ def register_tools(mcp: Any) -> None:
         """Start a background spectral-library search and return a job ID.
 
         The **library** is read for real when `database_file` names a format
-        MSMCP can read (MSP/NIST-style text, `.msp` / `.msp.gz`).  The path is
+        MSMCP can read (MSP/NIST-style text and MGF, `.msp` / `.msp.gz` / `.mgf` / `.mgf.gz`).  The path is
         resolved through the same security boundary as acquisitions — allowed
         root, size limit, read-only — so a library outside the allowed root, a
         missing file or an unsupported format is refused before a job is
@@ -1395,15 +1580,29 @@ def register_tools(mcp: Any) -> None:
         `spectrum_index` to read one from disk.  The reply names the spectrum it
         used — index, MS level, retention time, precursor m/z and peak count —
         because the first spectrum of a real LC/MS run is normally an MS1 survey
-        scan, and searching that against an MS2 library means nothing.  A
-        spectrum with no peaks is refused rather than dispatched.  The chunked
-        scan, scoring and FDR estimation are real in every case.
+        scan.  An MS1 (or non-MS2) query is refused: it is not evidence for an
+        MS2 library match.  A spectrum with no peaks is refused rather than
+        dispatched.  The chunked scan and similarity ranking use the selected
+        library in every case.
 
-        The experimental thresholds the scan applies — the MS2 m/z window, the
-        significance threshold and the small-library FDR floor — come from the
-        named `instrument_class` (default 'generic', MSMCP's v1.0 values) rather
-        than from literals, and the class plus the values used are stated in the
-        report and recorded in its provenance.
+        When the query is MS2 and states a precursor m/z, the declared
+        instrument-class precursor tolerance is applied before ranking;
+        candidates whose stated polarity, charge or adduct conflicts with the
+        query are also excluded.  Candidates that omit a field remain ranked but
+        are labelled *unknown*, and a direct peak-list query (no acquisition
+        context) is reported as fragment-only exploratory.  The report and
+        provenance record the eligibility counts, exclusion reasons and only the
+        tolerances actually applied.  Significance is uncalibrated; no
+        statistical error-rate claim is made.
+
+        The MS2 m/z matching window comes from the named `instrument_class`
+        (default 'generic'). The class and matching window are stated in the
+        report and recorded in provenance. No significance threshold is applied,
+        and ranked scores are not identification probabilities or error rates.
+        Scoring requires finite positive m/z coordinates and finite
+        non-negative intensities; non-positive coordinates and signed
+        baseline-corrected peaks are rejected, not clipped or scored as cosine
+        similarity.
 
         Returns immediately with a job ID, because the scan takes far longer
         than a request timeout.  Poll `check_search_status` with that ID to
@@ -1424,10 +1623,10 @@ def register_tools(mcp: Any) -> None:
         exp_peaks: tuple[tuple[float, float], ...] = ()
         query_label = ""
         query_spectrum_index: int | None = None
-        query_polarity: str | None = None
+        query_context = QueryContext(source="unknown")
         if validated.spectrum_reference is not None:
             exp_peaks = tuple(_peaks_from_reference(validated.spectrum_reference))
-            query_polarity = _reference_polarity(validated.spectrum_reference)
+            query_context = _reference_context(validated.spectrum_reference)
             query_label = (
                 f"`{validated.spectrum_reference}` ({len(exp_peaks)} real peaks, "
                 f"read from the server-side store)"
@@ -1441,11 +1640,28 @@ def register_tools(mcp: Any) -> None:
             query_spectrum_index = (
                 0 if validated.spectrum_index is None else validated.spectrum_index
             )
-            placed_peaks, description, query_polarity = _peaks_from_file(
+            placed_peaks, description, query_context = _peaks_from_file(
                 validated.experimental_file, query_spectrum_index
             )
             exp_peaks = tuple(placed_peaks)
             query_label = f"`{validated.experimental_file}` {description}"
+
+        if query_context.ms_level == 1:
+            raise MsmcpError(
+                f"{query_label} is an MS1 survey scan. Library search compares "
+                "MS2 fragment spectra, so an MS1 spectrum is not evidence for an "
+                "MS2 library match. Choose an MS2 spectrum with `list_spectra` "
+                "or `load_mzml_summary` and pass its index."
+            )
+        if query_context.ms_level not in (None, 2):
+            raise MsmcpError(
+                f"{query_label} is MS{query_context.ms_level}. Library search "
+                "compares MS2 fragment spectra; choose an MS2 spectrum."
+            )
+
+        # Cosine scoring requires finite m/z/intensities and non-negative
+        # intensities. Refuse an invalid real query before scheduling a job.
+        _validate_score_peak_list(exp_peaks, "query")
 
         # Validate the library before dispatch — not just its path.  Resolving
         # it (allowed root, size, readability) makes an out-of-root or missing
@@ -1467,7 +1683,8 @@ def register_tools(mcp: Any) -> None:
             spectrum_reference=validated.spectrum_reference,
             instrument_class=validated.instrument_class,
             query_spectrum_index=query_spectrum_index,
-            query_polarity=query_polarity,
+            query_polarity=query_context.polarity,
+            query_context=query_context,
         )
 
         handle = _EXECUTOR.submit(
@@ -1481,7 +1698,6 @@ def register_tools(mcp: Any) -> None:
                 "experimental_file": validated.experimental_file,
                 "instrument_class": validated.instrument_class,
                 "spectrum_index": validated.spectrum_index,
-                "query_polarity": query_polarity,
             },
         )
 
@@ -1507,10 +1723,12 @@ def register_tools(mcp: Any) -> None:
                 f"treat its hits as compound identifications."
             )
 
+        context_note = _context_note(query_context)
         return (
             f"## Search Dispatched\n\n"
             f"**Job ID:** `{handle.job_id}`\n\n"
             f"**Query:** {query_label}\n\n"
+            f"**Query context:** {context_note}\n\n"
             f"{library_note}\n\n"
             f"Poll for the report with:\n\n"
             f'    check_search_status(job_id="{handle.job_id}")\n'

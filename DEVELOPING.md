@@ -53,11 +53,35 @@ v1.0 ships `LocalAsyncExecutor`: CPU-bound work dispatched with `asyncio.to_thre
 - The poller (`check_search_status`) reads the snapshot: `queued`/`running` → a wait message, `completed` → the full report **once** and a short digest on every later poll (`full_report=True` re-requests the report itself), `failed` → the exception traceback, `cancelled` → confirmation that partial work was discarded.
 - A job the executor no longer knows about (a restart, or after its TTL) is reported as a **terminal failure**, never as an ambiguous pending state a client could spin on.
 
-**Statuses are MCP task statuses** (`working` / `completed` / `failed` / `cancelled`), and `JobStatusSnapshot.to_task_dict()` renders a snapshot into the shape of an MCP `Task`. The installed SDK (`mcp` 2.1.1) defines the Tasks *types* but does not dispatch `tasks/get`, `tasks/result` or `tasks/cancel` — they are absent from its request unions — so MSMCP exposes the same semantics through its own polling tool and keeps the wire representation aligned. Inventing an application-level task protocol would be spec-incompatible and is deliberately not done.
+**Statuses are MCP task statuses** (`working` / `completed` / `failed` / `cancelled`), and `JobStatusSnapshot.to_task_dict()` renders a snapshot into the shape of an MCP `Task`. The installed SDK (`mcp` 2.1.1) exposes generic extension request registration and capability advertisement, but does not provide MSMCP with a Tasks-specific adapter. MSMCP exposes job semantics through its own polling tool and keeps the wire representation aligned with the MCP `Task` shape; implementing the Tasks extension remains roadmap issue #7.
+
+The readiness check exercises those extension hooks rather than inspecting core request unions, because Tasks are intentionally an extension:
+`tests/test_server_contract.py::test_installed_sdk_can_register_and_advertise_extension_requests`. Run it with:
+
+```bash
+uv run pytest tests/test_server_contract.py -q
+```
+
+If that test fails after an SDK upgrade, revisit the extension adapter plan for
+#7 before upgrading the release. Passing confirms that the generic hooks remain
+available; it does not mean MSMCP has implemented the Tasks extension.
 
 **Cancellation is honest about its limits:** a worker thread cannot be interrupted, so cancelling marks the job terminal and *discards* its output. A caller that sees `cancelled` never sees a partial result.
 
 **Portability:** the executor is the seam for a process pool, a job queue or Prefect. Nothing in v1.0 depends on one, and `JobExecutor` is what makes adding one a contained change.
+
+## Distribution checks
+
+The root `Dockerfile` is intentionally a local packaging starting point, not a
+published artifact. It uses `uv sync --frozen` against `uv.lock` and launches
+the same stdio entry point as a source checkout. Build it locally with:
+
+```bash
+docker build -t msmcp:local .
+```
+
+Registry metadata, package publication, image signing, and an offline install
+procedure remain open parts of issue #19.
 
 ## Developer ergonomics
 

@@ -7,6 +7,7 @@ from mcp.server.mcpserver import MCPServer
 
 from msmcp.provenance import package_version
 from msmcp.tools.chem import register_tools as _register_chem_tools
+from msmcp.tools.chromatograms import register_tools as _register_chromatogram_tools
 from msmcp.tools.io import register_tools as _register_io_tools
 from msmcp.tools.qc import register_tools as _register_qc_tools
 from msmcp.tools.search import register_tools as _register_search_tools
@@ -30,8 +31,8 @@ logger = logging.getLogger("msmcp")
 # ---------------------------------------------------------------------------
 # Resolved from the installed distribution, for which pyproject.toml is the
 # authority.  Everything that reports or logs a version reads this one value:
-# a second literal here is how the advertised version (1.0.0) and the startup
-# log line ("v0.1.0") drifted apart.
+# a second literal here is how the advertised version and the startup log
+# line ("v0.1.0") drifted apart in an earlier release.
 SERVER_VERSION: str = package_version("msmcp") or "0.0.0+unknown"
 
 # ---------------------------------------------------------------------------
@@ -46,8 +47,11 @@ mcp = MCPServer(
         "configured allowed root) and answer questions about them: file "
         "summaries, QC metrics, exact-mass and isotope calculations, "
         "precursor-mass validation, and spectral similarity.\n\n"
+        "extract_chromatograms returns structured scan-level TIC, base-peak, "
+        "and optional multiple XIC traces from mzML in one bounded pass.\n\n"
         "Supported input formats: .mzML/.mzML.gz, .mgf and .imzML (imaging, "
-        "via MassFlow); search_library additionally reads MSP/NIST text "
+        "requires the optional imaging extra, not the analytical MassFlow "
+        "engine); search_library additionally reads MSP/NIST text "
         "libraries (.msp, .msp.gz).\n\n"
         "Large data never needs to enter the conversation.  load_spectrum "
         "parses a spectrum and returns a short server-side reference "
@@ -76,6 +80,7 @@ mcp = MCPServer(
 # Register tools from sub-modules
 # ---------------------------------------------------------------------------
 _register_io_tools(mcp)
+_register_chromatogram_tools(mcp)
 _register_chem_tools(mcp)
 _register_sim_tools(mcp)
 _register_search_tools(mcp)

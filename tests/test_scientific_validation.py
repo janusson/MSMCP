@@ -28,6 +28,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -289,7 +290,6 @@ class TestAdductReferenceValues:
     electron-balance convention rather than echoing the module's own numbers.
     """
 
-    PROTON = 1.007276466621  # CODATA 2018: ¹H⁺
     ELECTRON = 0.000548579909  # CODATA 2018: e⁻
     H_ATOM = 1.00782503207
     C_ATOM = 12.0
@@ -300,24 +300,26 @@ class TestAdductReferenceValues:
     CL_ATOM = 34.968852682
 
     def _expected(self) -> dict[str, float]:
-        p, e = self.PROTON, self.ELECTRON
+        e = self.ELECTRON
         h, c, n, o = self.H_ATOM, self.C_ATOM, self.N_ATOM, self.O_ATOM
         na, k, cl = self.NA_ATOM, self.K_ATOM, self.CL_ATOM
+        # Independent convention: neutral atomic composition minus z*e,
+        # where z is the signed net charge. Binding energies are neglected.
         return {
-            "[M+H]+": p,
+            "[M+H]+": h - e,
             "[M+Na]+": na - e,
             "[M+K]+": k - e,
             "[M+NH4]+": n + 4 * h - e,
-            "[M+H-H2O]+": p - (2 * h + o),
-            "[M+2H]2+": 2 * p - 2 * e,
-            "[M+3H]3+": 3 * p - 3 * e,
-            "[M+2Na-H]+": 2 * (na - e) - (p - e),
-            "[M-H]-": -p,
+            "[M+H-H2O]+": h - (2 * h + o) - e,
+            "[M+2H]2+": 2 * h - 2 * e,
+            "[M+3H]3+": 3 * h - 3 * e,
+            "[M+2Na-H]+": 2 * na - h - e,
+            "[M-H]-": -h + e,
             "[M+Cl]-": cl + e,
             "[M+HCOO]-": h + c + 2 * o + e,
             "[M+CH3COO]-": 2 * c + 3 * h + 2 * o + e,
-            "[M-H2O-H]-": -(2 * h + o) - p,
-            "[M+Na-2H]-": (na - e) - 2 * p + 2 * e,
+            "[M-H2O-H]-": -(2 * h + o) - h + e,
+            "[M+Na-2H]-": na - 2 * h + e,
         }
 
     def test_every_tabulated_shift_matches_independent_arithmetic(self) -> None:
@@ -328,7 +330,7 @@ class TestAdductReferenceValues:
             f"adduct table changed: {set(expected) ^ set(_ADDUCT_DB)}"
         )
         for adduct, value in expected.items():
-            assert _ADDUCT_DB[adduct]["shift"] == pytest.approx(value, abs=1e-6), adduct
+            assert _ADDUCT_DB[adduct]["shift"] == pytest.approx(value, abs=5e-9), adduct
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +414,7 @@ class _MzMLWriter:
             scan_xml = (
                 f'<scanList count="1"><scan>'
                 f'<cvParam cvRef="MS" accession="MS:1000016" name="scan start time" '
-                f'value="{rt_seconds}" unitAccession="MS:1000038" unitName="second"/>'
+                f'value="{rt_seconds}" unitAccession="UO:0000010" unitName="second"/>'
                 f"</scan></scanList>"
             )
 
@@ -673,6 +675,8 @@ def test_full_mcp_workflow_over_stdio(tmp_path: Path) -> None:
         precursor_mz=195.0877,
         polarity="positive",
     )
+    writer.add_spectrum([100.0], [2.0], ms_level=1, rt_seconds=60.0)
+    writer.add_spectrum([100.0], [3.0], ms_level=1)
     mzml_path = writer.write(tmp_path / "caffeine.mzML")
     expected_digest = _sha256(mzml_path)
 
@@ -692,8 +696,18 @@ def test_full_mcp_workflow_over_stdio(tmp_path: Path) -> None:
             "load_spectrum",
             {"file_path": str(mzml_path), "spectrum_index": 0},
         )
+        chromatogram_id = host.call_tool(
+            "extract_chromatograms",
+            {
+                "file_path": str(mzml_path),
+                "targets_mz": [100.0],
+                "tolerance": 0.0,
+                "tolerance_unit": "Da",
+                "ms_level": 1,
+            },
+        )
 
-        first_responses = host.responses({init_id, load_id})
+        first_responses = host.responses({init_id, load_id, chromatogram_id})
         init_resp, load_resp = first_responses[init_id], first_responses[load_id]
         assert init_resp["result"]["serverInfo"]["name"] == "MSMCP-MassFlow-Adapter"
 
@@ -709,6 +723,24 @@ def test_full_mcp_workflow_over_stdio(tmp_path: Path) -> None:
         assert loaded["ms_level"] == 2
         assert loaded["precursor_mz"] == pytest.approx(195.0877)
         assert loaded["retention_time"] == pytest.approx(2.0)
+
+        # The structured chromatogram call preserves a missing observation over
+        # MCP JSON-RPC instead of turning a Pydantic conversion error into an
+        # opaque tool failure.
+        chromatogram = _tool_payload(first_responses[chromatogram_id])
+        traces = chromatogram["chromatograms"]
+        assert traces["retention_times_min"] == [1.0, None]
+        assert traces["tic_intensities"] == [2.0, None]
+        assert traces["xic"][0]["intensities"] == [2.0, None]
+        assert chromatogram["missing_observations"] == [
+            {
+                "scan_ordinal": 2,
+                "source_spectrum_index": 2,
+                "ms_level": 1,
+                "retention_time_min": None,
+                "reason": "retention_time_unavailable",
+            }
+        ]
 
         # Provenance must name the operation and carry an *independently
         # computed* content digest of the exact file that was read.
@@ -742,5 +774,80 @@ def test_full_mcp_workflow_over_stdio(tmp_path: Path) -> None:
 
         release_text = release_resp["result"]["content"][0]["text"]
         assert "Released" in release_text
+    finally:
+        host.close()
+
+
+def test_similarity_only_search_over_stdio(tmp_path: Path) -> None:
+    """A real MCP host receives ranked candidates without significance claims."""
+    writer = _MzMLWriter()
+    writer.add_spectrum(
+        _CAFFEINE_MZ,
+        _CAFFEINE_INTENSITY,
+        ms_level=2,
+        rt_seconds=120.0,
+        precursor_mz=195.0877,
+        polarity="positive",
+    )
+    mzml_path = writer.write(tmp_path / "query.mzML")
+    library_path = tmp_path / "library.msp"
+    library_path.write_text(
+        "Name: Caffeine\nIon_mode: positive\nPrecursorMZ: 195.0877\n"
+        "Num Peaks: 3\n110.0713 40\n120.0808 100\n136.0757 60\n",
+        encoding="utf-8",
+    )
+
+    host = _StdioHost(allowed_root=tmp_path, cwd=tmp_path)
+    try:
+        init_id = host.send(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "search-validation", "version": "1.0"},
+            },
+        )
+        host.notify("notifications/initialized", {})
+        dispatch_id = host.call_tool(
+            "search_library",
+            {
+                "database_file": str(library_path),
+                "experimental_file": str(mzml_path),
+                "spectrum_index": 0,
+                "scoring_method": "classical",
+                "instrument_class": "generic",
+            },
+        )
+        responses = host.responses({init_id, dispatch_id})
+        assert "error" not in responses[init_id]
+        dispatch = responses[dispatch_id]["result"]["content"][0]["text"]
+        job_match = re.search(r"\*\*Job ID:\*\*\s*`([^`]+)`", dispatch)
+        assert job_match is not None, dispatch
+        job_id = job_match.group(1)
+
+        report = ""
+        deadline = time.monotonic() + 60.0
+        while time.monotonic() < deadline:
+            poll_id = host.call_tool(
+                "check_search_status", {"job_id": job_id, "full_report": True}
+            )
+            poll = host.responses({poll_id})[poll_id]
+            assert "error" not in poll, poll
+            result = poll["result"]
+            assert not result.get("isError"), result
+            report = result["content"][0]["text"]
+            if "SIGNIFICANCE UNCALIBRATED" in report:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail(f"search did not complete over stdio: {report!r}")
+
+        assert "Caffeine" in report
+        assert "| 1 | Caffeine | 1.0000 |" in report
+        assert "| p-value" not in report.lower()
+        assert "| fdr (q-value) |" not in report.lower()
+        assert "significance filter applied" in report
+        assert "ion mode positive" in report
+        assert "Polarity" in report
     finally:
         host.close()

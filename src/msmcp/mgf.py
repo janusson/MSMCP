@@ -126,6 +126,24 @@ def _polarity_from_fields(fields: dict[str, str]) -> str | None:
     return None
 
 
+def _charge_from_fields(fields: dict[str, str]) -> int | None:
+    """Return the stated charge magnitude from ``CHARGE``/``Z``, else ``None``.
+
+    MGF spells charge as ``2+``, ``2-`` or ``2``.  Only the magnitude is kept:
+    the sign belongs to the ion mode, which is reported separately and never
+    inferred here.
+    """
+    raw = fields.get("CHARGE") or fields.get("Z")
+    if raw is None:
+        return None
+    token = raw.strip().rstrip("+- ")
+    try:
+        charge = abs(int(token))
+    except (TypeError, ValueError):
+        return None
+    return charge or None
+
+
 def _parse_peak_line(line: str, line_number: int) -> tuple[float, float]:
     """Parse one ``<m/z> <intensity>`` peak line."""
     parts = line.split()
@@ -170,6 +188,7 @@ def _build_spectrum(
         mz=mz,
         intensity=intensity,
         polarity=_polarity_from_fields(fields),
+        charge=_charge_from_fields(fields),
     )
 
 

@@ -18,7 +18,7 @@ import pytest
 from pydantic import ValidationError
 
 from msmcp import ingest
-from msmcp.security import PathEscapeError, SecurityPolicy
+from msmcp.security import PathEscapeError, SecurityPolicy, SpectrumCountExceededError
 from msmcp.tools import io as msmcp_io
 from msmcp.tools.io import ListSpectraInput
 
@@ -123,6 +123,21 @@ class TestListSpectra:
 
         with pytest.raises(PathEscapeError, match="outside the allowed root"):
             io_tools["list_spectra"](str(valid_mzml))
+
+
+class TestLoadSpectrumBudget:
+    def test_load_spectrum_refuses_an_index_beyond_the_scan_budget(
+        self,
+        io_tools: IOTools,
+        valid_mzml: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        policy = SecurityPolicy(allowed_root=valid_mzml.parent, max_spectra=2)
+        monkeypatch.setattr(msmcp_io, "DEFAULT_POLICY", policy)
+        monkeypatch.setattr(ingest, "DEFAULT_POLICY", policy)
+
+        with pytest.raises(SpectrumCountExceededError, match="max_spectra=2"):
+            io_tools["load_spectrum"](str(valid_mzml), spectrum_index=2)
 
 
 class TestListSpectraInput:
