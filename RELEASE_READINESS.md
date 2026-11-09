@@ -29,6 +29,11 @@ session still healthy afterwards. It characterizes packaging, protocol and
 error-path behaviour: it is not a compound-identification or false-discovery
 validation.
 
+The receipt is evidence about the **published artifact** — installed from the
+index into a clean virtual environment. The unit, evaluation and coverage
+figures elsewhere in this repository come from the **development checkout** and
+say nothing about the contents of the published wheel, or the reverse.
+
 The four earlier `workflow_dispatch` attempts (2026-10-21 ×3, 2026-10-25) failed at the upload step with `invalid-publisher`; registering the pending trusted publisher for `janusson` / `MSMCP` / `publish.yml` / `pypi` resolved it. No owner action remains for 1.0.2.
 
 ### Tag history correction
@@ -301,6 +306,25 @@ Repository `janusson/msmcp-site`, reconciled branch `release/site-1.0.2`:
 - Deployment will happen only after an authorised merge to site `main`. The site
   deployment checklist is `SITE_DEPLOYMENT_CHECKLIST.md` on the site branch.
 
+## Known follow-ups (recorded, not part of this release)
+
+1. **Optional-dependency paths are never exercised.** `rdkit`, `massflow`, `torch`
+   and `dreams` are absent from every environment used here, so 18 tests skip and
+   the `chem`, `imaging` and `ml` extras are unqualified. A matrix job per extra
+   is the obvious fix; it is deliberately not added here.
+2. **Resource leaks in tests.** `pytest -W always::ResourceWarning` reports 38
+   warnings on the current suite, all pre-existing and none affecting results:
+   19 unclosed SQLite connections from
+   `tests/test_library.py::TestSQLiteLibraryProvider::test_peak_batches_respect_sqlite_variable_limit`,
+   and unclosed gzip `FileIO` handles behind the compressed-input tests in
+   `test_mgf.py`, `test_mzml.py`, `test_security.py`, `test_library.py` and
+   `test_zed_config.py`. They surface late under a runner that treats warnings
+   as errors.
+3. **Coverage is diagnostic only.** The suite covers 91% of `src/msmcp`
+   (`mzml.py` 82%, `models/backends.py` 84%, `tools/chem.py` 88%). No threshold is
+   enforced, deliberately: boundary and scientific correctness matter more than a
+   number, and a threshold invites tests written to clear it.
+
 ## Remaining blockers and risks
 
 1. **PyPI publication.** The merge and the `1.0.2` tag are done; the upload is
@@ -315,17 +339,19 @@ Repository `janusson/msmcp-site`, reconciled branch `release/site-1.0.2`:
    identification or FDR procedure. Context gating depends on metadata the source
    declares; missing context is labelled unknown rather than inferred.
 5. **Optional capabilities.** imzML, real embedding weights, remote transport and
-   durable jobs are not qualified by this candidate. GitHub Dependabot alerts on
-   the default branch include advisories in optional-extras chains (`rdkit`/
-   `torch`/`massflow`); the core installed wheel has none of those packages. The
-   candidate does not claim a dependency-security audit beyond the core install.
-6. **Default-branch security read-back.** Rechecked 2026-11-09 after release:
-   GitHub reports **0 open** Dependabot alerts on `main` (75 fixed, 0
-   dismissed), so the earlier 59-open figure (5 critical, 24 high, 27 medium, 3
-   low) is closed by the dependency bumps in this candidate. Independently,
-   `pip-audit` against the 37-package runtime closure installed from the
-   published wheel reports no known vulnerabilities. This still does not extend
-   to optional extras, which were not audited as a set.
+   durable jobs are not qualified by this candidate. The optional extras
+   (`rdkit`, `torch`, `massflow`) are not installed by a default `pip install`
+   and are not audited as a set; as of 2026-11-09 no advisory was open against
+   them on the default branch either. The candidate does not claim a
+   dependency-security audit beyond the core install.
+6. **Default-branch security read-back.** Dated observation, not a guarantee: on
+   2026-11-09 GitHub reported **0 open** Dependabot alerts on `main` (75 fixed, 0
+   dismissed), which closes the 59-open figure (5 critical, 24 high, 27 medium,
+   3 low) recorded earlier. On the same date `pip-audit` against the 37-package
+   runtime closure installed from the published wheel reported no known
+   vulnerabilities. Both are readings of that moment: a later advisory against
+   one of those versions would not be reflected here, and this does not extend
+   to the optional extras, which were not audited as a set.
 7. **Website deploy trigger.** Merging the site branch to `main` triggers the
    existing Pages workflow by design; do not merge until the owner approves the
    deployment.
