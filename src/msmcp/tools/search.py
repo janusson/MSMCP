@@ -35,6 +35,7 @@ import zlib
 from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
 import numpy as np
@@ -700,11 +701,17 @@ class SearchOutcome:
 def _library_spec(database_file: str) -> tuple[int, int]:
     """Deterministic ``(n_spectra, seed)`` for the synthetic library of a path.
 
+    Seeded from the file *name*, not from the full path.  The fallback never
+    opens the file, so the directories above it carry no meaning -- and seeding
+    from an absolute path made one commit generate a different placeholder
+    library in every checkout, which is a reproducibility defect rather than a
+    feature.
+
     Kept as its own function so tests can rebuild the exact library a scan uses
     (e.g. to take a real library spectrum as a known true-positive query)
     without duplicating the seeding order.
     """
-    rng = random.Random(_stable_seed(database_file))
+    rng = random.Random(_stable_seed(Path(database_file).name))
     return rng.randint(500, 5000), rng.randint(0, 2**31)
 
 

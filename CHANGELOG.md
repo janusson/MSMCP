@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **Seed the placeholder library from the file name, not the checkout path.**
+  `_library_spec` now derives its `(n_spectra, seed)` from
+  `Path(database_file).name`. The synthetic fallback never opens the file, so
+  the directories above it carried no meaning; seeding from the absolute path
+  meant one commit generated a different placeholder library in every
+  checkout, and the evaluation notebook consequently exercised a different
+  report branch per machine. The placeholder contents for a given fixture name
+  change once as a result. No reader, scorer, tolerance, threshold, or report
+  wording changes, and no library that is actually read from disk is affected.
+
 ### Dependency isolation
 
 - Move the lowercase imaging `massflow` distribution out of core dependencies
