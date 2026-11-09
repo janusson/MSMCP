@@ -19,6 +19,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   change once as a result. No reader, scorer, tolerance, threshold, or report
   wording changes, and no library that is actually read from disk is affected.
 
+### Testing
+
+- **Fast-suite guards for two contracts that only the slow lane covered.**
+  `tests/test_tool_schemas.py` now pins the no-hit line a host receives (it was
+  checked only by `make eval`, which accepted either results block), and
+  `tests/test_server_stdio.py` launches the real stdio server and asserts the
+  advertised tool surface, the reported version against the installed
+  distribution, and a clean shutdown on stdin EOF. `tests/test_search.py` pins
+  the placeholder-library seed against the checkout path.
+
 ### Dependency isolation
 
 - Move the lowercase imaging `massflow` distribution out of core dependencies

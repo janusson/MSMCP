@@ -402,6 +402,36 @@ def test_search_report_carries_the_provenance_banner() -> None:
     assert "read from disk" in report
 
 
+def test_report_pins_the_no_hit_line_a_host_receives() -> None:
+    """The no-hit wording is report contract, so the fast suite pins it.
+
+    A payload whose candidates are all excluded by the acquisition-context
+    gate carries a single results line.  The evaluation notebook reads
+    whichever results block the payload has, so a rename here would otherwise
+    only surface in the slow ``make eval`` lane -- and only on a checkout whose
+    placeholder library produced no candidates.
+    """
+    from msmcp.tools.search import QueryContext, SearchRequest, _run_scan
+
+    # A declared MS2 precursor far outside the compound pool: every candidate
+    # is excluded by the gate rather than the gate being skipped.
+    report = _run_scan(
+        SearchRequest(
+            database_file="libraries/metabolomics.txt",
+            experimental_peaks=((5000.0, 1.0), (138.0662, 0.5), (110.0713, 0.2)),
+            experimental_file="experimental/run42.mzML",
+            query_context=QueryContext(ms_level=2, precursor_mz=5000.0),
+        )
+    ).report
+
+    no_hit_line = "**No context-eligible or context-unknown library candidates.**"
+    assert no_hit_line in report
+    assert "| Rank | Compound" not in report
+    # The refusal is explained, not silent, and still sits under the banner.
+    assert "excluded before ranking" in report
+    assert report.index("SYNTHETIC LIBRARY") < report.index(no_hit_line)
+
+
 @pytest.mark.parametrize("method", ["classical", "dreams", "lsm-ms2"])
 def test_report_builder_is_well_formed_for_every_scorer(method: str) -> None:
     from msmcp.tools.search import SearchRequest, _run_scan
