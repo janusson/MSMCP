@@ -1,8 +1,28 @@
 # MSMCP 1.0.2 release readiness
 
-Status: **qualification corrections integrated into the 1.0.2 candidate; awaiting final owner approval on PR #82**. PR #86 was merged into `release/1.0.2-candidate` at `e9a1599402143dd211fa64adb2b3f260ea574836`. PR #82 remains open/draft. No merge to `main`, tag, PyPI upload, or website deployment has been performed.
+Status: **1.0.2 is landed on `main` and tagged; publication is blocked on two owner-only actions.**
 
-Updated 2026-10-31 after qualification PR #86. The corrected code tree is identical to the reviewed PR #86 source tree `af1d79a4cfeecb0b451ba522ffac2bd7ba87e82f`; the merge commit adds no code changes. Hosted gate run `41253058734` passed on that code tree. The documentation below preserves earlier candidate receipts; the current detailed qualification packet is [`docs/release-qualification/QUALIFICATION_REPORT.md`](docs/release-qualification/QUALIFICATION_REPORT.md). A later documentation-only refresh changes no packaged files; use PR #82's live head/checks for its current CI state.
+`main` is at `4aa052001b4449f575ea13c0a7907394479a3dae` — the 1.0.2 candidate merged, plus PR #89. The annotated tag `1.0.2` names exactly that commit. Its tag run ([`42564654644`](https://github.com/janusson/MSMCP/actions/runs/42564654644)) passed the `gate and build` job: the full gate (`make lint` → `make test` → `make eval`), the check that the tag names the packaged version, and `uv build`. The `upload to PyPI` job is **waiting on the `pypi` environment's required reviewer**, and will fail with `invalid-publisher` when approved until PyPI has a trusted publisher for this workflow.
+
+Four earlier `workflow_dispatch` attempts (2026-10-21 ×3, 2026-10-25) failed at the upload step with the same `invalid-publisher` error, so nothing has been published to PyPI.
+
+## Remaining owner-only actions
+
+1. Register the trusted publisher at <https://pypi.org/manage/account/publishing/>: project `msmcp`, owner `janusson`, repository `MSMCP`, workflow `publish.yml`, environment `pypi`. It can be registered as a *pending* publisher before the project exists; the first successful upload then creates the project.
+2. Approve the pending `upload to PyPI` deployment for the tag run (or dispatch `publish.yml` at `1.0.2` afterwards).
+
+Nothing else is outstanding: the gate passes on the exact tagged tree, and the wheel that run built is `msmcp-1.0.2-py3-none-any.whl` with only the three core dependencies (`mcp[cli]`, `numpy`, `pydantic`) and the documented extras.
+
+### Tag history correction
+
+Two tags were deleted on 2026-11-09 because their trees did not declare the version they named: `1.0.1`, and the earlier `1.0.2`. Both pointed at commits whose `pyproject.toml` reads `version = "1.0.0"`, so `publish.yml`'s tag/version guard would have rejected either. Restore one with `git push origin <commit>:refs/tags/<name>` if it is needed:
+
+| Deleted tag | Tag object | Commit |
+|---|---|---|
+| `1.0.1` | `f07ce092dbe43aae6f8210600830380d0d1017a6` | `3d031cf7d854c6a24742af5a89d283ca8c3272ae` |
+| `1.0.2` (pre-correction) | `8af8b905b563905e61f81a0077653df02afe5094` | `8e34387f12dfe7de1ace6fa13aa8105480317407` |
+
+*Historical:* the qualification packet was refreshed on 2026-10-31 after PR #86. The corrected code tree was identical to the reviewed PR #86 source tree `af1d79a4cfeecb0b451ba522ffac2bd7ba87e82f`; that merge added no code changes, and hosted gate run `41253058734` passed on it. The detailed packet is [`docs/release-qualification/QUALIFICATION_REPORT.md`](docs/release-qualification/QUALIFICATION_REPORT.md). The identity and scope sections below still describe the released tree.
 
 ## Candidate identity
 
@@ -12,12 +32,15 @@ Updated 2026-10-31 after qualification PR #86. The corrected code tree is identi
 | Candidate branch | `release/1.0.2-candidate` |
 | Base | `origin/main` @ `18e183a5873d6622b0cd09432b4056d13b0f3499` |
 | Qualified code tree SHA | `e9a1599402143dd211fa64adb2b3f260ea574836` (merge tree equals PR #86 source tree `af1d79a4cfeecb0b451ba522ffac2bd7ba87e82f`) |
-| Package version | `1.0.2` (candidate only; no tag) |
+| Released commit | `main` @ `4aa052001b4449f575ea13c0a7907394479a3dae` (1.0.2 candidate + PR #89) |
+| Version tag | `1.0.2` (annotated, pushed 2026-11-09) |
+| Package version | `1.0.2` |
+| PyPI | **not published** — no trusted publisher registered |
 | Python requirement | `>=3.13` |
 | Core dependencies | `mcp[cli]>=2.2.0`, `pydantic>=2.12.5`, `numpy>=1.26.4` |
 | Optional extras | `imaging` (`massflow>=0.1.2,<0.2`), `chem`, `ml`, `test`, `dev` |
 
-The package version remains `1.0.2`; no version tag exists. The PR #82 branch may advance for documentation-only readiness updates; the live PR head and check run are authoritative for owner review.
+The tagged tree declares `1.0.2`, which is what the tag names. Earlier candidate branches (`release/1.0.2-candidate`, PR #82) are superseded by the merge onto `main`.
 
 ## Supported core server
 
@@ -262,7 +285,9 @@ Repository `janusson/msmcp-site`, reconciled branch `release/site-1.0.2`:
 
 ## Remaining blockers and risks
 
-1. **Approval gate.** No merge, tag, PyPI upload or site deployment is authorised.
+1. **PyPI publication.** The merge and the `1.0.2` tag are done; the upload is
+   not. It needs the account-level trusted publisher below, and an approval of
+   the `pypi` environment deployment.
 2. **PyPI pending publisher.** The invalid-publisher error cannot be fixed from
    the repository; the account-level publisher above must be created by the owner.
 3. **Diagnostic detail over MCP.** The SDK masks exception text in `is_error`
