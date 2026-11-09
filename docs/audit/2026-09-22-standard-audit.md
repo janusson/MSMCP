@@ -212,11 +212,6 @@ unnoticed.
 
 ### Finding 4 — no spectral library reader; `database_file` is never opened (blocking, disclosed)
 
-> **Update 2026-11-09 — seeding basis changed.** The synthetic fallback is now
-> seeded from the library file *name* rather than the full path, so one commit
-> generates the same placeholder library in every checkout. The finding below
-> otherwise stands as written; see `CHANGELOG.md` `[Unreleased]`.
-
 **Symptom.** `search_library` generates a deterministic in-memory SQLite library of 500–5,000 spectra
 seeded from the `database_file` string; the path is not opened. The query spectrum *is* real.
 

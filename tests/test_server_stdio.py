@@ -7,7 +7,8 @@ release.  This spawns the real server and speaks the protocol to it.
 
 The harness keeps stdin open while it waits for answers, the way a host does,
 and bounds every wait: a server that hangs fails the test instead of hanging
-the suite.
+the suite.  Both pipes are drained by threads and closed explicitly, so the
+test does not leave file descriptors for the garbage collector to warn about.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import threading
 from importlib.metadata import version
+from pathlib import Path
 from typing import Any, Final
 
 import pytest
@@ -42,12 +44,25 @@ DOCUMENTED_TOOLS: Final[frozenset[str]] = frozenset(
     }
 )
 
-SERVER_COMMAND: Final = [sys.executable, "-c", "from msmcp.server import main; main()"]
+
+def _server_command() -> list[str]:
+    """The console script this checkout installed, else the module entry point.
+
+    The script is what ``pip install msmcp`` puts on a host's PATH, so it is
+    preferred: running it exercises the packaging metadata, not just the import.
+    """
+    script = Path(sys.executable).with_name("msmcp")
+    if script.is_file():
+        return [str(script)]
+    return [sys.executable, "-c", "from msmcp.server import main; main()"]
+
+
+SERVER_COMMAND: Final = _server_command()
 PROTOCOL_VERSION: Final = "2025-06-18"
 ANSWER_TIMEOUT_S: Final = 120.0
 
 
-def _converse() -> tuple[dict[int, dict[str, Any]], int]:
+def _converse() -> tuple[dict[int, dict[str, Any]], int, str]:
     """Run initialize -> tools/list -> ping against a real server process."""
     requests: list[dict[str, Any]] = [
         {
@@ -78,53 +93,69 @@ def _converse() -> tuple[dict[int, dict[str, Any]], int]:
         text=True,
         bufsize=1,
     )
-    assert proc.stdin is not None and proc.stdout is not None
+    stdin, stdout, stderr = proc.stdin, proc.stdout, proc.stderr
+    if stdin is None or stdout is None or stderr is None:
+        pytest.fail("the server process was not given the three standard pipes")
 
-    lines: queue.Queue[str | None] = queue.Queue()
+    answers: queue.Queue[str | None] = queue.Queue()
+    diagnostics: list[str] = []
 
-    def pump() -> None:
-        for line in proc.stdout:  # type: ignore[union-attr]
-            lines.put(line)
-        lines.put(None)
+    def drain_stdout() -> None:
+        for line in stdout:
+            answers.put(line)
+        answers.put(None)
 
-    threading.Thread(target=pump, daemon=True).start()
+    def drain_stderr() -> None:
+        diagnostics.extend(stderr.read().splitlines(keepends=True))
+
+    reader = threading.Thread(target=drain_stdout, daemon=True)
+    logger = threading.Thread(target=drain_stderr, daemon=True)
+    reader.start()
+    logger.start()
 
     responses: dict[int, dict[str, Any]] = {}
     try:
         for request in requests:
-            proc.stdin.write(json.dumps(request) + "\n")
-        proc.stdin.flush()
+            stdin.write(json.dumps(request) + "\n")
+        stdin.flush()
 
         while len(responses) < 3:
             try:
-                line = lines.get(timeout=ANSWER_TIMEOUT_S)
+                line = answers.get(timeout=ANSWER_TIMEOUT_S)
             except queue.Empty:
                 pytest.fail(
                     f"no answer for {sorted({1, 2, 3} - set(responses))} within "
-                    f"{ANSWER_TIMEOUT_S}s"
+                    f"{ANSWER_TIMEOUT_S}s; stderr:\n{''.join(diagnostics)[-800:]}"
                 )
             if line is None:
                 pytest.fail(
-                    f"the server closed stdout after answering {sorted(responses)}"
+                    f"the server closed stdout after answering {sorted(responses)}; "
+                    f"stderr:\n{''.join(diagnostics)[-800:]}"
                 )
             message: dict[str, Any] = json.loads(line)
             if "id" in message:
                 assert "error" not in message, message
                 responses[message["id"]] = message
     finally:
-        proc.stdin.close()
+        # Closing stdin is the shutdown request; the pipes outlive the process
+        # object, so they are closed here rather than left to the collector.
+        stdin.close()
         try:
             proc.wait(timeout=ANSWER_TIMEOUT_S)
         except subprocess.TimeoutExpired:  # pragma: no cover - only on a hung server
             proc.kill()
-            raise
+            proc.wait()
+        reader.join(timeout=5)
+        logger.join(timeout=5)
+        stdout.close()
+        stderr.close()
 
-    return responses, proc.returncode
+    return responses, proc.returncode, "".join(diagnostics)
 
 
 def test_the_stdio_server_serves_the_documented_tool_surface() -> None:
     """A host that launches the server gets the contract the docs promise."""
-    responses, exit_code = _converse()
+    responses, exit_code, diagnostics = _converse()
 
     handshake = responses[1]["result"]
     assert handshake["protocolVersion"] == PROTOCOL_VERSION
@@ -143,4 +174,4 @@ def test_the_stdio_server_serves_the_documented_tool_surface() -> None:
     assert "operational" in ping["content"][0]["text"]
 
     # Closing stdin is the shutdown signal, and it must be clean.
-    assert exit_code == 0
+    assert exit_code == 0, diagnostics[-800:]
