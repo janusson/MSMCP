@@ -1,17 +1,17 @@
 # MSMCP 1.0.2 release readiness
 
-Status: **1.0.2 is landed on `main` and tagged; publication is blocked on two owner-only actions.**
+Status: **published — `msmcp 1.0.2` is on PyPI as of 2026-11-09.**
 
-`main` is at `4aa052001b4449f575ea13c0a7907394479a3dae` — the 1.0.2 candidate merged, plus PR #89. The annotated tag `1.0.2` names exactly that commit. Its tag run ([`42564654644`](https://github.com/janusson/MSMCP/actions/runs/42564654644)) passed the `gate and build` job: the full gate (`make lint` → `make test` → `make eval`), the check that the tag names the packaged version, and `uv build`. The `upload to PyPI` job is **waiting on the `pypi` environment's required reviewer**, and will fail with `invalid-publisher` when approved until PyPI has a trusted publisher for this workflow.
+`main` is at `4aa052001b4449f575ea13c0a7907394479a3dae` (the 1.0.2 candidate plus PR #89) and the annotated tag `1.0.2` names exactly that commit. The tag run ([`42564654644`](https://github.com/janusson/MSMCP/actions/runs/42564654644)) passed `gate and build` — the full gate, the tag-names-the-packaged-version check, and `uv build` — then the `upload to PyPI` job was approved and published. Both artifacts match byte for byte the ones that run built, and an independent rebuild from the tagged tree reproduces the same digests:
 
-Four earlier `workflow_dispatch` attempts (2026-10-21 ×3, 2026-10-25) failed at the upload step with the same `invalid-publisher` error, so nothing has been published to PyPI.
+| File | sha256 | Uploaded |
+|---|---|---|
+| `msmcp-1.0.2-py3-none-any.whl` | `92500b39002a4676395f9264fa952bab55bd6e32755952eb1ad8ac679c6c9bdf` | 2026-11-09T17:57:19Z |
+| `msmcp-1.0.2.tar.gz` | `99a6ec43c7361b4357699900d5eabe0bcb7f60a2b1e22080fd089f9048f3812e` | 2026-11-09T17:57:21Z |
 
-## Remaining owner-only actions
+PyPI lists `1.0.2` as the only release (`requires-python >=3.13`). A clean Python 3.13 install from the index advertises 15 tools, answers `ping`, and returns the expected chemistry (`[M+H]+` = +1.007276 Da; caffeine `C8H10N4O2` monoisotopic 194.0804 Da; a 0.0006 Da precursor error reported as 3.09 ppm).
 
-1. Register the trusted publisher at <https://pypi.org/manage/account/publishing/>: project `msmcp`, owner `janusson`, repository `MSMCP`, workflow `publish.yml`, environment `pypi`. It can be registered as a *pending* publisher before the project exists; the first successful upload then creates the project.
-2. Approve the pending `upload to PyPI` deployment for the tag run (or dispatch `publish.yml` at `1.0.2` afterwards).
-
-Nothing else is outstanding: the gate passes on the exact tagged tree, and the wheel that run built is `msmcp-1.0.2-py3-none-any.whl` with only the three core dependencies (`mcp[cli]`, `numpy`, `pydantic`) and the documented extras.
+The four earlier `workflow_dispatch` attempts (2026-10-21 ×3, 2026-10-25) failed at the upload step with `invalid-publisher`; registering the pending trusted publisher for `janusson` / `MSMCP` / `publish.yml` / `pypi` resolved it. No owner action remains for 1.0.2.
 
 ### Tag history correction
 
@@ -301,11 +301,13 @@ Repository `janusson/msmcp-site`, reconciled branch `release/site-1.0.2`:
    the default branch include advisories in optional-extras chains (`rdkit`/
    `torch`/`massflow`); the core installed wheel has none of those packages. The
    candidate does not claim a dependency-security audit beyond the core install.
-6. **Default-branch security read-back.** GitHub reported 59 open Dependabot
-   alerts on `main` (5 critical, 24 high, 27 medium, 3 low). The qualified candidate
-   lock includes patched versions for the affected packages, and the MCP minimum
-   is now `2.2.0`. Recheck `main` alerts after an approved merge; optional extras
-   were not comprehensively audited.
+6. **Default-branch security read-back.** Rechecked 2026-11-09 after release:
+   GitHub reports **0 open** Dependabot alerts on `main` (75 fixed, 0
+   dismissed), so the earlier 59-open figure (5 critical, 24 high, 27 medium, 3
+   low) is closed by the dependency bumps in this candidate. Independently,
+   `pip-audit` against the 37-package runtime closure installed from the
+   published wheel reports no known vulnerabilities. This still does not extend
+   to optional extras, which were not audited as a set.
 7. **Website deploy trigger.** Merging the site branch to `main` triggers the
    existing Pages workflow by design; do not merge until the owner approves the
    deployment.
