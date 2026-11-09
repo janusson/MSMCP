@@ -11,6 +11,24 @@ Status: **published — `msmcp 1.0.2` is on PyPI as of 2026-11-09.**
 
 PyPI lists `1.0.2` as the only release (`requires-python >=3.13`). A clean Python 3.13 install from the index advertises 15 tools, answers `ping`, and returns the expected chemistry (`[M+H]+` = +1.007276 Da; caffeine `C8H10N4O2` monoisotopic 194.0804 Da; a 0.0006 Da precursor error reported as 3.09 ppm).
 
+### Installed-package qualification
+
+`make validate-installed QUALIFY_SERVER=<venv>/bin/msmcp` runs
+[`validation/installed_mcp_qualification.py`](validation/installed_mcp_qualification.py)
+— the evidence script that drives the *installed* server with a real MCP stdio
+client, rather than importing the source tree — against the artifact installed
+from the index. The 1.0.2 run is committed as
+[`validation/installed-1.0.2-2026-11-09.json`](validation/installed-1.0.2-2026-11-09.json)
+with machine paths scrubbed. It records: 15 tools; an MGF query searched against
+a real MSP library read from disk with the precursor gate enabled; provenance
+naming `msmcp 1.0.2`, `mcp 2.3.0`, `numpy 2.5.4` and Python 3.13.12; adduct
+chemistry for `[M+2H]2+`, `[M+2Na-H]+`, `[M+3H]3+` and `[M+Na-2H]-`;
+`C6H12O6` at 180.0634 Da; and structured errors for an out-of-root path, a
+malformed library, an MS1 query and an over-budget indexed read, with the
+session still healthy afterwards. It characterizes packaging, protocol and
+error-path behaviour: it is not a compound-identification or false-discovery
+validation.
+
 The four earlier `workflow_dispatch` attempts (2026-10-21 ×3, 2026-10-25) failed at the upload step with `invalid-publisher`; registering the pending trusted publisher for `janusson` / `MSMCP` / `publish.yml` / `pypi` resolved it. No owner action remains for 1.0.2.
 
 ### Tag history correction
