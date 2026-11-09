@@ -20,6 +20,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Accept either results block in the evaluation notebook's report check.** The
+  significance-withdrawal change replaced the search report's no-hit line, but
+  the notebook still required the removed `No hits passed the significance
+  threshold` sentence, so `make eval` only passed where the path-derived
+  synthetic library happened to rank candidates. The check now reads the
+  results-block marker the payload actually carries (the ranked hit table, or
+  the `No context-eligible or context-unknown library candidates.` line), so a
+  checkout whose placeholder library is excluded by the context gate passes
+  too. Wording of the check is held in one place per notebook rather than
+  duplicated.
 - **Validate complete formula strings.** Formula parsing now rejects skipped or
   trailing characters and non-positive atom counts while continuing to
   accumulate legitimately repeated elements.
