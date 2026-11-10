@@ -57,6 +57,14 @@ workflow it does not even distinguish compounds. Ranking *between* compounds is
 a different question, and it is the one that is not yet characterized (see
 below).
 
+Be precise about what that means, because the number 200 invites the wrong
+conclusion: the precursor gate removed the other **191 records — 191 distinct
+compounds — before anything was scored**. The ranking only ever compared nine
+measurements of one substance, so this run exercises *retrieval*, not
+discrimination between competing structures. Nothing here shows that MSMCP
+would prefer this compound over a structural isomer or a co-eluting analogue;
+the gate made sure that question never came up.
+
 ## What the score is, mechanically
 
 `classical` is a greedy one-to-one peak match with a ±0.02 Da window: for each
@@ -111,8 +119,9 @@ measurements at the top of the ranking; and a report that discloses its own
 limits without being asked.
 
 **Does not demonstrate:** compound identification, quantitative accuracy,
-calibrated significance, or that the scorer's ranking agrees with a reference
-implementation on your data.
+calibrated significance, discrimination between competing structures (the
+gate removed every competing compound before scoring), or that the scorer's
+ranking agrees with a reference implementation on your data.
 
 ## Reproducing and auditing
 
