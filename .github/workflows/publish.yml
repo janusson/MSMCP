@@ -51,7 +51,7 @@ jobs:
           esac
           echo "releasing tag ${RELEASE_TAG}"
 
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # `refs/tags/<name>` cannot resolve to a branch, so the version check below
           # compares the tag that produced this tree and not an arbitrary ref.
