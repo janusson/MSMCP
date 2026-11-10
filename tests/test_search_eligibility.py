@@ -289,3 +289,35 @@ class TestAdductAndCharge:
 
         assert result["status"] == "excluded"
         assert "charge mismatch" in str(result["reason"])
+
+
+@pytest.mark.parametrize(
+    "score", [float("nan"), float("inf"), float("-inf"), -0.1, 1.1]
+)
+def test_invalid_scorer_result_aborts_search(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, score: float
+) -> None:
+    from msmcp.tools import search
+
+    class FakeScorer:
+        def score(self, query: object, reference: object) -> float:
+            return score
+
+    monkeypatch.setattr(search, "_build_scorer", lambda *args: FakeScorer())
+    with pytest.raises(search.MsmcpError, match=r"(?i)invalid.*score.*\[0, 1\]"):
+        _run(tmp_path, monkeypatch, QueryContext(ms_level=2, source="file"))
+
+
+@pytest.mark.parametrize("score", [0.0, 1.0])
+def test_boundary_scorer_results_are_ranked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, score: float
+) -> None:
+    from msmcp.tools import search
+
+    class FakeScorer:
+        def score(self, query: object, reference: object) -> float:
+            return score
+
+    monkeypatch.setattr(search, "_build_scorer", lambda *args: FakeScorer())
+    report, _ = _run(tmp_path, monkeypatch, QueryContext(ms_level=2, source="file"))
+    assert f"{score:.4f}" in report
