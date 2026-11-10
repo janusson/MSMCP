@@ -2,6 +2,18 @@
 
 **A Model Context Protocol server that turns mass spectrometry into a first-class tool for agentic AI workflows — without ever stuffing spectral data into a context window.**
 
+> **Status.** `1.0.0` released; `make check` runs the same gate as CI. The metadata
+> design is still a proposal.
+>
+> **Read this before trusting a number.** Search returns ranked similarity candidates
+> and computes no production p/q values. The omission is deliberate: permuted spectra
+> cannot establish wrong-compound calibration. Restoration conditions are in
+> [`VALIDATION_SIGNIFICANCE.md`](VALIDATION_SIGNIFICANCE.md), and
+> `tests/test_significance_safety.py` fails CI if the old behaviour is reintroduced.
+>
+> **Boundary.** Local, offline, self-contained. Ships no library data, downloads none,
+> contacts no hosted service.
+
 MSMCP exposes exact-mass validation, adduct and isotope chemistry, spectral similarity scoring (classical *and* foundation-model embeddings), quality control, and asynchronous spectral library search to any LLM client that speaks the [Model Context Protocol](https://modelcontextprotocol.io).
 
 Large acquisitions never enter the conversation: spectra are parsed into **server-side data references**, so an agent can hand a 100,000-peak spectrum to the next tool as a short `ptr:spectrum:…` string, with structured **provenance** attached to every derived result.
