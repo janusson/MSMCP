@@ -105,6 +105,7 @@ to the directory holding the files you want analysed.
 | DOI | `10.5281/zenodo.3378723` |
 | Selection seed | `20261109` (change with `--seed`) |
 | Subset | 200 references, one held-out query |
+| Traceability | every reference carries its MassBank `DB#` accession; the held-out record's accession is in `manifest.json` |
 
 The same seed on the same release produces the same files. The report echoes the
 library's SHA-256, so a different subset is visible rather than implied.

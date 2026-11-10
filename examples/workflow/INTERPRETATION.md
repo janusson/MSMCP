@@ -126,7 +126,19 @@ ranking agrees with a reference implementation on your data.
 ## Reproducing and auditing
 
 `manifest.json` records the dataset, digest, seed and the held-out compound's
-InChIKey — the answer key, kept out of what the server sees. `workflow_report.json`
-holds the raw payloads. Comparing the two is the check: the top-ranked compound
-should be the one in the manifest, and if it is not, the search is the thing to
-investigate, not the manifest.
+InChIKey and MassBank accession — the answer key, kept out of what the server
+sees. Every reference in `library.msp` carries the accession of the MassBank
+record it came from (`DB#:`), so any row in the report can be traced back to its
+deposition by re-scoring the library. `workflow_report.json` holds the raw
+payloads. Comparing the report against the manifest is the check: the top-ranked
+compound should be the one in the manifest, and if it is not, the search is the
+thing to investigate, not the manifest.
+
+Two honest limits on that audit trail. The report's table names **compounds, not
+depositions**, so two records of the same compound are indistinguishable there —
+the scores tell them apart, and the accessions live only in the library file;
+per-hit accessions would close that gap and are not implemented. And the
+best-ranked reference here scores 0.9986 against the query, i.e. it is a
+near-duplicate measurement: repeat depositions of one substance are the easy
+case for retrieval, and this workflow does not show what happens between
+candidates that genuinely differ.

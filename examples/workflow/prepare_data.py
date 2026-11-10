@@ -68,6 +68,7 @@ class Candidate:
     precursor_mz: float
     peaks: tuple[tuple[float, float], ...]
     formula: str | None = None
+    accession: str | None = None
 
     @property
     def peak_fingerprint(self) -> tuple[float, ...]:
@@ -147,6 +148,7 @@ def candidates(path: Path) -> list[Candidate]:
                 precursor_mz=precursor,
                 peaks=spectrum.peaks,
                 formula=_metadata(spectrum, "formula"),
+                accession=_metadata(spectrum, "db"),
             )
         )
     print(
@@ -206,6 +208,9 @@ def write_msp(path: Path, spectra: list[Candidate]) -> None:
         lines.extend(
             [
                 f"Name: {candidate.name}",
+                # The MassBank record this came from, so any hit in the report
+                # can be traced back to the source deposition.
+                *([f"DB#: {candidate.accession}"] if candidate.accession else []),
                 f"InChIKey: {candidate.inchi_key}",
                 *([f"Formula: {candidate.formula}"] if candidate.formula else []),
                 "Ion_mode: POSITIVE",
@@ -312,6 +317,7 @@ def main() -> None:
         },
         "query": {
             "compound": query.name,
+            "accession": query.accession,
             "inchi_key": query.inchi_key,
             "precursor_mz": query.precursor_mz,
             "peaks": len(query.peaks),
