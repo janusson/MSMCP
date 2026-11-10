@@ -35,6 +35,7 @@ import zlib
 from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
 import numpy as np
@@ -700,11 +701,17 @@ class SearchOutcome:
 def _library_spec(database_file: str) -> tuple[int, int]:
     """Deterministic ``(n_spectra, seed)`` for the synthetic library of a path.
 
+    Seeded from the file *name*, not from the full path.  The fallback never
+    opens the file, so the directories above it carry no meaning -- and seeding
+    from an absolute path made one commit generate a different placeholder
+    library in every checkout, which is a reproducibility defect rather than a
+    feature.
+
     Kept as its own function so tests can rebuild the exact library a scan uses
     (e.g. to take a real library spectrum as a known true-positive query)
     without duplicating the seeding order.
     """
-    rng = random.Random(_stable_seed(database_file))
+    rng = random.Random(_stable_seed(Path(database_file).name))
     return rng.randint(500, 5000), rng.randint(0, 2**31)
 
 
@@ -943,6 +950,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
         }
         exclusion_reasons: dict[str, int] = {}
         precursor_gate_applied = False
+        references_stating_precursor = 0
         logger.info("Scanning %d spectra in chunks of %d", n_spectra, chunk_size)
 
         def _chunks() -> Iterator[tuple[int, list[dict[str, Any]]]]:
@@ -955,6 +963,8 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
 
         for chunk_id, chunk in _chunks():
             for spec in chunk:
+                if spec["precursor_mz"] is not None:
+                    references_stating_precursor += 1
                 assessment = _assess_eligibility(context, spec, profile)
                 status = str(assessment["status"])
                 eligibility_counts[status] += 1
@@ -1038,11 +1048,22 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 f"±{profile.precursor_tolerance.describe()}; polarity, charge and "
                 "adduct compared when both query and reference state them."
             )
-        else:
+        elif not context.usable_for_library_search:
             lines.append(
-                "Context gate: precursor tolerance not applied — the query does "
-                "not state a usable MS2 precursor m/z. Ranking is fragment-only "
-                "exploratory and is not a context-aware library match."
+                "Context gate: not applied — the query does not state a usable "
+                "MS2 precursor m/z. Ranking is fragment-only exploratory and is "
+                "not a context-aware library match."
+            )
+        else:
+            # The query did state a precursor; the library did not.  Saying the
+            # query lacked one would blame the wrong side of the comparison.
+            lines.append(
+                "Context gate: not evaluable — the query states a usable MS2 "
+                f"precursor m/z {context.precursor_mz:.4f}, but "
+                f"{references_stating_precursor} of {n_spectra} library spectra "
+                "state one, so precursor compatibility was never checked. "
+                "Ranking is fragment-only exploratory and is not a context-aware "
+                "library match."
             )
         reason_text = (
             ", ".join(

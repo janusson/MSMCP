@@ -5,7 +5,7 @@
 # .python-version.  The `repomix` target additionally requires the `repomix`
 # CLI (https://repomix.com/, Node-based).
 
-.PHONY: install format lint test eval run repomix all validate-similarity interop-check
+.PHONY: install format lint test eval run repomix all validate-similarity interop-check validate-installed
 
 install:            ## Create/update the virtualenv and sync all deps (incl. dev extras)
 	uv sync --extra dev
@@ -39,6 +39,10 @@ all: install format lint test eval repomix ## Full pipeline: sync, format, lint,
 
 # Each checkout uses its own already-synced environment; no dependency exchange.
 INTEROP_OUTPUT ?= notebooks/.eval_artifacts/interop_report.json
+validate-installed: ## Opt-in: qualify an installed msmcp entry point with a real stdio client (set QUALIFY_SERVER)
+	@test -n "$(QUALIFY_SERVER)" || (echo "Set QUALIFY_SERVER to an installed entry point outside this checkout, e.g. /tmp/msmcp-qualify/bin/msmcp" >&2; exit 2)
+	@uv run --no-sync python validation/installed_mcp_qualification.py --server-command "$(QUALIFY_SERVER)"
+
 interop-check: ## Opt-in: compare the two local reader contracts (set MASSFLOW_ROOT)
 	@test -n "$(MASSFLOW_ROOT)" || (echo "Set MASSFLOW_ROOT to the analytical MassFlow checkout" >&2; exit 2)
 	uv run --no-sync python validation/contract_probe.py --msmcp-root "$(CURDIR)" --massflow-root "$(MASSFLOW_ROOT)" --output "$(INTEROP_OUTPUT)"
