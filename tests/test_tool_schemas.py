@@ -349,8 +349,10 @@ async def test_search_library_declares_when_its_library_is_real_or_synthetic() -
     # A supported library format is read from disk through the security boundary...
     assert "read for real" in description
     assert "msp" in description
-    # ...and a path with no reader is a labelled synthetic fallback, not silence.
-    assert "synthetic library" in description
+    # ...an unreadable path is refused rather than answered from a fabrication...
+    assert "refused" in description
+    # ...and the demonstration library is reachable only by opting in.
+    assert "msmcp_library_fallback=synthetic" in description
     assert "never treat" in description
 
 

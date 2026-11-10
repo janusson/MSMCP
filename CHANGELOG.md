@@ -7,6 +7,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **An unreadable library path is refused, not answered from a fabricated
+  library.** `search_library` substituted a deterministic synthetic library
+  whenever no reader understood `database_file`. The banner disclosed it, but a
+  fabricated hit table is still a fabricated hit table, and a real library in an
+  unsupported format is the likeliest way to meet one. The synthetic library is
+  now demonstration-only: set `MSMCP_LIBRARY_FALLBACK=synthetic` (default
+  `refuse`), the same rule as `MSMCP_EMBEDDING_BACKEND=mock`. The refusal is a
+  deliberate tool error naming the supported formats and the flag, so the caller
+  reads the fix instead of a generic execution failure. When the demonstration
+  library is used, the report banner and the provenance both record it.
+  **Behaviour change:** a path in an unsupported format that previously returned
+  a report now fails.
+
 ### Added
 
 - **A reproducible workflow example, installation to interpretation.**

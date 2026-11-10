@@ -39,11 +39,12 @@ from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
 import numpy as np
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, model_validator
 
 from msmcp import ingest, library, security
-from msmcp.errors import MsmcpError, SpectrumIndexError
+from msmcp.errors import MsmcpError, SpectrumIndexError, UnsupportedFormatError
 from msmcp.execution import (
     JobStatusSnapshot,
     LocalAsyncExecutor,
@@ -715,6 +716,39 @@ def _library_spec(database_file: str) -> tuple[int, int]:
     return rng.randint(500, 5000), rng.randint(0, 2**31)
 
 
+ENV_LIBRARY_FALLBACK: Final = "MSMCP_LIBRARY_FALLBACK"
+"""Environment variable selecting what an unreadable library path does.
+
+``refuse`` (the default) fails closed.  ``synthetic`` enables the labelled
+demonstration library, exactly as ``MSMCP_EMBEDDING_BACKEND=mock`` enables the
+mock embedders: a fabricated library that answers a real search is a scientific
+hazard, so it is never reached by accident.
+"""
+
+LIBRARY_FALLBACK_REFUSE: Final = "refuse"
+LIBRARY_FALLBACK_SYNTHETIC: Final = "synthetic"
+
+
+def synthetic_library_allowed() -> bool:
+    """Whether an unsupported library path may use the synthetic demo library."""
+    selected = os.environ.get(ENV_LIBRARY_FALLBACK, LIBRARY_FALLBACK_REFUSE)
+    return selected.strip().lower() == LIBRARY_FALLBACK_SYNTHETIC
+
+
+def _refuse_unsupported_library(database_file: str) -> None:
+    """Raise unless the caller opted into the synthetic demonstration library."""
+    if synthetic_library_allowed():
+        return
+    raise UnsupportedFormatError(
+        f"'{Path(database_file).name}' is not a spectral library MSMCP can read, "
+        "so the search was not run. MSMCP reads MSP/NIST text (.msp, .msp.gz), "
+        "MGF (.mgf, .mgf.gz) and SQLite (.sqlite, .db); a path in any other "
+        "format is refused rather than answered from a fabricated library. "
+        f"To run the labelled demonstration library on purpose, set "
+        f"{ENV_LIBRARY_FALLBACK}={LIBRARY_FALLBACK_SYNTHETIC}."
+    )
+
+
 def _library_provider_for(database_file: str) -> LibraryProvider | None:
     """Return a real provider for *database_file*, or ``None`` for the fallback.
 
@@ -921,6 +955,8 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
     # A real library (MSP/NIST text or MGF) is read through the security boundary; a
     # path with no reader falls back to the labelled synthetic library.
     provider = _library_provider_for(database_file)
+    if provider is None:
+        _refuse_unsupported_library(database_file)
     library_info: LibraryInfo | None = None
     conn: sqlite3.Connection | None = None
     if provider is not None:
@@ -1592,9 +1628,11 @@ def register_tools(mcp: Any) -> None:
         resolved through the same security boundary as acquisitions — allowed
         root, size limit, read-only — so a library outside the allowed root, a
         missing file or an unsupported format is refused before a job is
-        dispatched.  A path with no reader falls back to a deterministic
-        synthetic library, and the report says which path was used; never treat
-        a synthetic-library hit as a compound identification.
+        dispatched.  A path with no reader is refused for the same reason: a
+        fabricated library that answers a real search would be a scientific
+        hazard.  Setting ``MSMCP_LIBRARY_FALLBACK=synthetic`` opts into the
+        deterministic demonstration library instead, and the report then says
+        so; never treat a synthetic-library hit as a compound identification.
 
         The **query** spectrum can be real: pass `spectrum_reference` from
         `load_spectrum` (peaks already server-side), or `experimental_file` with
@@ -1638,6 +1676,17 @@ def register_tools(mcp: Any) -> None:
             instrument_class=instrument_class,
             spectrum_index=spectrum_index,
         )
+
+        # An unreadable library is refused before a job is dispatched, and the
+        # reason is raised as a *deliberate* tool error rather than a crash: the
+        # SDK replaces a crashing exception's text with a generic message, and
+        # "set MSMCP_LIBRARY_FALLBACK=synthetic to run the demo library" is the
+        # one thing the caller needs to read.
+        if not library.is_supported_library_path(validated.database_file):
+            try:
+                _refuse_unsupported_library(validated.database_file)
+            except UnsupportedFormatError as exc:
+                raise ToolError(str(exc)) from exc
 
         # Resolve real query data *before* dispatch, so a bad reference or an
         # unreadable file fails here and now rather than inside a job.
