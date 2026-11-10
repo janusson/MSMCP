@@ -158,6 +158,25 @@ class TestContract:
             [resolved.score(query, reference) for reference in references]
         )
 
+    @pytest.mark.parametrize("method", EMBEDDING_SCORER_METHODS)
+    def test_embedding_float32_cosine_roundoff_stays_in_range(
+        self, method: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A valid float32 self-match must not look like an invalid >1 score."""
+        vector = np.asarray([1.0 / np.sqrt(2)] * 2, dtype=np.float32)
+
+        class FixedEmbedder:
+            def embed_spectrum(self, peaks: np.ndarray) -> np.ndarray:
+                return vector
+
+        resolved = get_scorer(method)
+        monkeypatch.setattr(resolved, "_embedder", FixedEmbedder())
+        peaks = [(100.0, 1.0)]
+        results = [resolved.score(peaks, peaks), *resolved.score_many(peaks, [peaks])]
+        for result in results:
+            assert 0.0 <= result <= 1.0
+            assert result == pytest.approx(1.0, abs=1e-12)
+
     @pytest.mark.parametrize(
         ("field", "value"),
         [("tolerance", 0.0), ("tolerance", -0.02)],
