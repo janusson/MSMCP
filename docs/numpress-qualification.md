@@ -28,7 +28,7 @@ holds it.
 | decoder results must be 1-D, the declared size, and finite | `_decode_binary` | `test_native_result_contract_is_checked` |
 | contradictory precision, compression, and codec terms are refused | `_parse_binary_data_array` | `test_contradictory_numpress_array_metadata_is_refused` |
 | duplicate m/z or intensity arrays are refused rather than last-wins | `_parse_spectrum` | `test_duplicate_numpress_array_roles_are_refused` |
-| a declared-positive array that decodes to nothing is refused | `_parse_spectrum` | `test_numpress_declared_nonempty_but_empty_arrays_are_refused` |
+| a declared-positive array that decodes to nothing is refused | `_parse_binary_data_array` | `test_numpress_declared_nonempty_but_empty_arrays_are_refused` |
 
 Decoded values remain the codec's: quantization, nibble widths, byte
 order, and fixed-point scaling are unchanged.
