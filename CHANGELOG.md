@@ -47,6 +47,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **The workflow example documents where it reads and writes.**
+  `examples/workflow/README.md` now lists `--data`, `--out` and `--server`,
+  separates the gitignored in-checkout defaults from data prepared elsewhere,
+  and states what a successful run prints so a reader can tell a working
+  checkout from a broken one. `run_workflow.py` creates the report's parent
+  directory and carries help text for both paths.
 - **Seed the placeholder library from the file name, not the checkout path.**
   `_library_spec` now derives its `(n_spectra, seed)` from
   `Path(database_file).name`. The synthetic fallback never opens the file, so

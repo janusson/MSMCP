@@ -13,6 +13,7 @@ expected to interpret rather than trust.
 | Install | `pip install msmcp==1.0.2` | the published artifact runs |
 | Prepare | `python prepare_data.py --fetch` | the data is real and its provenance is checkable |
 | Run | `python run_workflow.py` | QC, a spectrum reference, a context-gated search, a report |
+| Re-run elsewhere | `python run_workflow.py --data DIR --out FILE` | the same workflow against data prepared outside the checkout |
 | Interpret | read [`INTERPRETATION.md`](INTERPRETATION.md) | what the numbers license |
 
 ## 1. Install
@@ -41,7 +42,8 @@ This downloads `MassBank_NISTformat.msp` (137 MB, MassBank release `2026.03`),
 
 Outputs into `data/`: `query.mgf`, `library.msp`, and `manifest.json` (source
 URL, digest, licence, seed, counts, and the held-out compound's InChIKey — the
-answer key, never sent to the server).
+answer key, never sent to the server). Pass `--out DIR` to write the three files
+somewhere else; `run_workflow.py --data DIR` then reads them from there.
 
 The downloaded release is cached at `~/.cache/msmcp-workflow/` and is never
 committed. To use a copy you already have:
@@ -64,8 +66,33 @@ The client speaks MCP over stdio to the installed `msmcp` and runs:
 4. `check_search_status` — polls until the report is ready.
 
 It prints the QC summary and the search report, and writes
-`workflow_report.json` with the raw payloads. Point it at a different entry
-point with `--server /path/to/msmcp`.
+`workflow_report.json` with the raw payloads. Three flags control what it reads
+and writes:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--data` | `examples/workflow/data` | directory holding `query.mgf` and `library.msp`; it is also the `MSMCP_ALLOWED_ROOT` the server is confined to |
+| `--out` | `examples/workflow/workflow_report.json` | file for the raw payloads; a missing parent directory is created |
+| `--server` | `msmcp` | the entry point to launch, e.g. `--server /path/to/.venv/bin/msmcp` |
+
+Both path defaults are inside this checkout and gitignored, so they are where
+`prepare_data.py` writes by default. If you prepared the data elsewhere, pass
+that directory to both steps:
+
+```bash
+.venv/bin/python prepare_data.py --fetch --out /tmp/workflow-data
+.venv/bin/python run_workflow.py \
+    --data /tmp/workflow-data --out /tmp/workflow-report.json
+```
+
+A run against the pinned release with the default seed prints, in this order:
+the QC summary, a `REAL LIBRARY — READ FROM DISK` banner carrying the library's
+SHA-256, and a `## Spectral Library Search Results` table. Recorded from a run
+of `msmcp==1.0.2` against that subset, the context gate reports 9 matched /
+0 unknown / 191 excluded, and the held-out compound is ranked first. Read those
+as a software smoke check, not as an analytical validation: different counts
+mean the subset, the server version or the report contract moved and are worth
+investigating, while a matching run only shows that the plumbing worked.
 
 ## 4. Read the result
 
