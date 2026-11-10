@@ -18,6 +18,7 @@ identification accuracy or a calibrated false-discovery rate.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
@@ -292,7 +293,16 @@ class TestAdductAndCharge:
 
 
 @pytest.mark.parametrize(
-    "score", [float("nan"), float("inf"), float("-inf"), -0.1, 1.1]
+    "score",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        -0.1,
+        1.1,
+        math.nextafter(0.0, -math.inf),
+        math.nextafter(1.0, math.inf),
+    ],
 )
 def test_invalid_scorer_result_aborts_search(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, score: float

@@ -30,6 +30,19 @@ class SpectralEmbedder(ABC):
 - **Real inference (LSM-MS2)** — no public inference weights exist upstream (only peer-review code, `matterworksbio/LSM1-MS2`), so `LSMMS2InferenceEmbedder` is a bring-your-own-checkpoint adapter activated by the `MSMCP_LSM_MS2_CKPT` environment variable (the checkpoint must expose `encode(mz, intensity, precursor_mz)`); the embedding dimensionality is derived from the model output.
 - **Backend selection** — `MSMCP_EMBEDDING_BACKEND=real|mock` (default `real`): `real` requires real inference and raises `EmbeddingBackendUnavailable` with install instructions when a model/checkpoint is unavailable; `mock` explicitly opts into the deterministic mocks for tests/development only. Legacy `auto`/`hf` values are treated as `real`. Tool reports disclose which backend produced each score (`real inference` vs `mock (dev/test-only, not a learned model)`).
 
+**Scoring contract and failure boundary.** `SpectrumScorer.score()` is expected
+to return a finite value in `[0, 1]`. `_run_scan()` checks this immediately
+after each score and before constructing candidate rankings, provenance, or
+reports; an invalid result raises `MsmcpError` and fails the search rather
+than fabricating evidence. Embedding cosine uses float64 normalization and
+stable equivalent arithmetic to avoid float32 self-match overshoot and
+orthogonal-vector undershoot. The public `EmbeddingScorer.score_many()`
+batch method shares that numerical calculation but is not a library-search
+entry point. Signed learned vectors may yield negative, mathematically valid
+cosines; no unreviewed mapping to `[0, 1]` is applied. Until scoring semantics
+for these models are decided, a search that encounters a negative cosine
+fails explicitly. These software checks are not scientific validation.
+
 ## Asynchronous job orchestration
 
 All long-running work goes through one interface, `JobExecutor` (`src/msmcp/execution/executor.py`):
