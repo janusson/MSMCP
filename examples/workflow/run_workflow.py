@@ -45,8 +45,8 @@ async def run(server_command: str, data_dir: Path, report_path: Path) -> dict[st
             raise SystemExit(f"missing {path}; run prepare_data.py first")
 
     environment = dict(os.environ)
-    # Both files sit beside this script, so the server's boundary is the data
-    # directory whatever the caller's working directory happens to be.
+    # The server may read only inside its boundary, so the boundary is the data
+    # directory itself, wherever the caller prepared it.
     environment["MSMCP_ALLOWED_ROOT"] = str(data_dir.resolve())
 
     parameters = StdioServerParameters(command=server_command, args=[], env=environment)
@@ -96,6 +96,7 @@ async def run(server_command: str, data_dir: Path, report_path: Path) -> dict[st
             "wall_clock_s": round(time.monotonic() - started, 3),
         }
 
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     return evidence
 
@@ -110,9 +111,17 @@ def _job_id(dispatched: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", default="msmcp", help="installed msmcp entry point")
-    parser.add_argument("--data", type=Path, default=Path(__file__).parent / "data")
     parser.add_argument(
-        "--out", type=Path, default=Path(__file__).parent / "workflow_report.json"
+        "--data",
+        type=Path,
+        default=Path(__file__).parent / "data",
+        help="directory holding query.mgf and library.msp (also the server's root)",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path(__file__).parent / "workflow_report.json",
+        help="file for the raw payloads (created with its parent directories)",
     )
     arguments = parser.parse_args()
 
