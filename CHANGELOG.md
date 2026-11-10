@@ -7,6 +7,30 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **Seed the placeholder library from the file name, not the checkout path.**
+  `_library_spec` now derives its `(n_spectra, seed)` from
+  `Path(database_file).name`. The synthetic fallback never opens the file, so
+  the directories above it carried no meaning; seeding from the absolute path
+  meant one commit generated a different placeholder library in every
+  checkout, and the evaluation notebook consequently exercised a different
+  report branch per machine. The placeholder contents for a given fixture name
+  change once as a result. No reader, scorer, tolerance, threshold, or report
+  wording changes, and no library that is actually read from disk is affected.
+
+### Testing
+
+- **Fast-suite guards for two contracts that only the slow lane covered.**
+  `tests/test_tool_schemas.py` now pins the no-hit line a host receives (it was
+  checked only by `make eval`, which accepted either results block), and
+  `tests/test_server_stdio.py` launches the real stdio server and asserts the
+  advertised tool surface, the reported version against the installed
+  distribution, and a clean shutdown on stdin EOF. `tests/test_search.py` pins
+  the placeholder-library seed against the checkout path.
+
+## [1.0.2] - 2026-11-09
+
 ### Dependency isolation
 
 - Move the lowercase imaging `massflow` distribution out of core dependencies
@@ -62,6 +86,74 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   one-byte overflow sentinel, so gzip readers refuse expansion before an
   unbounded buffer is returned to the wrapper.
 
+- **MGF libraries now report the ion mode the MGF reader parsed.** `MGFLibraryProvider`
+  built its `LibrarySpectrum` objects without the `polarity` field, so an MGF
+  library's `IONMODE` was read but dropped before the search could flag a
+  polarity mismatch. The provider now carries it through, and
+  `tests/test_library.py` pins it.
+
+- **`list_spectra` reports which ceiling stopped the scan.** The listing is
+  bounded by both the caller's `max_spectra` (rows) and the security policy's
+  per-request spectrum budget (`MSMCP_MAX_SPECTRA`, spectra read); the footer now
+  names whichever stopped it, so a truncated index is never presented as a
+  complete one. Previously the scan could read the whole file to satisfy a
+  filter that matched few rows.
+
+- **The worked-example caffeine spectrum no longer contains a physically
+  impossible fragment.** The synthetic query and library entry carried an
+  m/z 500.1 product ion for a singly protonated 195.09 precursor, which cannot
+  arise by fragmentation. The peak is removed, the files and README are labelled
+  as fabricated demonstration data rather than measured spectra, and
+  `tests/test_quickstart_example.py` still drives the flow end to end.
+
+- **The byte budget now bounds what a compressed input inflates to, not only
+  what it occupies on disk.** `MSMCP_MAX_FILE_SIZE_BYTES` was checked with a
+  `stat` against the bytes on disk, but every reader inflates `.gz` inputs
+  transparently — and a plain `.mzML` carries zlib-compressed binary arrays that
+  inflate inside the parser — so a small file inside the allowed root could still
+  make the server materialise an arbitrarily large blob, breaking the module's
+  stated guarantee that a path inside the root cannot cause an unbounded read.
+  The decompressed streams are now bounded so the ceiling applies to the bytes
+  actually produced (`security.bounded_stream` for `.mzML.gz`, `.mgf.gz` and
+  `.msp.gz`, and a bounded zlib inflate for mzML binary arrays), and a
+  decompression bomb raises `FileSizeExceededError` instead of being read.
+  Refusing the bomb and still reading a legitimate compressed input are both
+  tested.
+
+- **The server no longer tells the model that `search_library` cannot read a
+  library from disk.** The `initialize` instructions still carried the
+  pre-reader caveat — "still scans a synthetic in-memory library rather than the
+  library file you name" — so a host that trusted its server description never
+  passed an `.msp` path, and the supported-format list named only acquisition
+  formats. The instructions now state that an MSP/NIST-style text library is
+  read from disk through the same security boundary as an acquisition, that any
+  other path is a labelled synthetic fallback, and that hits are candidate
+  matches rather than identifications. A test now asserts the instructions name
+  every library suffix `search_library` accepts.
+
+- **A metadata-only MSP record no longer makes an entire library
+  unsearchable.** A record with header lines but no peaks raised, so
+  `GNPS-LIBRARY.msp` died 1,242 records into 15,749, and two other public
+  libraries the same way (68 such records in that library alone). They are now
+  skipped and counted, and the count reaches `LibraryInfo` and the search
+  provenance, because a reader that drops records silently is no better than one
+  that fails. The `Num Peaks` mismatch check is unchanged.
+
+- **`search_library` no longer silently searches spectrum 0.** On a real
+  LC-MS/MS file that is an MS1 survey scan — a meaningless query against an MS2
+  library. `spectrum_index` selects the spectrum, the dispatch reply names what
+  it will search (index, MS level, retention time, precursor m/z, peak count),
+  and a spectrum with no peaks is refused before a job is dispatched.
+
+- **mzML spectra with a legitimately empty payload are read.** A zero-length
+  `binaryDataArray` is legal mzML meaning the spectrum has no peaks, written
+  either as a self-closing `<binary/>` or by omitting `<binary>` entirely.
+  `COE001_16ppm_5uL.mzML` (Bruker maXis QTOF) carries 4,990 empty arrays across
+  2,495 of its 9,286 spectra, and the reader aborted on the third spectrum,
+  losing the 6,791 that follow. Emptiness and corruption are told apart by the
+  spectrum's declared `defaultArrayLength`, so an empty payload in a spectrum
+  that declares peaks is still a `MalformedFileError`.
+
 ### Changed
 
 - **Gate library candidates on query acquisition context (#79).** Search now
@@ -107,6 +199,88 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   clients relying on the old p/q columns must adapt. Decoy utilities remain for
   offline research only. See `VALIDATION_SIGNIFICANCE.md` and the updated
   `SCIENTIFIC_VALIDATION.md` for the evidence and restoration criteria.
+
+- **The search null is fitted, not sampled (roadmap `#12`).** `search_library`
+  drew 40 decoy scores per library spectrum, so the statistical cost was linear
+  in the library and the empirical p-value floor `1/(n_null + 1)` capped the
+  smallest expressible q at ≈0.025 — a large library could not report a strong
+  match however good it was. A **fixed** decoy sample is now drawn
+  (`NULL_SAMPLE_SIZE`, independent of the library) and the upper tail is fitted
+  with a generalised Pareto distribution by the method of moments
+  (`msmcp.models.null_model`); significance above the threshold is read from the
+  fitted survival function, so a q-value below the sampled floor is expressible
+  and the *null* cost is constant. The report names the model, its threshold,
+  shape and scale, and the smallest attainable q, and the fit is validated
+  against the sampled p-values in `tests/test_null_model.py` (disagreement
+  bounded, not asserted). The exhaustive scan remains O(m); the fitted tail is
+  an approximation to the decoy distribution, not a claim about a compound.
+
+- **`ping` is registered like every other tool, so the tool-coverage guards can
+  see it.** It was defined in `msmcp.server` and registered at module scope with
+  a bare `@mcp.tool()`, the only tool outside the `register_tools(mcp)`
+  convention the rest of the surface follows. Every guard that discovers tools
+  by calling `register_tools` therefore missed it: the evaluation notebook's
+  `EXPECTED_TOOLS` cross-check, `test_eval_notebook.py`'s "a registered tool is
+  never exercised" assertion, and `test_tool_schemas.py`'s signature/model
+  comparison all skipped it while `README.md` claimed the notebook fails if any
+  registered tool is unexercised. `ping` and `PingResponse` now live in
+  `msmcp/tools/system.py` behind `register_tools`, the notebook exercises
+  `ping`, and `test_tool_schemas.py` names the one tool with no input model
+  rather than skipping it. The published surface is unchanged: same 13 tools,
+  same names, descriptions and annotations.
+
+- **The installed SDK's Tasks limitation is asserted, not assumed.**
+  `ARCHITECTURE.md` and `README.md` justify MSMCP's own polling tool with the
+  claim that the installed `mcp` defines the Tasks types but omits `tasks/get`,
+  `tasks/result` and `tasks/cancel` from its request unions. Nothing tested it,
+  so an SDK upgrade could have falsified three maintained documents with no
+  failing check. `tests/test_server_contract.py` now fails when those requests
+  appear in `ClientRequest` or `ServerRequest` — which is also the trigger for
+  roadmap issue #7.
+
+- **The isotope envelope is now the exact multinomial expansion, not a
+  first-order approximation.** `annotate_isotopes` computes the distribution
+  from `∏(Σ aᵢ·x^Δnᵢ)ⁿ` over every element and atom, honouring the
+  previously-ignored `max_isotopologue` parameter — now the wire parameter
+  `isotopologues` (1–10, default 3) — so `M, M+1, … M+(n-1)` are all reachable
+  and an element's full isotope ladder contributes. Two consequences: a
+  chlorine- or bromine-rich formula now shows its **M+4** peak (Cl₂ ≈ 9:6:1,
+  Br₂ ≈ 1:2:1) instead of being truncated at M+2; and M+2 for light molecules
+  is corrected downward, because the old `p₁²/2` term overcounted when a
+  dominant isotope had a low count (methane M+2 was ~9.6e-4, now ~5e-6; caffeine
+  0.0094 → 0.0089, glucose 0.0147 → 0.0143). M+1 and the monoisotopic mass are
+  unchanged.
+
+- **The stale root artefacts are resolved** (audit F9). `MCP server
+  configuration.md` is now `docs/mcp-server-configuration.md`, behind a
+  provenance header stating that it is a frozen record of the reasoning rather
+  than maintained documentation, and the two rendered HTML artefacts are
+  relocated to `examples/` and labelled illustrative in the README. The
+  `pyproject.toml` `extend-exclude` comment now describes the transcript
+  accurately instead of calling it a design log.
+
+  The HTML artefacts are **kept rather than deleted**: the criterion asked for
+  their removal on the grounds that they are reproducible outputs, but no
+  generator for either file exists in the repository or in the gitignored
+  scratch directory, so that premise does not hold. They are one-shot session
+  outputs, and relocation out of the repository root — the other option the
+  issue offered — is what was done.
+
+- Reports and provenance name the library that actually answered a search. A
+  readable library (MSP/NIST text) is labelled as read from disk with its
+  format, spectrum count and SHA-256 digest; a path with no reader keeps the
+  synthetic fallback and is labelled as synthetic. The banner is no longer a
+  fixed warning.
+
+- **The experimental thresholds are parameters, not literals.** The precursor
+  acceptance gate, the classical peak-match tolerance, the diagnostic-ion
+  window, the SNR bands and the FDR / small-library thresholds now come from the
+  named `instrument_class` (default `generic`, which reproduces MSMCP's v1.0
+  values exactly). The class and the values actually applied are stated in the
+  result — the report body for `validate_precursor`, `compute_cosine` and
+  `generate_qc_summary`, and `Provenance.parameters` for `search_library` — so an
+  analysis can be re-run under another instrument's assumptions and the
+  assumption behind any result is readable from the result itself.
 
 ### Added
 
@@ -212,160 +386,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   a run can no longer exercise one revision while importing another's package.
   `.gitignore` ignores local `.worktrees/`, and `AGENTS.md` documents the
   isolated-worktree procedure.
-
-### Fixed
-
-- **MGF libraries now report the ion mode the MGF reader parsed.** `MGFLibraryProvider`
-  built its `LibrarySpectrum` objects without the `polarity` field, so an MGF
-  library's `IONMODE` was read but dropped before the search could flag a
-  polarity mismatch. The provider now carries it through, and
-  `tests/test_library.py` pins it.
-
-- **`list_spectra` reports which ceiling stopped the scan.** The listing is
-  bounded by both the caller's `max_spectra` (rows) and the security policy's
-  per-request spectrum budget (`MSMCP_MAX_SPECTRA`, spectra read); the footer now
-  names whichever stopped it, so a truncated index is never presented as a
-  complete one. Previously the scan could read the whole file to satisfy a
-  filter that matched few rows.
-
-- **The worked-example caffeine spectrum no longer contains a physically
-  impossible fragment.** The synthetic query and library entry carried an
-  m/z 500.1 product ion for a singly protonated 195.09 precursor, which cannot
-  arise by fragmentation. The peak is removed, the files and README are labelled
-  as fabricated demonstration data rather than measured spectra, and
-  `tests/test_quickstart_example.py` still drives the flow end to end.
-
-- **The byte budget now bounds what a compressed input inflates to, not only
-  what it occupies on disk.** `MSMCP_MAX_FILE_SIZE_BYTES` was checked with a
-  `stat` against the bytes on disk, but every reader inflates `.gz` inputs
-  transparently — and a plain `.mzML` carries zlib-compressed binary arrays that
-  inflate inside the parser — so a small file inside the allowed root could still
-  make the server materialise an arbitrarily large blob, breaking the module's
-  stated guarantee that a path inside the root cannot cause an unbounded read.
-  The decompressed streams are now bounded so the ceiling applies to the bytes
-  actually produced (`security.bounded_stream` for `.mzML.gz`, `.mgf.gz` and
-  `.msp.gz`, and a bounded zlib inflate for mzML binary arrays), and a
-  decompression bomb raises `FileSizeExceededError` instead of being read.
-  Refusing the bomb and still reading a legitimate compressed input are both
-  tested.
-
-- **The server no longer tells the model that `search_library` cannot read a
-  library from disk.** The `initialize` instructions still carried the
-  pre-reader caveat — "still scans a synthetic in-memory library rather than the
-  library file you name" — so a host that trusted its server description never
-  passed an `.msp` path, and the supported-format list named only acquisition
-  formats. The instructions now state that an MSP/NIST-style text library is
-  read from disk through the same security boundary as an acquisition, that any
-  other path is a labelled synthetic fallback, and that hits are candidate
-  matches rather than identifications. A test now asserts the instructions name
-  every library suffix `search_library` accepts.
-
-- **A metadata-only MSP record no longer makes an entire library
-  unsearchable.** A record with header lines but no peaks raised, so
-  `GNPS-LIBRARY.msp` died 1,242 records into 15,749, and two other public
-  libraries the same way (68 such records in that library alone). They are now
-  skipped and counted, and the count reaches `LibraryInfo` and the search
-  provenance, because a reader that drops records silently is no better than one
-  that fails. The `Num Peaks` mismatch check is unchanged.
-
-- **`search_library` no longer silently searches spectrum 0.** On a real
-  LC-MS/MS file that is an MS1 survey scan — a meaningless query against an MS2
-  library. `spectrum_index` selects the spectrum, the dispatch reply names what
-  it will search (index, MS level, retention time, precursor m/z, peak count),
-  and a spectrum with no peaks is refused before a job is dispatched.
-
-- **mzML spectra with a legitimately empty payload are read.** A zero-length
-  `binaryDataArray` is legal mzML meaning the spectrum has no peaks, written
-  either as a self-closing `<binary/>` or by omitting `<binary>` entirely.
-  `COE001_16ppm_5uL.mzML` (Bruker maXis QTOF) carries 4,990 empty arrays across
-  2,495 of its 9,286 spectra, and the reader aborted on the third spectrum,
-  losing the 6,791 that follow. Emptiness and corruption are told apart by the
-  spectrum's declared `defaultArrayLength`, so an empty payload in a spectrum
-  that declares peaks is still a `MalformedFileError`.
-
-### Changed
-
-- **The search null is fitted, not sampled (roadmap `#12`).** `search_library`
-  drew 40 decoy scores per library spectrum, so the statistical cost was linear
-  in the library and the empirical p-value floor `1/(n_null + 1)` capped the
-  smallest expressible q at ≈0.025 — a large library could not report a strong
-  match however good it was. A **fixed** decoy sample is now drawn
-  (`NULL_SAMPLE_SIZE`, independent of the library) and the upper tail is fitted
-  with a generalised Pareto distribution by the method of moments
-  (`msmcp.models.null_model`); significance above the threshold is read from the
-  fitted survival function, so a q-value below the sampled floor is expressible
-  and the *null* cost is constant. The report names the model, its threshold,
-  shape and scale, and the smallest attainable q, and the fit is validated
-  against the sampled p-values in `tests/test_null_model.py` (disagreement
-  bounded, not asserted). The exhaustive scan remains O(m); the fitted tail is
-  an approximation to the decoy distribution, not a claim about a compound.
-
-- **`ping` is registered like every other tool, so the tool-coverage guards can
-  see it.** It was defined in `msmcp.server` and registered at module scope with
-  a bare `@mcp.tool()`, the only tool outside the `register_tools(mcp)`
-  convention the rest of the surface follows. Every guard that discovers tools
-  by calling `register_tools` therefore missed it: the evaluation notebook's
-  `EXPECTED_TOOLS` cross-check, `test_eval_notebook.py`'s "a registered tool is
-  never exercised" assertion, and `test_tool_schemas.py`'s signature/model
-  comparison all skipped it while `README.md` claimed the notebook fails if any
-  registered tool is unexercised. `ping` and `PingResponse` now live in
-  `msmcp/tools/system.py` behind `register_tools`, the notebook exercises
-  `ping`, and `test_tool_schemas.py` names the one tool with no input model
-  rather than skipping it. The published surface is unchanged: same 13 tools,
-  same names, descriptions and annotations.
-
-- **The installed SDK's Tasks limitation is asserted, not assumed.**
-  `ARCHITECTURE.md` and `README.md` justify MSMCP's own polling tool with the
-  claim that the installed `mcp` defines the Tasks types but omits `tasks/get`,
-  `tasks/result` and `tasks/cancel` from its request unions. Nothing tested it,
-  so an SDK upgrade could have falsified three maintained documents with no
-  failing check. `tests/test_server_contract.py` now fails when those requests
-  appear in `ClientRequest` or `ServerRequest` — which is also the trigger for
-  roadmap issue #7.
-
-- **The isotope envelope is now the exact multinomial expansion, not a
-  first-order approximation.** `annotate_isotopes` computes the distribution
-  from `∏(Σ aᵢ·x^Δnᵢ)ⁿ` over every element and atom, honouring the
-  previously-ignored `max_isotopologue` parameter — now the wire parameter
-  `isotopologues` (1–10, default 3) — so `M, M+1, … M+(n-1)` are all reachable
-  and an element's full isotope ladder contributes. Two consequences: a
-  chlorine- or bromine-rich formula now shows its **M+4** peak (Cl₂ ≈ 9:6:1,
-  Br₂ ≈ 1:2:1) instead of being truncated at M+2; and M+2 for light molecules
-  is corrected downward, because the old `p₁²/2` term overcounted when a
-  dominant isotope had a low count (methane M+2 was ~9.6e-4, now ~5e-6; caffeine
-  0.0094 → 0.0089, glucose 0.0147 → 0.0143). M+1 and the monoisotopic mass are
-  unchanged.
-
-- **The stale root artefacts are resolved** (audit F9). `MCP server
-  configuration.md` is now `docs/mcp-server-configuration.md`, behind a
-  provenance header stating that it is a frozen record of the reasoning rather
-  than maintained documentation, and the two rendered HTML artefacts are
-  relocated to `examples/` and labelled illustrative in the README. The
-  `pyproject.toml` `extend-exclude` comment now describes the transcript
-  accurately instead of calling it a design log.
-
-  The HTML artefacts are **kept rather than deleted**: the criterion asked for
-  their removal on the grounds that they are reproducible outputs, but no
-  generator for either file exists in the repository or in the gitignored
-  scratch directory, so that premise does not hold. They are one-shot session
-  outputs, and relocation out of the repository root — the other option the
-  issue offered — is what was done.
-
-- Reports and provenance name the library that actually answered a search. A
-  readable library (MSP/NIST text) is labelled as read from disk with its
-  format, spectrum count and SHA-256 digest; a path with no reader keeps the
-  synthetic fallback and is labelled as synthetic. The banner is no longer a
-  fixed warning.
-
-- **The experimental thresholds are parameters, not literals.** The precursor
-  acceptance gate, the classical peak-match tolerance, the diagnostic-ion
-  window, the SNR bands and the FDR / small-library thresholds now come from the
-  named `instrument_class` (default `generic`, which reproduces MSMCP's v1.0
-  values exactly). The class and the values actually applied are stated in the
-  result — the report body for `validate_precursor`, `compute_cosine` and
-  `generate_qc_summary`, and `Provenance.parameters` for `search_library` — so an
-  analysis can be re-run under another instrument's assumptions and the
-  assumption behind any result is readable from the result itself.
 
 ## [1.0.0] - 2026-10-08
 

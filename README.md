@@ -347,7 +347,7 @@ Agent:   "The top hit is caffeine, but the precursor mass error (13.91 ppm)
 
 The agent carries references, job IDs and verdicts — never spectra.
 
-> **Note on this walkthrough:** the *query* spectrum is genuinely read from `experiment.mzML`. The **library** depends on the path: an MSP/NIST-style text library (`.msp`, `.msp.gz`), an MGF library (`.mgf`, `.mgf.gz`), or a SQLite peak store (`.sqlite`, `.db`) is read from disk through the same security boundary as the query, while a path with no reader (such as the `metabolomics.library` string above) falls back to a synthetic library of 500–5,000 spectra seeded from that string. Either way the dispatch reply and the final report carry a banner naming which library actually answered the query, ahead of any hit table. Treat the hits as scoring results, never as identifications. See *Known limitations & roadmap*.
+> **Note on this walkthrough:** the *query* spectrum is genuinely read from `experiment.mzML`. The **library** depends on the path: an MSP/NIST-style text library (`.msp`, `.msp.gz`), an MGF library (`.mgf`, `.mgf.gz`), or a SQLite peak store (`.sqlite`, `.db`) is read from disk through the same security boundary as the query, while a path with no reader (such as the `metabolomics.library` string above) falls back to a synthetic library of 500–5,000 spectra seeded from that path's *file name*, so the same fixture yields the same library wherever the repository is checked out. Either way the dispatch reply and the final report carry a banner naming which library actually answered the query, ahead of any hit table. Treat the hits as scoring results, never as identifications. See *Known limitations & roadmap*.
 
 ## Tool reference
 

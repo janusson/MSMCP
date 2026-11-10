@@ -767,3 +767,30 @@ class TestQuerySpectrumSelection:
 
         assert seen, "the scan never ran, so no request was captured"
         assert seen[0].query_spectrum_index == 2
+
+
+def test_the_placeholder_library_is_seeded_from_the_file_name_only() -> None:
+    """One commit must not evaluate differently in different checkouts.
+
+    The synthetic fallback is seeded from the library file's *name*.  It was
+    seeded from the full path, so the same commit generated a different
+    placeholder library per checkout: with the right machine-specific path the
+    evaluation notebook rendered a hit table, and anywhere else every
+    candidate was excluded and it rendered the no-hit line.
+    """
+    from msmcp.tools.search import _library_spec
+
+    same_file_in_different_checkouts = [
+        "/home/runner/work/MSMCP/MSMCP/notebooks/.eval_artifacts/reference_library.mzML",
+        "/Users/someone/Programming/msmcp/notebooks/.eval_artifacts/reference_library.mzML",
+        "/tmp/msmcp-review/notebooks/.eval_artifacts/reference_library.mzML",
+        "notebooks/.eval_artifacts/reference_library.mzML",
+    ]
+    specs = {_library_spec(path) for path in same_file_in_different_checkouts}
+    assert specs == {_library_spec("reference_library.mzML")}
+
+    # Distinct fixtures still get their own placeholder library, so the seed
+    # has not simply been reduced to a constant.
+    assert _library_spec("other_library.mzML") != _library_spec(
+        "reference_library.mzML"
+    )
