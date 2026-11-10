@@ -1123,3 +1123,35 @@ class TestSQLiteLibraryProvider:
 
         spectra = [s for chunk in provider.iter_spectra(chunk_size=1000) for s in chunk]
         assert len(spectra) == 3
+
+
+def test_only_the_documented_header_becomes_a_precursor(tmp_path: Path) -> None:
+    """`PrecursorMZ` is mapped to a precursor; `PEPMASS` is just an unknown field.
+
+    An MSP library written with the wrong header does not fail — it simply stops
+    carrying precursors, so the search cannot check precursor compatibility and
+    every reference becomes context-unknown. The reader is where that must be
+    visible, because nothing downstream invents the missing value.
+    """
+    from msmcp.library import iter_msp_spectra
+
+    record = "Name: Caffeine\nIon_mode: P\nNum Peaks: 1\n138.0662 420.0\n"
+    mapped = tmp_path / "mapped.msp"
+    mapped.write_text(
+        "Name: Caffeine\nPrecursorMZ: 195.0877\n" + record[len("Name: Caffeine\n") :],
+        encoding="utf-8",
+    )
+    unmapped = tmp_path / "unmapped.msp"
+    unmapped.write_text(
+        "Name: Caffeine\nPEPMASS: 195.0877\n" + record[len("Name: Caffeine\n") :],
+        encoding="utf-8",
+    )
+
+    (documented,) = list(iter_msp_spectra(mapped))
+    (undocumented,) = list(iter_msp_spectra(unmapped))
+
+    assert documented.precursor_mz == 195.0877
+    assert undocumented.precursor_mz is None
+    # The value is preserved verbatim rather than discarded, so a caller can see
+    # what the file actually said.
+    assert undocumented.metadata["PEPMASS"] == "195.0877"
