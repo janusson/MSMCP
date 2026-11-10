@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **A reproducible workflow example, installation to interpretation.**
+  `examples/workflow/` downloads the pinned MassBank `2026.03` release, verifies
+  its SHA-256 before reading it, and derives a small deterministic subset with a
+  held-out measurement of a compound whose other measurements stay in the
+  library. `run_workflow.py` drives an installed server over stdio through QC, a
+  spectrum reference, a context-gated search and polling, and `INTERPRETATION.md`
+  explains what the resulting report does and does not license. The dataset is
+  never committed; the derived files are gitignored.
+
 ### Changed
 
 - **Seed the placeholder library from the file name, not the checkout path.**
@@ -29,6 +40,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   distribution, and a clean shutdown on stdin EOF. `tests/test_search.py` pins
   the placeholder-library seed against the checkout path.
 
+### Fixed
+
+- **Say why the precursor gate did not run.** The search report printed "the
+  query does not state a usable MS2 precursor m/z" whenever no candidate was
+  precursor-checked — including when the query *did* state one and the library
+  stated none. It now separates a gate that was not applied (no usable query
+  precursor) from one that could not be evaluated (no reference states a
+  precursor, with the count), so a reader is not pointed at the wrong side of
+  the comparison. New tests pin all four states and the trap where a library
+  written with `PEPMASS` instead of `PrecursorMZ` silently loses every
+  precursor while the search still returns hits.
+
+
 ## [1.0.2] - 2026-11-09
 
 ### Dependency isolation
@@ -43,16 +67,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   is healthy. Real imaging integration tests skip in core-only environments.
 
 ### Fixed
-
-- **Say why the precursor gate did not run.** The search report printed "the
-  query does not state a usable MS2 precursor m/z" whenever no candidate was
-  precursor-checked — including when the query *did* state one and the library
-  stated none. It now separates a gate that was not applied (no usable query
-  precursor) from one that could not be evaluated (no reference states a
-  precursor, with the count), so a reader is not pointed at the wrong side of
-  the comparison. New tests pin all four states and the trap where a library
-  written with `PEPMASS` instead of `PrecursorMZ` silently loses every
-  precursor while the search still returns hits.
 
 - **Accept either results block in the evaluation notebook's report check.** The
   significance-withdrawal change replaced the search report's no-hit line, but
