@@ -257,7 +257,12 @@ def _unit_embedding(vector: np.ndarray) -> np.ndarray | None:
 
 
 def _unit_vector_cosine(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine via 1 - ||a-b||²/2 for unit vectors, avoiding >1 roundoff."""
+    """Use the stable cosine identity near 1, the dot product near 0."""
+    cosine = float(np.dot(a, b))
+    if cosine <= 0.5:
+        return cosine
+    # For nearly identical vectors, 1 - ||a-b||²/2 avoids a spurious
+    # float32/float64 cosine greater than 1 without clamping a bad score.
     difference = a - b
     return float(1.0 - 0.5 * np.dot(difference, difference))
 
