@@ -247,13 +247,28 @@ def _matched_dot(
 # ---------------------------------------------------------------------------
 # Foundation-model embeddings
 # ---------------------------------------------------------------------------
+def _unit_embedding(vector: np.ndarray) -> np.ndarray | None:
+    """Normalise in float64; float32 dot/norm roundoff can exceed unit cosine."""
+    values = np.asarray(vector, dtype=np.float64)
+    norm = float(np.linalg.norm(values))
+    if norm == 0.0:
+        return None
+    return values / norm
+
+
+def _unit_vector_cosine(a: np.ndarray, b: np.ndarray) -> float:
+    """Cosine via 1 - ||a-b||²/2 for unit vectors, avoiding >1 roundoff."""
+    difference = a - b
+    return float(1.0 - 0.5 * np.dot(difference, difference))
+
+
 def _vector_cosine(a: np.ndarray, b: np.ndarray) -> float:
     """Cosine similarity between two non-negative embedding vectors."""
-    norm_a = float(np.linalg.norm(a))
-    norm_b = float(np.linalg.norm(b))
-    if norm_a == 0.0 or norm_b == 0.0:
+    unit_a = _unit_embedding(a)
+    unit_b = _unit_embedding(b)
+    if unit_a is None or unit_b is None:
         return 0.0
-    return float(np.dot(a, b) / (norm_a * norm_b))
+    return _unit_vector_cosine(unit_a, unit_b)
 
 
 class EmbeddingScorer(SpectrumScorer):
@@ -297,29 +312,22 @@ class EmbeddingScorer(SpectrumScorer):
     ) -> list[float]:
         _validate_peak_list(query, "query")
         query_vector = self._embed(query)
-        query_norm = (
-            float(np.linalg.norm(query_vector)) if query_vector is not None else 0.0
-        )
+        query_unit = _unit_embedding(query_vector) if query_vector is not None else None
         scores: list[float] = []
         for reference in references:
             _validate_peak_list(reference, "reference")
-            if query_vector is None or query_norm == 0.0:
+            if query_unit is None:
                 scores.append(0.0)
                 continue
             reference_vector = self._embed(reference)
             if reference_vector is None:
                 scores.append(0.0)
                 continue
-            reference_norm = float(np.linalg.norm(reference_vector))
-            if reference_norm == 0.0:
+            reference_unit = _unit_embedding(reference_vector)
+            if reference_unit is None:
                 scores.append(0.0)
                 continue
-            scores.append(
-                float(
-                    np.dot(query_vector, reference_vector)
-                    / (query_norm * reference_norm)
-                )
-            )
+            scores.append(_unit_vector_cosine(query_unit, reference_unit))
         return scores
 
 
