@@ -236,7 +236,7 @@ class TestUnknownQueryContext:
 
         assert "Query context: unavailable" in report
         assert "fragment-only exploratory" in report
-        assert "Context gate: precursor tolerance not applied" in report
+        assert "Context gate: not applied" in report
         assert parameters["precursor_tolerance_applied"] is False
         assert parameters["precursor_tolerance_used"] is None
         # Every candidate remains ranked; none is promoted to context-matched.

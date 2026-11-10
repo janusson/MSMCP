@@ -20,6 +20,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Say why the precursor gate did not run.** The search report printed "the
+  query does not state a usable MS2 precursor m/z" whenever no candidate was
+  precursor-checked — including when the query *did* state one and the library
+  stated none. It now separates a gate that was not applied (no usable query
+  precursor) from one that could not be evaluated (no reference states a
+  precursor, with the count), so a reader is not pointed at the wrong side of
+  the comparison. New tests pin all four states and the trap where a library
+  written with `PEPMASS` instead of `PrecursorMZ` silently loses every
+  precursor while the search still returns hits.
+
 - **Accept either results block in the evaluation notebook's report check.** The
   significance-withdrawal change replaced the search report's no-hit line, but
   the notebook still required the removed `No hits passed the significance

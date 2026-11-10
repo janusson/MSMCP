@@ -15,6 +15,7 @@ what catches it.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -31,7 +32,7 @@ from msmcp.tools.io import (
     ReferenceInput,
 )
 from msmcp.tools.qc import QCInput
-from msmcp.tools.search import PollInput, SearchInput, StatusInput
+from msmcp.tools.search import PollInput, QueryContext, SearchInput, StatusInput
 from msmcp.tools.similarity import ComputeCosineInput, ValidatePrecursorInput
 
 # Tool name -> the Pydantic model that validates its arguments.
@@ -416,3 +417,129 @@ def test_report_builder_is_well_formed_for_every_scorer(method: str) -> None:
     ).report
     assert report.startswith(">")
     assert "SYNTHETIC LIBRARY" in report
+
+
+def _write_library(
+    path: Path,
+    *,
+    precursor_header: str | None = "PrecursorMZ",
+    precursor_mz: float = 195.0877,
+    name: str = "Caffeine",
+) -> Path:
+    """Write a one-record MSP library, optionally without a precursor header."""
+    peaks = [(110.0713, 40.0), (120.0808, 100.0), (138.0662, 420.0)]
+    header = [] if precursor_header is None else [f"{precursor_header}: {precursor_mz}"]
+    lines = [
+        f"Name: {name}",
+        "Formula: C8H10N4O2",
+        *header,
+        "Ion_mode: P",
+        f"Num Peaks: {len(peaks)}",
+        *(f"{mz:.4f} {intensity:.1f}" for mz, intensity in peaks),
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+QUERY_PEAKS = ((110.0713, 40.0), (120.0808, 100.0), (138.0662, 420.0))
+
+
+def _scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    library: Path,
+    context: QueryContext | None,
+) -> str:
+    from msmcp import security
+    from msmcp.tools.search import SearchRequest, _run_scan
+
+    policy = security.SecurityPolicy(allowed_root=tmp_path)
+    monkeypatch.setattr(security, "DEFAULT_POLICY", policy)
+    return _run_scan(
+        SearchRequest(
+            database_file=str(library),
+            experimental_peaks=QUERY_PEAKS,
+            experimental_file="experimental/run42.mgf",
+            query_context=context,
+        )
+    ).report
+
+
+def test_a_generated_library_keeps_its_precursor_through_reader_and_search(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A library written with `PrecursorMZ` is context-checked, not context-unknown.
+
+    This is the failure the test exists for: writing the header as `PEPMASS`
+    instead parses as an unknown field, every reference loses its precursor, and
+    the search still runs while silently ceasing to be context-aware.
+    """
+    library = _write_library(tmp_path / "library.msp")
+    report = _scan(
+        tmp_path,
+        monkeypatch,
+        library,
+        QueryContext(ms_level=2, precursor_mz=195.0877, source="file"),
+    )
+
+    assert "Context gate: precursor m/z within" in report
+    assert "Context eligibility: 1 matched, 0 unknown, 0 excluded" in report
+
+
+def test_a_query_without_a_precursor_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No usable query precursor: the gate is not applied, and the query is named."""
+    library = _write_library(tmp_path / "library.msp")
+    report = _scan(tmp_path, monkeypatch, library, None)
+
+    assert "Context gate: not applied" in report
+    assert "the query does not state a usable MS2 precursor" in report
+    assert "not evaluable" not in report
+    assert "Context eligibility: 0 matched, 1 unknown, 0 excluded" in report
+
+
+def test_missing_reference_precursors_are_not_blamed_on_the_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A library stating no precursors makes the gate unevaluable, not skipped.
+
+    The query here does state a precursor, so a report saying the query lacks
+    one points a reader at the wrong side of the comparison -- and invites them
+    to trust a context check that never ran.
+    """
+    library = _write_library(tmp_path / "library.msp", precursor_header=None)
+    report = _scan(
+        tmp_path,
+        monkeypatch,
+        library,
+        QueryContext(ms_level=2, precursor_mz=195.0877, source="file"),
+    )
+
+    assert "Context gate: not evaluable" in report
+    assert "0 of 1 library spectra state one" in report
+    assert "the query does not state a usable MS2 precursor" not in report
+    assert "Context eligibility: 0 matched, 1 unknown, 0 excluded" in report
+
+
+def test_an_unrecognised_precursor_header_cannot_look_like_a_context_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The trap, end to end: a `PEPMASS` library still searches, nothing is checked.
+
+    The search succeeds and returns hits, so the only signal that precursor
+    compatibility was never evaluated is the report text. It must say the gate
+    was unevaluable and must not report a single context-matched candidate.
+    """
+    library = _write_library(tmp_path / "library.msp", precursor_header="PEPMASS")
+    report = _scan(
+        tmp_path,
+        monkeypatch,
+        library,
+        QueryContext(ms_level=2, precursor_mz=195.0877, source="file"),
+    )
+
+    assert "Context eligibility: 0 matched, 1 unknown, 0 excluded" in report
+    assert "Context gate: not evaluable" in report
+    assert "| Rank | Compound" in report  # hits are still returned, by design
