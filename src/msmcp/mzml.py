@@ -337,14 +337,21 @@ def _zlib_decompress_bounded(raw: bytes, max_bytes: int) -> bytes:
         raise _malformed() from exc
     if len(out) > max_bytes:
         raise _too_large()
-    if not decompressor.eof:
+    if not decompressor.eof or decompressor.unused_data:
         raise _malformed()
     return out
 
 
-def _numpress_integer_count(raw: bytes, *, offset: int) -> int:
-    """Validate Numpress's packed integer stream and return its value count."""
+def _numpress_integer_count(raw: bytes, *, offset: int, linear: bool = False) -> int:
+    """Check packed integers and, for linear, native signed-64 arithmetic.
+
+    Reconstruct only the two predictor states, using Python integers. Counting
+    valid residuals alone cannot protect the native decoder: a long stream can
+    overflow its signed predictor even though every residual fits in int32.
+    """
     nibble_count = (len(raw) - offset) * 2
+    previous, current = struct.unpack("<II", raw[8:16]) if linear else (0, 0)
+    int64_min, int64_max = -(1 << 63), (1 << 63) - 1
 
     def nibble_at(index: int) -> int:
         byte = raw[offset + index // 2]
@@ -360,6 +367,22 @@ def _numpress_integer_count(raw: bytes, *, offset: int) -> int:
         payload_nibbles = 8 - (head if head <= 8 else head - 8)
         if pos + payload_nibbles > nibble_count:
             raise MalformedFileError("Malformed MS-Numpress integer stream.")
+        if linear:
+            value = (1 << 32) - (1 << (4 * payload_nibbles)) if head > 8 else 0
+            for shift in range(payload_nibbles):
+                value |= nibble_at(pos + shift) << (4 * shift)
+            residual = value - (1 << 32) if value >= (1 << 31) else value
+            delta = current - previous
+            prediction = current + delta
+            following = prediction + residual
+            if any(
+                state < int64_min or state > int64_max
+                for state in (delta, prediction, following)
+            ):
+                raise MalformedFileError(
+                    "MS-Numpress linear prediction exceeds signed 64-bit range."
+                )
+            previous, current = current, following
         pos += payload_nibbles
         count += 1
     return count
@@ -367,6 +390,13 @@ def _numpress_integer_count(raw: bytes, *, offset: int) -> int:
 
 def _validate_numpress(raw: bytes, *, codec: str, max_bytes: int) -> int:
     """Preflight payload structure before invoking pynumpress's native decoder."""
+    # Conservative per-allocation bounds for pynumpress 0.1.5's vector wrappers.
+    # Check before scanning attacker-controlled integers, not after counting them.
+    decoder_reserve = len(raw) * (16 if codec in {"linear", "pic"} else 4)
+    if decoder_reserve > max_bytes:
+        raise security.FileSizeExceededError(
+            "MS-Numpress decoding exceeds the configured byte limit."
+        )
     if codec == "pic":
         count = _numpress_integer_count(raw, offset=0)
     elif codec == "linear":
@@ -375,7 +405,7 @@ def _validate_numpress(raw: bytes, *, codec: str, max_bytes: int) -> int:
         elif len(raw) == 12:
             count = 1
         elif len(raw) >= 16:
-            count = 2 + _numpress_integer_count(raw, offset=16)
+            count = 2 + _numpress_integer_count(raw, offset=16, linear=True)
         else:
             raise MalformedFileError("Malformed MS-Numpress linear header or values.")
     else:
@@ -383,11 +413,7 @@ def _validate_numpress(raw: bytes, *, codec: str, max_bytes: int) -> int:
             raise MalformedFileError("Malformed MS-Numpress SLOF payload length.")
         count = (len(raw) - 8) // 2
 
-    byte_budget = max_bytes
-    # pynumpress 0.1.5's vector wrappers reserve up to two doubles per encoded
-    # byte for linear/PIC and one double per two encoded bytes for SLOF.
-    decoder_reserve = len(raw) * (16 if codec in {"linear", "pic"} else 4)
-    if max(count * np.dtype(np.float64).itemsize, decoder_reserve) > byte_budget:
+    if count * np.dtype(np.float64).itemsize > max_bytes:
         raise security.FileSizeExceededError(
             "MS-Numpress decoding exceeds the configured byte limit."
         )
@@ -425,29 +451,37 @@ def _decode_binary(
         if codec.endswith("-zlib"):
             codec = codec.removesuffix("-zlib")
         clean = "".join(text.split())
+        if byte_budget <= 0 or len(clean) > 4 * ((byte_budget + 2) // 3):
+            raise security.FileSizeExceededError(
+                "MS-Numpress encoded input exceeds the configured byte limit."
+            )
         try:
             raw = base64.b64decode(clean, validate=True)
         except (binascii.Error, ValueError) as exc:
             raise MalformedFileError(
                 "mzML <binary> payload is not valid base64."
             ) from exc
+        if len(raw) > byte_budget:
+            raise security.FileSizeExceededError(
+                "MS-Numpress encoded input exceeds the configured byte limit."
+            )
         if compression.endswith("-zlib"):
             raw = _zlib_decompress_bounded(raw, byte_budget)
         count = _validate_numpress(raw, codec=codec, max_bytes=byte_budget)
         if count == 0:
             return _empty_array()
-        if codec == "linear" and count == 1:
-            fixed_point = struct.unpack(">d", raw[:8])[0]
-            decoded = np.array([struct.unpack("<I", raw[8:12])[0] / fixed_point])
-        else:
-            try:
+        try:
+            if codec == "linear" and count == 1:
+                fixed_point = struct.unpack(">d", raw[:8])[0]
+                decoded = np.array([struct.unpack("<I", raw[8:12])[0] / fixed_point])
+            else:
                 decoded = getattr(decoder, f"decode_{codec}")(raw)
-            except (OverflowError, RuntimeError, ValueError) as exc:
-                raise MalformedFileError(
-                    "MS-Numpress decoder rejected the encoded values."
-                ) from exc
-        array = np.asarray(decoded, dtype=np.float64)
-        if array.size != count or not np.all(np.isfinite(array)):
+            array = np.asarray(decoded, dtype=np.float64)
+        except (OverflowError, RuntimeError, TypeError, ValueError) as exc:
+            raise MalformedFileError(
+                "MS-Numpress decoder rejected the encoded values."
+            ) from exc
+        if array.ndim != 1 or array.size != count or not np.all(np.isfinite(array)):
             raise MalformedFileError("MS-Numpress decoder returned invalid values.")
         array.setflags(write=False)
         return array
@@ -520,6 +554,8 @@ def _parse_binary_data_array(
         )
     kind = "mz" if is_mz else "intensity"
 
+    if {_ACC_32BIT_FLOAT, _ACC_64BIT_FLOAT} <= accessions:
+        raise MalformedFileError("A binaryDataArray has conflicting float precisions.")
     if _ACC_64BIT_FLOAT in accessions:
         precision = "64"
     elif _ACC_32BIT_FLOAT in accessions:
@@ -532,8 +568,13 @@ def _parse_binary_data_array(
         raise MalformedFileError(
             "A binaryDataArray has conflicting MS-Numpress codecs."
         )
+    if _ACC_NO_COMPRESSION in accessions and (
+        numpress_accessions or _ACC_ZLIB_COMPRESSION in accessions
+    ):
+        raise MalformedFileError("A binaryDataArray has conflicting compression terms.")
     if numpress_accessions:
         codec, with_zlib = _NUMPRESS_CODECS[next(iter(numpress_accessions))]
+        with_zlib = with_zlib or _ACC_ZLIB_COMPRESSION in accessions
         compression = f"numpress-{codec}" + ("-zlib" if with_zlib else "")
     elif _ACC_ZLIB_COMPRESSION in accessions:
         compression = "zlib"
@@ -726,8 +767,14 @@ def _parse_spectrum(elem: ET.Element, *, max_bytes: int | None = None) -> Spectr
             binary_data_array, declared_length=declared_length, max_bytes=max_bytes
         )
         if kind == "mz":
+            if mz is not None:
+                raise MalformedFileError("A spectrum has duplicate m/z binary arrays.")
             mz = arr
         elif kind == "intensity":
+            if intensity is not None:
+                raise MalformedFileError(
+                    "A spectrum has duplicate intensity binary arrays."
+                )
             intensity = arr
 
     if mz is None or intensity is None:

@@ -431,7 +431,15 @@ Two imaging-backend behaviours are worth knowing; the import is lazy and neither
 - Importing MassFlow's data manager **reconfigures the root logger to write to stdout**, which would corrupt the stdio JSON-RPC framing. `massflow_io` repoints those handlers at stderr on import, and a test asserts that no handler in the process targets stdout after a read.
 - The same import **creates a `logs/` directory** in the working directory. That is library behaviour MSMCP cannot suppress; it is gitignored and documented rather than hidden.
 
-MS-Numpress linear, positive integer (PIC), and short logged float (SLOF) arrays are decoded with the optional `pynumpress` package. Install it with `uv sync --extra numpress`; Numpress followed by zlib compression is supported too. Without the extra, the reader raises `MissingDependencyError`. Structural checks and allocation bounds run before native decoding; malformed data is reported as `MalformedFileError`.
+MS-Numpress linear, positive integer (PIC), and short logged float (SLOF) arrays
+are decoded with the optional `pynumpress` package. Install it with `uv sync
+--extra numpress`; Numpress followed by zlib compression is supported too.
+Without the extra, the reader raises `MissingDependencyError`. Structural checks
+and allocation bounds run before native decoding, including a Python
+reconstruction of linear's signed 64-bit predictor, which a long stream of
+individually valid residuals can otherwise overflow; malformed data is reported
+as `MalformedFileError`. See [docs/numpress-qualification.md](docs/numpress-
+qualification.md) for the qualification evidence and the opt-in native probe.
 
 The mzML reader normalizes scan start times to minutes from an explicit second or minute unit (`unitAccession` or `unitName`) and retains the source value and unit on each parsed spectrum. It refuses absent, unsupported, or contradictory scan-time units and unequal decoded m/z and intensity arrays. A disagreement between paired decoded arrays and `defaultArrayLength` remains a warning.
 
