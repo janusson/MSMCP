@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **A reproducible workflow example, installation to interpretation.**
+  `examples/workflow/` downloads the pinned MassBank `2026.03` release, verifies
+  its SHA-256 before reading it, and derives a small deterministic subset with a
+  held-out measurement of a compound whose other measurements stay in the
+  library. `run_workflow.py` drives an installed server over stdio through QC, a
+  spectrum reference, a context-gated search and polling, and `INTERPRETATION.md`
+  explains what the resulting report does and does not license. The dataset is
+  never committed; the derived files are gitignored.
+
 ### Dependency isolation
 
 - Move the lowercase imaging `massflow` distribution out of core dependencies
