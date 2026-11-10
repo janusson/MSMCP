@@ -127,6 +127,44 @@ class TestMalformedInput:
         with pytest.raises(MalformedFileError, match="no peak lines"):
             list(iter_spectra(path))
 
+    def test_non_utf8_bytes_are_reported_not_raised_raw(self, tmp_path: Path) -> None:
+        """A Latin-1 title must not escape as UnicodeDecodeError.
+
+        Some vendor exports are not UTF-8.  The bytes are still refused — the
+        text is never silently re-decoded, which would change the metadata the
+        report quotes — but the refusal is a MalformedFileError that names the
+        encoding, not an internal error the caller only sees as a failed job.
+        """
+        path = tmp_path / "latin1.mgf"
+        path.write_bytes(b"BEGIN IONS\nTITLE=Caf\xe9\n120.0 1.0\nEND IONS\n")
+        with pytest.raises(MalformedFileError, match="not valid utf-8 text"):
+            list(iter_spectra(path))
+        with pytest.raises(MalformedFileError, match="not valid utf-8 text"):
+            declared_spectrum_count(path)
+
+    def test_truncated_gzip_is_reported_as_malformed(self, tmp_path: Path) -> None:
+        """A gzip payload that ends early must not escape as EOFError."""
+        import gzip
+
+        path = tmp_path / "truncated.mgf.gz"
+        payload = gzip.compress(b"BEGIN IONS\n120.0 1.0\nEND IONS\n" * 32)
+        path.write_bytes(payload[: len(payload) // 2])
+        with pytest.raises(MalformedFileError, match="corrupt or truncated"):
+            list(iter_spectra(path))
+        with pytest.raises(MalformedFileError, match="corrupt or truncated"):
+            declared_spectrum_count(path)
+
+    def test_corrupt_gzip_crc_is_reported_as_malformed(self, tmp_path: Path) -> None:
+        """A CRC mismatch is the caller's data being wrong, not an internal bug."""
+        import gzip
+
+        path = tmp_path / "bad_crc.mgf.gz"
+        payload = bytearray(gzip.compress(b"BEGIN IONS\n120.0 1.0\nEND IONS\n"))
+        payload[-6] ^= 0xFF  # last four bytes are the CRC32
+        path.write_bytes(bytes(payload))
+        with pytest.raises(MalformedFileError, match="corrupt or truncated"):
+            list(iter_spectra(path))
+
 
 class TestPathBoundary:
     def test_resolves_a_valid_path(self, valid_mgf: Path) -> None:
