@@ -7,8 +7,8 @@
 
 .PHONY: install format lint test eval run repomix all validate-similarity interop-check validate-installed
 
-install:            ## Create/update the virtualenv and sync all deps (incl. dev extras)
-	uv sync --extra dev
+install:            ## Sync the virtualenv to uv.lock exactly (incl. dev extras)
+	uv sync --extra dev --locked
 
 format: install     ## Auto-format code and apply safe fixes (ruff)
 	uv run ruff format .
