@@ -287,6 +287,11 @@ class EmbeddingScorer(SpectrumScorer):
     :meth:`score_many` embeds the query **once** and reuses it across references.
     That is not a micro-optimisation: without it the null model would run the
     model 40x the library size times per search, for a single query.
+
+    A learned backend may emit signed vectors, yielding a negative (legitimate)
+    raw cosine. Library search rejects that result under its current [0, 1]
+    scorer contract. Do not silently remap it here: signed-score semantics
+    require an explicit scientific policy decision.
     """
 
     def __init__(self, method: str, tolerance: float = DEFAULT_TOLERANCE) -> None:
