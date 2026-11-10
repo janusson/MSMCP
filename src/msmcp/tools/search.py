@@ -977,6 +977,12 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                     exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
                     continue
                 score = scorer.score(exp_peaks, spec["peaks"])
+                if not 0.0 <= score <= 1.0:
+                    raise MsmcpError(
+                        f"{scoring_method} scorer returned invalid similarity score "
+                        f"{score!r}; expected a finite value in [0, 1]. "
+                        "Check the scoring backend and input spectra before retrying."
+                    )
                 target_meta.append(
                     {
                         "id": spec["id"],
