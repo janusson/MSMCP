@@ -7,6 +7,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security
+
+- **File-derived text is escaped before it reaches a report.** Compound names,
+  formulas, source paths and digests from caller-supplied mzML/MGF/MSP files now
+  pass through `msmcp.reporting` (`escape_inline`, `escape_table_cell`,
+  `fenced_code`) instead of being interpolated raw, so a hostile file cannot
+  inject Markdown structure or instructions into the report an LLM host reads.
+  Screen-style reports also carry `UNTRUSTED_DATA_NOTE`. See
+  `skills/untrusted-report-text/`. The rendering rule is now part of
+  `AGENTS.md`.
+- **Malformed input can no longer surface as an internal fault.** A non-UTF-8
+  MGF/MSP and a truncated or CRC-corrupt `.gz` mzML/MGF now raise
+  `MalformedFileError` instead of leaking `UnicodeDecodeError`, `EOFError` or
+  `gzip.BadGzipFile` out of the parsers. Found by the new Hypothesis suite
+  (`tests/test_parser_robustness.py`); `security.open_text_stream` and
+  `security.malformed_stream_errors` are the shared fix.
+- **Failed search jobs report `Type: message`, not a traceback.** The full
+  diagnostic still goes to the server log; the client no longer receives
+  absolute paths and internal source structure.
+- **DreaMS is pinned to a commit.** The optional embedding backend installs
+  from source; the URL now carries `DREAMS_COMMIT`
+  (`dbec3a0b514a99e5056cfccde4559fda8cfe8129`) rather than a moving default
+  branch. `make install` syncs with `--locked`, and `.github/dependabot.yml`
+  plus an optional `detect-secrets` pre-commit hook close the supply-chain and
+  secret-scanning loops. `pip-audit` reports no advisories against the locked
+  set. Details in `SECURITY-REVIEW.md`.
+
 ### Added
 
 - **A reproducible workflow example, installation to interpretation.**

@@ -18,6 +18,7 @@ from msmcp.instruments import (
     InstrumentClass,
     get_profile,
 )
+from msmcp.reporting import UNTRUSTED_DATA_NOTE, escape_inline
 from msmcp.security import DEFAULT_POLICY
 
 logger = logging.getLogger("msmcp.tools.qc")
@@ -272,7 +273,7 @@ def register_tools(mcp: Any) -> None:
         header = [
             "## QC Summary Report",
             "",
-            f"**File:** `{file_path}`",
+            f"**File:** `{escape_inline(file_path)}`",
             f"**Format:** {source.format} (reader: `{source.backend}`)",
             f"**Spectra analysed:** {n_total:,}",
             coverage,
@@ -289,6 +290,8 @@ def register_tools(mcp: Any) -> None:
         report = "\n".join(
             [
                 *header,
+                UNTRUSTED_DATA_NOTE,
+                "",
                 _snr_report(snr_values, profile.snr_low, profile.snr_high),
                 "",
                 _peak_density_report(n_peaks_list),

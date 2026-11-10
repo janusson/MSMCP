@@ -19,13 +19,17 @@ overridden by the environment variables ``MSMCP_ALLOWED_ROOT``,
 
 from __future__ import annotations
 
+import gzip
 import io
 import os
+import zlib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, Final, cast
 
-from msmcp.errors import InaccessiblePathError, MsmcpError
+from msmcp.errors import InaccessiblePathError, MalformedFileError, MsmcpError
 
 __all__ = [
     "DEFAULT_MAX_FILE_SIZE_BYTES",
@@ -37,6 +41,8 @@ __all__ = [
     "SecurityPolicy",
     "SpectrumCountExceededError",
     "bounded_stream",
+    "malformed_stream_errors",
+    "open_text_stream",
     "resolve_path",
     "validate_file_size",
     "validate_readable_file",
@@ -328,3 +334,74 @@ def bounded_stream(stream: io.BufferedIOBase, max_bytes: int) -> io.BufferedIOBa
     if max_bytes <= 0:
         return stream
     return _BoundedStream(stream, max_bytes)
+
+
+# ---------------------------------------------------------------------------
+# Text streams and malformed-input translation
+# ---------------------------------------------------------------------------
+GZIP_MAGIC: Final[bytes] = b"\x1f\x8b"
+
+TEXT_ENCODING: Final[str] = "utf-8"
+
+
+def open_text_stream(path: str | Path, *, max_bytes: int | None = None) -> IO[str]:
+    """Open *path* as UTF-8 text, transparently handling gzip.
+
+    The encoding is pinned rather than left to the locale, so the same bytes
+    decode to the same text on every machine.  Decoding is strict: a byte that
+    is not valid UTF-8 is reported (see :func:`malformed_stream_errors`) instead
+    of being replaced, because substituting characters would silently alter the
+    metadata written into a report.
+
+    A gzip payload is bounded by its *decompressed* size, not only by the bytes
+    on disk (see :func:`bounded_stream`).  *max_bytes* is the ceiling in force
+    for *path* — the policy it was resolved through — and ``None`` means the
+    process boundary's default, read at call time so a substituted policy takes
+    effect.
+    """
+    resolved = Path(path)
+    ceiling = DEFAULT_POLICY.max_file_size_bytes if max_bytes is None else max_bytes
+    handle = resolved.open("rb")
+    magic = handle.read(2)
+    handle.seek(0)
+    if magic == GZIP_MAGIC:
+        buffered = gzip.GzipFile(fileobj=handle)
+        bounded = bounded_stream(buffered, ceiling)
+        return io.TextIOWrapper(
+            cast(IO[bytes], bounded), encoding=TEXT_ENCODING, errors="strict"
+        )
+    return io.TextIOWrapper(handle, encoding=TEXT_ENCODING, errors="strict")
+
+
+@contextmanager
+def malformed_stream_errors(path: str | Path) -> Iterator[None]:
+    """Report low-level read failures as :class:`MalformedFileError`.
+
+    Decompression and decoding happen while a parser is iterating, and the
+    exceptions they raise are not part of the MSMCP error hierarchy:
+    ``gzip.BadGzipFile`` (bad header, CRC or length mismatch), ``EOFError``
+    (truncated stream), ``zlib.error`` (corrupt deflate data) and
+    ``UnicodeDecodeError`` (bytes that are not UTF-8).  Left uncaught, each
+    reaches the job executor as an internal failure the caller can only see as
+    "see the server log", even though the cause is entirely in the caller's
+    file.
+
+    They all mean the same thing — the content is not what the format requires
+    — so they are re-raised as :class:`MalformedFileError`, naming the file.
+    Boundary errors such as :class:`FileSizeExceededError` are left alone: a
+    file that is too large is not a malformed one.
+
+    Use it around the whole read loop, not around the open call: the failure
+    surfaces when the bytes are consumed.
+    """
+    try:
+        yield
+    except UnicodeDecodeError as exc:
+        raise MalformedFileError(
+            f"{Path(path)} is not valid {TEXT_ENCODING} text: {exc.reason} at "
+            f"byte offset {exc.start}."
+        ) from exc
+    except (gzip.BadGzipFile, EOFError, zlib.error) as exc:
+        raise MalformedFileError(
+            f"{Path(path)} is corrupt or truncated: {exc}"
+        ) from exc

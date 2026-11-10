@@ -25,11 +25,9 @@ Understood fields, all optional except the peak lines themselves:
 
 from __future__ import annotations
 
-import gzip
-import io
 from collections.abc import Iterator
 from pathlib import Path
-from typing import IO, Final, cast
+from typing import Final
 
 import numpy as np
 
@@ -71,24 +69,6 @@ def resolve_mgf_path(
     security.validate_readable_file(resolved)
     validate_file_size(resolved, policy)  # FileSizeExceededError
     return resolved
-
-
-def _open_text(path: Path) -> IO[str]:
-    """Open *path* as text, transparently handling gzip.
-
-    A gzip payload is bounded by its *decompressed* size, not only by the bytes
-    on disk (see :func:`msmcp.security.bounded_stream`).
-    """
-    handle = path.open("rb")
-    magic = handle.read(2)
-    handle.seek(0)
-    if magic == b"\x1f\x8b":
-        buffered = gzip.GzipFile(fileobj=handle)
-        bounded = security.bounded_stream(
-            buffered, security.DEFAULT_POLICY.max_file_size_bytes
-        )
-        return io.TextIOWrapper(cast(IO[bytes], bounded))
-    return io.TextIOWrapper(handle)
 
 
 def _to_float_or_none(raw: str | None) -> float | None:
@@ -198,60 +178,63 @@ def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
     Raises
     ------
     MalformedFileError
-        A block is opened but never closed, or a peak line does not parse.
+        A block is opened but never closed, a peak line does not parse, the
+        bytes are not valid UTF-8 text, or a ``.gz`` payload is corrupt or
+        truncated.
     """
     resolved = Path(path)
-    handle = _open_text(resolved)
+    handle = security.open_text_stream(resolved)
     index = 0
     try:
-        fields: dict[str, str] = {}
-        peaks: list[tuple[float, float]] = []
-        inside = False
+        with security.malformed_stream_errors(resolved):
+            fields: dict[str, str] = {}
+            peaks: list[tuple[float, float]] = []
+            inside = False
 
-        for line_number, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line or line.startswith(("#", ";", "!")):
-                continue
+            for line_number, raw_line in enumerate(handle, start=1):
+                line = raw_line.strip()
+                if not line or line.startswith(("#", ";", "!")):
+                    continue
 
-            upper = line.upper()
-            if upper == _BEGIN:
-                if inside:
-                    raise MalformedFileError(
-                        f"MGF block at line {line_number} starts before the "
-                        f"previous block was closed with '{_END}'."
-                    )
-                inside = True
-                fields = {}
-                peaks = []
-                continue
+                upper = line.upper()
+                if upper == _BEGIN:
+                    if inside:
+                        raise MalformedFileError(
+                            f"MGF block at line {line_number} starts before the "
+                            f"previous block was closed with '{_END}'."
+                        )
+                    inside = True
+                    fields = {}
+                    peaks = []
+                    continue
 
-            if upper == _END:
+                if upper == _END:
+                    if not inside:
+                        raise MalformedFileError(
+                            f"MGF file has an '{_END}' at line {line_number} with "
+                            f"no matching '{_BEGIN}'."
+                        )
+                    yield _build_spectrum(index, fields, peaks)
+                    index += 1
+                    inside = False
+                    fields = {}
+                    peaks = []
+                    continue
+
                 if not inside:
-                    raise MalformedFileError(
-                        f"MGF file has an '{_END}' at line {line_number} with "
-                        f"no matching '{_BEGIN}'."
-                    )
-                yield _build_spectrum(index, fields, peaks)
-                index += 1
-                inside = False
-                fields = {}
-                peaks = []
-                continue
+                    # Preamble before the first block is legal MGF; ignore it.
+                    continue
 
-            if not inside:
-                # Preamble before the first block is legal MGF; ignore it.
-                continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    fields[key.strip().upper()] = value.strip()
+                else:
+                    peaks.append(_parse_peak_line(line, line_number))
 
-            if "=" in line:
-                key, _, value = line.partition("=")
-                fields[key.strip().upper()] = value.strip()
-            else:
-                peaks.append(_parse_peak_line(line, line_number))
-
-        if inside:
-            raise MalformedFileError(
-                f"MGF file ends inside an unclosed '{_BEGIN}' block."
-            )
+            if inside:
+                raise MalformedFileError(
+                    f"MGF file ends inside an unclosed '{_BEGIN}' block."
+                )
     finally:
         handle.close()
 
@@ -263,12 +246,13 @@ def declared_spectrum_count(path: str | Path) -> int:
     exists so callers can report truthful totals before summarising a subset.
     """
     resolved = Path(path)
-    handle = _open_text(resolved)
+    handle = security.open_text_stream(resolved)
     count = 0
     try:
-        for raw_line in handle:
-            if raw_line.strip().upper() == _BEGIN:
-                count += 1
+        with security.malformed_stream_errors(resolved):
+            for raw_line in handle:
+                if raw_line.strip().upper() == _BEGIN:
+                    count += 1
     finally:
         handle.close()
     return count

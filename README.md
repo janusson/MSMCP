@@ -196,7 +196,7 @@ Prerequisites: [uv](https://docs.astral.sh/uv/) and Python 3.13 (managed automat
 ```bash
 # 1. Clone and sync (creates the venv, installs runtime + dev dependencies)
 git clone <repository-url> msmcp && cd msmcp
-uv sync --extra dev
+uv sync --extra dev --locked   # --locked fails rather than silently re-resolving
 
 # 2. Launch the server on stdio, then connect a host (see the next section).
 #    The remaining commands are the same local gate CI runs.
@@ -249,7 +249,7 @@ reported as a library match.
 
 | Task | Command |
 |---|---|
-| Sync environment | `uv sync --extra dev` |
+| Sync environment | `uv sync --extra dev --locked` |
 | Format | `uv run ruff format .` |
 | Lint | `uv run ruff format --check .` · `uv run ruff check .` · `uv run mypy` · `uv run basedpyright` |
 | Test | `uv run pytest` |
@@ -259,7 +259,9 @@ reported as a library match.
 
 The `Makefile` wraps these into one pipeline: `make lint`, `make test`, `make eval`, and `make all` (sync → format → lint → unit tests → evaluation notebook → repomix pack). Every target depends on `install`, so `make all` works from a fresh clone without a separate sync step. `make test` deliberately omits the evaluation notebook — that is `make eval` — to keep the inner loop at a few seconds.
 
-Re-run `uv sync --extra dev` after changing `pyproject.toml`. The optional `repomix` pack (Node-based) is run as `repomix --style xml --output repomix-output.xml`.
+Two optional layers are maintained alongside the gate: `.github/dependabot.yml` opens weekly lockfile and GitHub Actions updates (and delivers security advisories), and `.pre-commit-config.yaml` runs `detect-secrets` on commit if you install it with `uvx pre-commit install`. Ad-hoc vulnerability scanning of the resolved environment is `uvx pip-audit --path .venv/lib/python3.*/site-packages`.
+
+Re-run `uv sync --extra dev` (without `--locked`) after changing `pyproject.toml`; that regenerates `uv.lock`, which is committed and is what CI and `make install` sync to. The optional `repomix` pack (Node-based) is run as `repomix --style xml --output repomix-output.xml`.
 
 ## Container image (pre-release packaging)
 
