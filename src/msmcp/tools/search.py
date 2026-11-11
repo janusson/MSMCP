@@ -70,6 +70,7 @@ from msmcp.models.scoring import (
 )
 from msmcp.mzml import Spectrum
 from msmcp.provenance import ModelInfo, Provenance, SourceRef, provenance_for
+from msmcp.reporting import UNTRUSTED_DATA_NOTE, escape_inline, escape_table_cell
 from msmcp.state import store as reference_store
 from msmcp.state.pointers import ReferenceKindError
 
@@ -1030,15 +1031,17 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
         hits = sorted(target_meta, key=lambda h: h["score"], reverse=True)
         top_n = min(len(hits), 20)
         lines = _report_banner(request, database_file, n_spectra, library_info)
+        lines.extend(["", UNTRUSTED_DATA_NOTE, ""])
 
         if request.spectrum_reference:
             query_line = (
-                f"Query spectrum: reference `{request.spectrum_reference}` "
+                f"Query spectrum: reference "
+                f"`{escape_inline(request.spectrum_reference)}` "
                 f"({len(exp_peaks)} real peaks, held server-side)"
             )
         else:
             query_line = (
-                f"Query spectrum: `{request.experimental_file}` "
+                f"Query spectrum: `{escape_inline(request.experimental_file)}` "
                 f"({len(exp_peaks)} real peaks, read from disk)"
             )
         lines.append(query_line)
@@ -1131,7 +1134,7 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             )
             for i, h in enumerate(hits[:top_n], start=1):
                 lines.append(
-                    f"| {i} | {h['compound_name']} | {h['score']:.4f} | "
+                    f"| {i} | {escape_table_cell(h['compound_name'])} | {h['score']:.4f} | "
                     f"{_cell_precursor(h['precursor_mz'])} | "
                     f"{_cell_formula(h['formula'])} | "
                     f"{_cell_polarity(h.get('polarity'), context.polarity)} | "
@@ -1168,17 +1171,17 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             lines.append(
                 f"*Provenance: {provenance.operation}, method "
                 f"`{scoring_method}`; query source "
-                f"`{request.spectrum_reference or request.experimental_file}`.  "
+                f"`{escape_inline(request.spectrum_reference or request.experimental_file)}`.  "
                 f"Library: {library_info.format} read from disk "
-                f"({n_spectra:,} spectra), `{database_file}`.*"
+                f"({n_spectra:,} spectra), `{escape_inline(database_file)}`.*"
             )
         else:
             lines.append(
                 f"*Provenance: {provenance.operation}, method "
                 f"`{scoring_method}`; query source "
-                f"`{request.spectrum_reference or request.experimental_file}`.  "
+                f"`{escape_inline(request.spectrum_reference or request.experimental_file)}`.  "
                 f"Library: synthetic ({n_spectra:,} spectra), not read from "
-                f"`{database_file}`.*"
+                f"`{escape_inline(database_file)}`.*"
             )
 
         logger.info(
@@ -1234,7 +1237,9 @@ def _report_banner(
     query is real in both cases and the banner never claims otherwise.
     """
     if library_info is not None:
-        digest = library_info.digest or "not computed (file exceeds the digest limit)"
+        digest = escape_inline(
+            library_info.digest or "not computed (file exceeds the digest limit)"
+        )
         return [
             "> ✅  **REAL LIBRARY — READ FROM DISK.**",
             ">",
@@ -1247,8 +1252,9 @@ def _report_banner(
             "",
             "## Spectral Library Search Results",
             "",
-            f"Requested database: `{database_file}` — {library_info.format} "
-            f"library read from disk ({n_spectra:,} spectra)",
+            f"Requested database: `{escape_inline(database_file)}` — "
+            f"{library_info.format} library read from disk "
+            f"({n_spectra:,} spectra)",
         ]
     return [
         "> ⚠️  **SYNTHETIC LIBRARY — NOT A COMPOUND IDENTIFICATION.**",
@@ -1263,7 +1269,7 @@ def _report_banner(
         "",
         "## Spectral Library Search Results",
         "",
-        f"Requested database: `{database_file}` — not opened "
+        f"Requested database: `{escape_inline(database_file)}` — not opened "
         f"(unsupported library format; substituted a synthetic library of "
         f"{n_spectra:,} spectra)",
     ]
@@ -1401,8 +1407,12 @@ def _claim_report(job_id: str) -> bool:
 
 
 def _cell_formula(value: Any) -> str:
-    """Render a formula cell, using an em dash when the library had none."""
-    return str(value) if value else "—"
+    """Render a formula cell, using an em dash when the library had none.
+
+    The value came from the library file, so it is escaped as a table cell
+    rather than interpolated into the Markdown row verbatim.
+    """
+    return escape_table_cell(value) if value else "—"
 
 
 def _cell_precursor(value: Any) -> str:
@@ -1463,11 +1473,12 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
     """
     if summary.top_compound is not None and summary.top_score is not None:
         label = "q" if summary.mode == "FDR" else "p"
+        compound = escape_inline(summary.top_compound)
         top = (
-            f"`{summary.top_compound}`, score {summary.top_score:.4f}"
+            f"`{compound}`, score {summary.top_score:.4f}"
             f" ({label} = {summary.top_significance:.4f})"
             if summary.top_significance is not None
-            else f"`{summary.top_compound}`, score {summary.top_score:.4f}"
+            else f"`{compound}`, score {summary.top_score:.4f}"
         )
     else:
         top = "no library candidates"
@@ -1894,9 +1905,15 @@ def register_tools(mcp: Any) -> None:
 
         if outcome.status == "failed":
             logger.info("check_search_status(%s): reporting failure", job_id)
+            # The traceback is kept for the server's stderr log only: it
+            # contains absolute paths, interpreter details and internal source
+            # lines that a client does not need (see the security review).
+            detail = escape_inline(outcome.error or "unknown error")
             return (
                 f"❌ **Failed** — search job `{job_id}` failed:\n\n"
-                f"```\n{outcome.traceback}\n```"
+                f"`{detail}`\n\n"
+                f"The full diagnostic, including the traceback, was written to "
+                f"the server's log."
             )
 
         logger.info("check_search_status(%s): reporting cancellation", job_id)

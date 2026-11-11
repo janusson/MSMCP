@@ -27,6 +27,7 @@ imaging = [
     "massflow>=0.1.2,<0.2",
 ]
 test = [
+    "hypothesis>=6.100",
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
 ]

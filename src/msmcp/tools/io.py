@@ -33,6 +33,7 @@ from msmcp.errors import SpectrumIndexError
 from msmcp.mzml import declared_spectrum_count, resolve_mzml_path
 from msmcp.mzml import iter_spectra as iter_mzml_spectra
 from msmcp.provenance import SourceRef, provenance_for
+from msmcp.reporting import UNTRUSTED_DATA_NOTE, escape_inline
 from msmcp.security import (
     DEFAULT_POLICY,
     SpectrumCountExceededError,
@@ -306,9 +307,10 @@ def register_tools(mcp: Any) -> None:
 
         total = declared_spectrum_count(resolved_path)
         header = [
-            f"File: {os.path.basename(file_path)}",
+            f"File: {escape_inline(os.path.basename(file_path))}",
             "Format: MZML  (reader: msmcp.mzml)",
             "-" * 50,
+            UNTRUSTED_DATA_NOTE,
         ]
 
         body: list[str] = []
@@ -456,7 +458,7 @@ def register_tools(mcp: Any) -> None:
         lines = [
             "## Spectrum Index",
             "",
-            f"**File:** `{os.path.basename(file_path)}`",
+            f"**File:** `{escape_inline(os.path.basename(file_path))}`",
             f"**Format:** {source.format}  (reader: `{source.backend}`)",
             f"**Filter:** {filter_desc}",
             listed,

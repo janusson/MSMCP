@@ -30,6 +30,7 @@ from msmcp.instruments import (
 )
 from msmcp.models import EmbeddingBackendUnavailable, get_embedder
 from msmcp.models.scoring import _validate_peak_list as _validate_score_peak_list
+from msmcp.reporting import UNTRUSTED_DATA_NOTE, escape_inline
 from msmcp.state import store as reference_store
 
 logger = logging.getLogger("msmcp.tools.similarity")
@@ -126,7 +127,7 @@ def _peaks_from_reference(reference: str) -> list[list[float]]:
 def _source_label(inline: list[list[float]] | None, reference: str | None) -> str:
     """Name where one side's peaks came from, for the response body."""
     if reference is not None:
-        return f"reference `{reference}` (peaks held server-side)"
+        return f"reference `{escape_inline(reference)}` (peaks held server-side)"
     count = len(inline) if inline else 0
     return f"inline peak list ({count} {'peak' if count == 1 else 'peaks'})"
 
@@ -308,6 +309,7 @@ def _embedding_score(
         f"({embedder.embedding_dim}-d, L2-normalised, {backend_label})\n"
         f"Query peaks: {n_query} | Reference peaks: {n_ref}\n"
         f"{source_block}"
+        f"{UNTRUSTED_DATA_NOTE}\n"
         "\n"
         "Similarity is computed in embedding space: whole-spectrum\n"
         "fragmentation patterns are compared rather than individual\n"
@@ -670,6 +672,7 @@ def register_tools(mcp: Any) -> None:
             "",
             "Scoring method: classical (greedy peak matching)",
             *source_lines,
+            UNTRUSTED_DATA_NOTE,
             f"Matched: {n_matched} / {n_query} query peaks ({pct_matched:.1f}%)",
             f"Reference peaks utilised: {n_ref_used} / {n_ref} ({pct_ref_used:.1f}%)",
             f"MS/MS tolerance: ±{tolerance:.3f} Da ({tolerance_source})",

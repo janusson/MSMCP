@@ -52,6 +52,17 @@ Hermes call this server's tools, register it under `mcp_servers` in
 - Do not invent mzML metadata.
 - Validate external data at boundaries.
 
+## Report rendering
+
+Tool reports are Markdown read by an LLM host, so any value that came out of a
+file the caller supplied — compound names, formulas, paths, digests — is
+untrusted text. Route it through `msmcp.reporting` before it enters a report:
+`escape_inline` outside tables, `escape_table_cell` inside them, and
+`fenced_code` for any block whose payload contains newlines. Screen-style
+reports also carry `UNTRUSTED_DATA_NOTE`. `skills/untrusted-report-text/` has
+the detail; the short version is that a raw f-string is only safe when every
+interpolated value is a constant, a number you formatted, or an enum.
+
 ## Workflow
 - Inspect existing implementation before editing.
 - Run relevant tests after modifications.

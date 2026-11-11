@@ -7,20 +7,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Changed
+### Security
 
-- **An unreadable library path is refused, not answered from a fabricated
-  library.** `search_library` substituted a deterministic synthetic library
-  whenever no reader understood `database_file`. The banner disclosed it, but a
-  fabricated hit table is still a fabricated hit table, and a real library in an
-  unsupported format is the likeliest way to meet one. The synthetic library is
-  now demonstration-only: set `MSMCP_LIBRARY_FALLBACK=synthetic` (default
-  `refuse`), the same rule as `MSMCP_EMBEDDING_BACKEND=mock`. The refusal is a
-  deliberate tool error naming the supported formats and the flag, so the caller
-  reads the fix instead of a generic execution failure. When the demonstration
-  library is used, the report banner and the provenance both record it.
-  **Behaviour change:** a path in an unsupported format that previously returned
-  a report now fails.
+- **File-derived text is escaped before it reaches a report.** Compound names,
+  formulas, source paths and digests from caller-supplied mzML/MGF/MSP files now
+  pass through `msmcp.reporting` (`escape_inline`, `escape_table_cell`,
+  `fenced_code`) instead of being interpolated raw, so a hostile file cannot
+  inject Markdown structure or instructions into the report an LLM host reads.
+  Screen-style reports also carry `UNTRUSTED_DATA_NOTE`. See
+  `skills/untrusted-report-text/`. The rendering rule is now part of
+  `AGENTS.md`.
+- **Malformed input can no longer surface as an internal fault.** A non-UTF-8
+  MGF/MSP and a truncated or CRC-corrupt `.gz` mzML/MGF now raise
+  `MalformedFileError` instead of leaking `UnicodeDecodeError`, `EOFError` or
+  `gzip.BadGzipFile` out of the parsers. Found by the new Hypothesis suite
+  (`tests/test_parser_robustness.py`); `security.open_text_stream` and
+  `security.malformed_stream_errors` are the shared fix.
+- **Failed search jobs report `Type: message`, not a traceback.** The full
+  diagnostic still goes to the server log; the client no longer receives
+  absolute paths and internal source structure.
+- **DreaMS is pinned to a commit.** The optional embedding backend installs
+  from source; the URL now carries `DREAMS_COMMIT`
+  (`dbec3a0b514a99e5056cfccde4559fda8cfe8129`) rather than a moving default
+  branch. `make install` syncs with `--locked`, and `.github/dependabot.yml`
+  plus an optional `detect-secrets` pre-commit hook close the supply-chain and
+  secret-scanning loops. `pip-audit` reports no advisories against the locked
+  set. Details in `SECURITY-REVIEW.md`.
 
 ### Added
 
@@ -35,6 +47,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **An unreadable library path is refused, not answered from a fabricated
+  library.** `search_library` substituted a deterministic synthetic library
+  whenever no reader understood `database_file`. The banner disclosed it, but a
+  fabricated hit table is still a fabricated hit table, and a real library in an
+  unsupported format is the likeliest way to meet one. The synthetic library is
+  now demonstration-only: set `MSMCP_LIBRARY_FALLBACK=synthetic` (default
+  `refuse`), the same rule as `MSMCP_EMBEDDING_BACKEND=mock`. The refusal is a
+  deliberate tool error naming the supported formats and the flag, so the caller
+  reads the fix instead of a generic execution failure. When the demonstration
+  library is used, the report banner and the provenance both record it.
+  **Behaviour change:** a path in an unsupported format that previously returned
+  a report now fails.
 - **Seed the placeholder library from the file name, not the checkout path.**
   `_library_spec` now derives its `(n_spectra, seed)` from
   `Path(database_file).name`. The synthetic fallback never opens the file, so
