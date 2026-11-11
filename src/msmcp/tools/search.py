@@ -13,10 +13,12 @@ The **library** side is real whenever ``database_file`` names a format MSMCP can
 read: an MSP/NIST-style text or MGF library is resolved through the same
 :class:`~msmcp.security.SecurityPolicy` as acquisitions (allowed root, size
 limit, read-only) and searched for real — see :mod:`msmcp.library`.  A path with
-no reader falls back to a deterministic in-memory library seeded from the path
-string, and the report says *that* too: the banner always names which of the two
-paths produced the hits, because a plausible-looking hit table is the single
-most dangerous thing this server could emit.
+no reader is refused: a plausible-looking hit table from fabricated spectra is
+the single most dangerous thing this server could emit.  The deterministic
+in-memory library, seeded from the file name, is a demonstration reachable only
+through the exact opt-in ``MSMCP_LIBRARY_FALLBACK=synthetic``, and the report
+says *that* too: the banner always names which of the two paths produced the
+hits.
 
 The **query** spectrum is always real data: either read from disk through the
 ingestion layer, or dereferenced from the server-side reference store.  There
@@ -775,8 +777,8 @@ def _library_provider_for(database_file: str) -> LibraryProvider | None:
     A path whose suffix names a supported library format is resolved through the
     security boundary — allowed root (symlinks resolved), size limit, read-only
     — and any failure propagates rather than being papered over.  A path no
-    reader understands returns ``None``, and the scan uses the labelled synthetic
-    library instead.
+    reader understands returns ``None``; the caller then refuses it, or uses the
+    labelled synthetic library when that demonstration was opted into.
 
     The policy is looked up at call time (``security.DEFAULT_POLICY``) so a test
     or embedder can substitute one, matching how ingestion resolves its paths.
@@ -973,7 +975,8 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
 
     scorer = _build_scorer(scoring_method, ms2_tolerance_da)
     # A real library (MSP/NIST text or MGF) is read through the security boundary; a
-    # path with no reader falls back to the labelled synthetic library.
+    # path with no reader is refused unless the synthetic demonstration library
+    # was opted into.
     provider = _library_provider_for(database_file)
     if provider is None:
         _refuse_unsupported_library(database_file)
@@ -1587,8 +1590,9 @@ def register_tools(mcp: Any) -> None:
                 min_length=1,
                 description="Path to the spectral library.  MSP/NIST-style "
                 "text (.msp, .msp.gz) and MGF (.mgf, .mgf.gz) are read from disk through the security "
-                "boundary; any other path falls back to a labelled synthetic "
-                "library.",
+                "boundary; a path in an unsupported format is refused unless "
+                "the server runs with MSMCP_LIBRARY_FALLBACK=synthetic, which "
+                "substitutes a labelled synthetic demonstration library.",
             ),
         ],
         experimental_file: Annotated[
@@ -1768,8 +1772,8 @@ def register_tools(mcp: Any) -> None:
         # library an immediate tool error; the bounded parse probe does the same
         # for a file that is not the format its suffix claims, matching the
         # query path, which also reads its first spectrum here rather than
-        # inside the job.  A path with no reader returns None and the scan uses
-        # the labelled synthetic fallback.
+        # inside the job.  A path with no reader returns None; it was refused
+        # above unless the synthetic demonstration library was opted into.
         library_provider = _library_provider_for(validated.database_file)
         if library_provider is not None:
             library_provider.validate()

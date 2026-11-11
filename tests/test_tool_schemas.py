@@ -140,17 +140,22 @@ async def test_instructions_match_the_library_search_contract() -> None:
     A host reads ``instructions`` before any tool description, so a stale
     sentence here shapes the model's plan more than a tool doc does.  This pins
     the contract ``search_library`` already advertises — MSP/NIST text is read
-    for real, other paths are a labelled synthetic fallback — and fails if the
-    two drift apart again.  (An earlier build told the model the search was
-    *always* synthetic, which was false once the MSP reader landed.)
+    for real, a path with no reader is refused, and the synthetic library is a
+    demonstration reachable only by opting in — and fails if the two drift
+    apart again.  (An earlier build told the model the search was *always*
+    synthetic, which was false once the MSP reader landed; a later one told it
+    an unreadable path silently falls back, which is false now.)
     """
     text = (mcp.instructions or "").lower()
     assert "msp" in text
     assert "for real" in text
     assert "synthetic" in text
+    assert "refused" in text
+    assert "msmcp_library_fallback=synthetic" in text
     # The retired wording, kept as an explicit tripwire.
     assert "still scans a synthetic in-memory library" not in text
     assert "only the query spectrum can be real" not in text
+    assert "falls back" not in text
 
 
 async def test_tool_descriptions_do_not_leak_internals() -> None:
@@ -354,6 +359,13 @@ async def test_search_library_declares_when_its_library_is_real_or_synthetic() -
     # ...and the demonstration library is reachable only by opting in.
     assert "msmcp_library_fallback=synthetic" in description
     assert "never treat" in description
+    # The parameter description is what a host reads while filling in the
+    # argument, so it must not still promise the retired silent substitution.
+    database_file = tool.input_schema["properties"]["database_file"]
+    parameter = database_file["description"].lower()
+    assert "falls back" not in parameter
+    assert "refused" in parameter
+    assert "msmcp_library_fallback=synthetic" in parameter
 
 
 def test_search_report_carries_the_provenance_banner() -> None:
