@@ -723,7 +723,9 @@ ENV_LIBRARY_FALLBACK: Final = "MSMCP_LIBRARY_FALLBACK"
 ``refuse`` (the default) fails closed.  ``synthetic`` enables the labelled
 demonstration library, exactly as ``MSMCP_EMBEDDING_BACKEND=mock`` enables the
 mock embedders: a fabricated library that answers a real search is a scientific
-hazard, so it is never reached by accident.
+hazard, so it is never reached by accident.  Like that flag, the value is
+compared exactly — no case folding, no whitespace stripping — so anything
+other than the literal ``synthetic`` refuses.
 """
 
 LIBRARY_FALLBACK_REFUSE: Final = "refuse"
@@ -731,22 +733,39 @@ LIBRARY_FALLBACK_SYNTHETIC: Final = "synthetic"
 
 
 def synthetic_library_allowed() -> bool:
-    """Whether an unsupported library path may use the synthetic demo library."""
-    selected = os.environ.get(ENV_LIBRARY_FALLBACK, LIBRARY_FALLBACK_REFUSE)
-    return selected.strip().lower() == LIBRARY_FALLBACK_SYNTHETIC
+    """Whether an unsupported library path may use the synthetic demo library.
+
+    True only for the exact value ``synthetic``.  A near-miss (``Synthetic``,
+    ``synthetic `` with a trailing space, ``synth``) is not normalised into the
+    flag: a typo must never be able to enable a fabrication.
+    """
+    return os.environ.get(ENV_LIBRARY_FALLBACK) == LIBRARY_FALLBACK_SYNTHETIC
 
 
 def _refuse_unsupported_library(database_file: str) -> None:
-    """Raise unless the caller opted into the synthetic demonstration library."""
+    """Raise unless the caller opted into the synthetic demonstration library.
+
+    The message is surfaced verbatim to the host (see the ``ToolError`` at the
+    tool boundary), so the quoted file name is rendered as inert text.
+    """
     if synthetic_library_allowed():
         return
+    selected = os.environ.get(ENV_LIBRARY_FALLBACK, "")
+    # Set, but to something that is neither the default nor the flag: say so,
+    # or the reader who typed ``Synthetic`` is told only to set what they set.
+    not_honoured = (
+        f" {ENV_LIBRARY_FALLBACK} is set, but not to that exact value "
+        "(lowercase, no surrounding whitespace), so it was not honoured."
+        if selected not in ("", LIBRARY_FALLBACK_REFUSE)
+        else ""
+    )
     raise UnsupportedFormatError(
-        f"'{Path(database_file).name}' is not a spectral library MSMCP can read, "
-        "so the search was not run. MSMCP reads MSP/NIST text (.msp, .msp.gz), "
-        "MGF (.mgf, .mgf.gz) and SQLite (.sqlite, .db); a path in any other "
-        "format is refused rather than answered from a fabricated library. "
-        f"To run the labelled demonstration library on purpose, set "
-        f"{ENV_LIBRARY_FALLBACK}={LIBRARY_FALLBACK_SYNTHETIC}."
+        f"'{escape_inline(Path(database_file).name)}' is not a spectral library "
+        "MSMCP can read, so the search was not run. MSMCP reads MSP/NIST text "
+        "(.msp, .msp.gz), MGF (.mgf, .mgf.gz) and SQLite (.sqlite, .db); a path "
+        "in any other format is refused rather than answered from a fabricated "
+        "library. To run the labelled demonstration library on purpose, set "
+        f"{ENV_LIBRARY_FALLBACK}={LIBRARY_FALLBACK_SYNTHETIC}.{not_honoured}"
     )
 
 
