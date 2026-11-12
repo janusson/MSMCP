@@ -13,10 +13,12 @@ The **library** side is real whenever ``database_file`` names a format MSMCP can
 read: an MSP/NIST-style text or MGF library is resolved through the same
 :class:`~msmcp.security.SecurityPolicy` as acquisitions (allowed root, size
 limit, read-only) and searched for real — see :mod:`msmcp.library`.  A path with
-no reader falls back to a deterministic in-memory library seeded from the path
-string, and the report says *that* too: the banner always names which of the two
-paths produced the hits, because a plausible-looking hit table is the single
-most dangerous thing this server could emit.
+no reader is refused: a plausible-looking hit table from fabricated spectra is
+the single most dangerous thing this server could emit.  The deterministic
+in-memory library, seeded from the file name, is a demonstration reachable only
+through the exact opt-in ``MSMCP_LIBRARY_FALLBACK=synthetic``, and the report
+says *that* too: the banner always names which of the two paths produced the
+hits.
 
 The **query** spectrum is always real data: either read from disk through the
 ingestion layer, or dereferenced from the server-side reference store.  There
@@ -39,11 +41,12 @@ from pathlib import Path
 from typing import Annotated, Any, Final, Literal
 
 import numpy as np
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, model_validator
 
 from msmcp import ingest, library, security
-from msmcp.errors import MsmcpError, SpectrumIndexError
+from msmcp.errors import MsmcpError, SpectrumIndexError, UnsupportedFormatError
 from msmcp.execution import (
     JobStatusSnapshot,
     LocalAsyncExecutor,
@@ -716,14 +719,66 @@ def _library_spec(database_file: str) -> tuple[int, int]:
     return rng.randint(500, 5000), rng.randint(0, 2**31)
 
 
+ENV_LIBRARY_FALLBACK: Final = "MSMCP_LIBRARY_FALLBACK"
+"""Environment variable selecting what an unreadable library path does.
+
+``refuse`` (the default) fails closed.  ``synthetic`` enables the labelled
+demonstration library, exactly as ``MSMCP_EMBEDDING_BACKEND=mock`` enables the
+mock embedders: a fabricated library that answers a real search is a scientific
+hazard, so it is never reached by accident.  Like that flag, the value is
+compared exactly — no case folding, no whitespace stripping — so anything
+other than the literal ``synthetic`` refuses.
+"""
+
+LIBRARY_FALLBACK_REFUSE: Final = "refuse"
+LIBRARY_FALLBACK_SYNTHETIC: Final = "synthetic"
+
+
+def synthetic_library_allowed() -> bool:
+    """Whether an unsupported library path may use the synthetic demo library.
+
+    True only for the exact value ``synthetic``.  A near-miss (``Synthetic``,
+    ``synthetic `` with a trailing space, ``synth``) is not normalised into the
+    flag: a typo must never be able to enable a fabrication.
+    """
+    return os.environ.get(ENV_LIBRARY_FALLBACK) == LIBRARY_FALLBACK_SYNTHETIC
+
+
+def _refuse_unsupported_library(database_file: str) -> None:
+    """Raise unless the caller opted into the synthetic demonstration library.
+
+    The message is surfaced verbatim to the host (see the ``ToolError`` at the
+    tool boundary), so the quoted file name is rendered as inert text.
+    """
+    if synthetic_library_allowed():
+        return
+    selected = os.environ.get(ENV_LIBRARY_FALLBACK, "")
+    # Set, but to something that is neither the default nor the flag: say so,
+    # or the reader who typed ``Synthetic`` is told only to set what they set.
+    not_honoured = (
+        f" {ENV_LIBRARY_FALLBACK} is set, but not to that exact value "
+        "(lowercase, no surrounding whitespace), so it was not honoured."
+        if selected not in ("", LIBRARY_FALLBACK_REFUSE)
+        else ""
+    )
+    raise UnsupportedFormatError(
+        f"'{escape_inline(Path(database_file).name)}' is not a spectral library "
+        "MSMCP can read, so the search was not run. MSMCP reads MSP/NIST text "
+        "(.msp, .msp.gz), MGF (.mgf, .mgf.gz) and SQLite (.sqlite, .db); a path "
+        "in any other format is refused rather than answered from a fabricated "
+        "library. To run the labelled demonstration library on purpose, set "
+        f"{ENV_LIBRARY_FALLBACK}={LIBRARY_FALLBACK_SYNTHETIC}.{not_honoured}"
+    )
+
+
 def _library_provider_for(database_file: str) -> LibraryProvider | None:
     """Return a real provider for *database_file*, or ``None`` for the fallback.
 
     A path whose suffix names a supported library format is resolved through the
     security boundary — allowed root (symlinks resolved), size limit, read-only
     — and any failure propagates rather than being papered over.  A path no
-    reader understands returns ``None``, and the scan uses the labelled synthetic
-    library instead.
+    reader understands returns ``None``; the caller then refuses it, or uses the
+    labelled synthetic library when that demonstration was opted into.
 
     The policy is looked up at call time (``security.DEFAULT_POLICY``) so a test
     or embedder can substitute one, matching how ingestion resolves its paths.
@@ -920,8 +975,11 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
 
     scorer = _build_scorer(scoring_method, ms2_tolerance_da)
     # A real library (MSP/NIST text or MGF) is read through the security boundary; a
-    # path with no reader falls back to the labelled synthetic library.
+    # path with no reader is refused unless the synthetic demonstration library
+    # was opted into.
     provider = _library_provider_for(database_file)
+    if provider is None:
+        _refuse_unsupported_library(database_file)
     library_info: LibraryInfo | None = None
     conn: sqlite3.Connection | None = None
     if provider is not None:
@@ -1467,8 +1525,11 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
             f"✅ **Completed** — search job `{job_id}` finished; its report was "
             f"already returned.",
             "",
+            UNTRUSTED_DATA_NOTE,
+            "",
             library_line,
-            f"- Query: {summary.query_peaks} real peaks from `{summary.query_source}`",
+            f"- Query: {summary.query_peaks} real peaks from "
+            f"`{escape_inline(summary.query_source)}`",
             f"- {summary.mode}: {summary.n_hits} candidate(s)",
             f"- Context: {summary.n_context_matched} matched, "
             f"{summary.n_context_unknown} unknown, "
@@ -1532,8 +1593,9 @@ def register_tools(mcp: Any) -> None:
                 min_length=1,
                 description="Path to the spectral library.  MSP/NIST-style "
                 "text (.msp, .msp.gz) and MGF (.mgf, .mgf.gz) are read from disk through the security "
-                "boundary; any other path falls back to a labelled synthetic "
-                "library.",
+                "boundary; a path in an unsupported format is refused unless "
+                "the server runs with MSMCP_LIBRARY_FALLBACK=synthetic, which "
+                "substitutes a labelled synthetic demonstration library.",
             ),
         ],
         experimental_file: Annotated[
@@ -1603,9 +1665,11 @@ def register_tools(mcp: Any) -> None:
         resolved through the same security boundary as acquisitions — allowed
         root, size limit, read-only — so a library outside the allowed root, a
         missing file or an unsupported format is refused before a job is
-        dispatched.  A path with no reader falls back to a deterministic
-        synthetic library, and the report says which path was used; never treat
-        a synthetic-library hit as a compound identification.
+        dispatched.  A path with no reader is refused for the same reason: a
+        fabricated library that answers a real search would be a scientific
+        hazard.  Setting ``MSMCP_LIBRARY_FALLBACK=synthetic`` opts into the
+        deterministic demonstration library instead, and the report then says
+        so; never treat a synthetic-library hit as a compound identification.
 
         The **query** spectrum can be real: pass `spectrum_reference` from
         `load_spectrum` (peaks already server-side), or `experimental_file` with
@@ -1650,6 +1714,17 @@ def register_tools(mcp: Any) -> None:
             spectrum_index=spectrum_index,
         )
 
+        # An unreadable library is refused before a job is dispatched, and the
+        # reason is raised as a *deliberate* tool error rather than a crash: the
+        # SDK replaces a crashing exception's text with a generic message, and
+        # "set MSMCP_LIBRARY_FALLBACK=synthetic to run the demo library" is the
+        # one thing the caller needs to read.
+        if not library.is_supported_library_path(validated.database_file):
+            try:
+                _refuse_unsupported_library(validated.database_file)
+            except UnsupportedFormatError as exc:
+                raise ToolError(str(exc)) from exc
+
         # Resolve real query data *before* dispatch, so a bad reference or an
         # unreadable file fails here and now rather than inside a job.
         exp_peaks: tuple[tuple[float, float], ...] = ()
@@ -1660,7 +1735,8 @@ def register_tools(mcp: Any) -> None:
             exp_peaks = tuple(_peaks_from_reference(validated.spectrum_reference))
             query_context = _reference_context(validated.spectrum_reference)
             query_label = (
-                f"`{validated.spectrum_reference}` ({len(exp_peaks)} real peaks, "
+                f"`{escape_inline(validated.spectrum_reference)}` "
+                f"({len(exp_peaks)} real peaks, "
                 f"read from the server-side store)"
             )
         elif validated.experimental_file is not None:
@@ -1676,7 +1752,9 @@ def register_tools(mcp: Any) -> None:
                 validated.experimental_file, query_spectrum_index
             )
             exp_peaks = tuple(placed_peaks)
-            query_label = f"`{validated.experimental_file}` {description}"
+            query_label = (
+                f"`{escape_inline(validated.experimental_file)}` {description}"
+            )
 
         if query_context.ms_level == 1:
             raise MsmcpError(
@@ -1700,8 +1778,8 @@ def register_tools(mcp: Any) -> None:
         # library an immediate tool error; the bounded parse probe does the same
         # for a file that is not the format its suffix claims, matching the
         # query path, which also reads its first spectrum here rather than
-        # inside the job.  A path with no reader returns None and the scan uses
-        # the labelled synthetic fallback.
+        # inside the job.  A path with no reader returns None; it was refused
+        # above unless the synthetic demonstration library was opted into.
         library_provider = _library_provider_for(validated.database_file)
         if library_provider is not None:
             library_provider.validate()
@@ -1741,15 +1819,16 @@ def register_tools(mcp: Any) -> None:
             len(exp_peaks),
         )
 
+        database_label = escape_inline(validated.database_file)
         if library_provider is not None:
             library_note = (
-                f"✅ Library `{validated.database_file}` will be read from disk "
+                f"✅ Library `{database_label}` will be read from disk "
                 f"({library_provider.format}) through the security boundary and "
                 f"searched for real."
             )
         else:
             library_note = (
-                f"⚠️  `{validated.database_file}` is not a supported library "
+                f"⚠️  `{database_label}` is not a supported library "
                 f"format, so nothing is opened: a **synthetic** library is "
                 f"substituted.  The final report repeats this warning — do not "
                 f"treat its hits as compound identifications."
@@ -1758,6 +1837,7 @@ def register_tools(mcp: Any) -> None:
         context_note = _context_note(query_context)
         return (
             f"## Search Dispatched\n\n"
+            f"{UNTRUSTED_DATA_NOTE}\n\n"
             f"**Job ID:** `{handle.job_id}`\n\n"
             f"**Query:** {query_label}\n\n"
             f"**Query context:** {context_note}\n\n"
