@@ -185,9 +185,12 @@ calibrated FDR or analytical validation is inferred.
 
 ## MassPilot integration handoff
 
-PR #63 remains draft, unmerged and unreleased. Released package version `1.0.0`
-does not uniquely identify this code; use the exact implementation SHA in
-`RESULTS.json` and the locked dependencies, then record the source SHA separately
+**Historical context.** This handoff was written while PR #63 was still draft and
+unmerged, when `1.0.0` was the current release and did not contain this code.
+PR #63 has since merged (`01de270`, 2026-11-01) and chromatogram extraction ships
+in `1.0.2`. The results above nonetheless stay pinned to the implementation commit
+`64cb1db…` recorded in `RESULTS.json` together with the locked dependencies: use
+that SHA and record it separately
 from the package's version field. No MassPilot files were edited in this task.
 
 After human review, the MassPilot owner can update its dependency pin, verify
