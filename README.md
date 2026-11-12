@@ -283,8 +283,8 @@ When using the worked example above with this container, ask MSMCP to load
 `/data`, not at the checkout's `examples/` path.
 
 This image is a reproducible container starting point, not a published release
-or registry entry. Package publication, registry metadata, and release signing
-remain separate work under issue #19.
+or registry entry. Registry metadata (`server.json`), container publication, and
+release signing remain separate work under issue #19.
 
 ## Scientific validation
 

@@ -6,6 +6,8 @@ title: "MSMCP: Model Context Protocol server for computational mass spectrometry
 authors:
   - family-names: Janusson
     given-names: Eric
+version: 1.0.2
+date-released: 2026-11-09
 repository-code: "https://github.com/janusson/MSMCP"
 url: "https://msmcp.dev"
 license: MIT
