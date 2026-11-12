@@ -1525,8 +1525,11 @@ def _digest_lines(job_id: str, summary: SearchSummary) -> str:
             f"✅ **Completed** — search job `{job_id}` finished; its report was "
             f"already returned.",
             "",
+            UNTRUSTED_DATA_NOTE,
+            "",
             library_line,
-            f"- Query: {summary.query_peaks} real peaks from `{summary.query_source}`",
+            f"- Query: {summary.query_peaks} real peaks from "
+            f"`{escape_inline(summary.query_source)}`",
             f"- {summary.mode}: {summary.n_hits} candidate(s)",
             f"- Context: {summary.n_context_matched} matched, "
             f"{summary.n_context_unknown} unknown, "
@@ -1732,7 +1735,8 @@ def register_tools(mcp: Any) -> None:
             exp_peaks = tuple(_peaks_from_reference(validated.spectrum_reference))
             query_context = _reference_context(validated.spectrum_reference)
             query_label = (
-                f"`{validated.spectrum_reference}` ({len(exp_peaks)} real peaks, "
+                f"`{escape_inline(validated.spectrum_reference)}` "
+                f"({len(exp_peaks)} real peaks, "
                 f"read from the server-side store)"
             )
         elif validated.experimental_file is not None:
@@ -1748,7 +1752,9 @@ def register_tools(mcp: Any) -> None:
                 validated.experimental_file, query_spectrum_index
             )
             exp_peaks = tuple(placed_peaks)
-            query_label = f"`{validated.experimental_file}` {description}"
+            query_label = (
+                f"`{escape_inline(validated.experimental_file)}` {description}"
+            )
 
         if query_context.ms_level == 1:
             raise MsmcpError(
@@ -1813,15 +1819,16 @@ def register_tools(mcp: Any) -> None:
             len(exp_peaks),
         )
 
+        database_label = escape_inline(validated.database_file)
         if library_provider is not None:
             library_note = (
-                f"✅ Library `{validated.database_file}` will be read from disk "
+                f"✅ Library `{database_label}` will be read from disk "
                 f"({library_provider.format}) through the security boundary and "
                 f"searched for real."
             )
         else:
             library_note = (
-                f"⚠️  `{validated.database_file}` is not a supported library "
+                f"⚠️  `{database_label}` is not a supported library "
                 f"format, so nothing is opened: a **synthetic** library is "
                 f"substituted.  The final report repeats this warning — do not "
                 f"treat its hits as compound identifications."
@@ -1830,6 +1837,7 @@ def register_tools(mcp: Any) -> None:
         context_note = _context_note(query_context)
         return (
             f"## Search Dispatched\n\n"
+            f"{UNTRUSTED_DATA_NOTE}\n\n"
             f"**Job ID:** `{handle.job_id}`\n\n"
             f"**Query:** {query_label}\n\n"
             f"**Query context:** {context_note}\n\n"
