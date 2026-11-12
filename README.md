@@ -2,7 +2,7 @@
 
 **A Model Context Protocol server that turns mass spectrometry into a first-class tool for agentic AI workflows — without ever stuffing spectral data into a context window.**
 
-> **Status.** `1.0.0` released; `make check` runs the same gate as CI. The metadata
+> **Status.** `1.0.2` released and published on PyPI; `make check` runs the same gate as CI. The metadata
 > design is still a proposal.
 >
 > **Read this before trusting a number.** Search returns ranked similarity candidates
@@ -295,7 +295,7 @@ MSMCP keeps its *scientific* claims, its software tests and its identification c
 
 `make validate-similarity` runs that experiment **opt-in**: it needs the external dataset (`MSMCP_VALIDATION_DATA`) and supplies `matchms` for the one command, so neither the runtime nor the fast test suite depends on it. With no dataset it skips cleanly and downloads nothing.
 
-For a core-only runtime install from the source checkout, use `uv sync` (or `pip install .`). To enable imzML, use `uv sync --extra imaging` (or `pip install '.[imaging]'` from the checkout). To run the optional imaging integration tests, install both extras with `uv sync --extra dev --extra imaging` and run `uv run --extra imaging pytest tests/test_ingest.py`; otherwise those tests skip. This project does not currently claim a published PyPI distribution.
+For a core-only runtime install from the source checkout, use `uv sync` (or `pip install .`). To enable imzML, use `uv sync --extra imaging` (or `pip install '.[imaging]'` from the checkout). To run the optional imaging integration tests, install both extras with `uv sync --extra dev --extra imaging` and run `uv run --extra imaging pytest tests/test_ingest.py`; otherwise those tests skip. The `msmcp` distribution is published on PyPI; the current release is `1.0.2` (`uv pip install msmcp==1.0.2`).
 
 ## Connecting an LLM client
 
