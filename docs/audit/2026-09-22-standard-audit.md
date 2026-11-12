@@ -9,6 +9,12 @@
 > it as a record of reasoning, not as documentation of the present state. For the
 > maintained description see [`README.md`](../../README.md) and
 > [`ARCHITECTURE.md`](../../ARCHITECTURE.md).
+>
+> **Editorial note (2026-11-12, publication).** Two local absolute paths in this
+> report — the `**Read from:**` line above and the `cd` in the reproduce appendix
+> — were replaced with `<REPO_ROOT>`. Nothing else was altered: every finding,
+> count, command and commit SHA is as written on 2026-09-22. The paths named the
+> maintainer's checkout and said nothing the commit SHA does not already say.
 
 # MSMCP: is it on track to be the standard MS MCP server?
 
@@ -17,7 +23,7 @@ user *talk to* their mass-spec data: compare calibrations across instruments and
 MS/MS sources and network them across databases, reason about acquisition parameters, and say when a
 signal is artefactual rather than annotated.
 
-**Read from:** the repository at `/Users/ericjanusson/Programming/msmcp` at commit `02df516`
+**Read from:** the repository at `<REPO_ROOT>` at commit `02df516`
 (2026-09-06) plus the uncommitted v1.0 working tree; `README.md`, `ARCHITECTURE.md`, `AGENTS.md`,
 `pyproject.toml`, all 21 modules under `src/msmcp/`, the 16-file test suite, and the eval notebook's
 own artefact `notebooks/.eval_artifacts/eval_report.json`.
@@ -579,7 +585,7 @@ fix the null → measure the isotope term on its own → then compose and recali
 Probe scripts (run from the repo root; they import the repo's own code paths):
 
 ```bash
-cd /Users/ericjanusson/Programming/msmcp
+cd <REPO_ROOT>
 uv run pytest -q                                  # 376 passed, 1 deselected in 6.93s
 uv run ruff check . ; uv run mypy ; uv run basedpyright
 uv run pytest tests/test_eval_notebook.py -m eval -s -q   # 105 PASS / 1 skip, 14.20 s

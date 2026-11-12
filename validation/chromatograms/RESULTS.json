@@ -38,8 +38,14 @@
     "validation/chromatograms/verify_public.py": "e913f4c460b19b53144dec5ba9083a001f0f56b0b234a6321bfb6777aea47cbf"
   },
   "source_tree_status": "",
-  "package_path": "/Users/ericjanusson/Programming/msmcp/.worktrees/chromatogram-correctness/src/msmcp/__init__.py",
-  "environment_prefix": "/Users/ericjanusson/Programming/msmcp/.worktrees/chromatogram-correctness/.venv",
+  "package_path": "<REPO_ROOT>/.worktrees/chromatogram-correctness/src/msmcp/__init__.py",
+  "environment_prefix": "<REPO_ROOT>/.worktrees/chromatogram-correctness/.venv",
+  "path_redaction": {
+    "date": "2026-11-12",
+    "reason": "Publication: the recorded paths named the maintainer's local checkout.",
+    "rule": "The machine-specific prefix became <REPO_ROOT>; the repository-relative remainder is unchanged.",
+    "unchanged": "Every measured value, count, digest and distribution is exactly what the verifier wrote."
+  },
   "python": "3.13.12",
   "packages": {
     "msmcp": "1.0.0",
