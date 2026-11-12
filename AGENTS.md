@@ -38,7 +38,7 @@ Hermes call this server's tools, register it under `mcp_servers` in
 `~/.hermes/config.yaml` (`uv run --project <repo> msmcp`) and restart it.
 
 ## Python
-- Python 3.12+
+- Python 3.13+ (`.python-version`, `pyproject.toml` `requires-python`)
 - pytest
 - ruff
 - basedpyright

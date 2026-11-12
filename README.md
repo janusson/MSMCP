@@ -2,8 +2,8 @@
 
 **A Model Context Protocol server that turns mass spectrometry into a first-class tool for agentic AI workflows — without ever stuffing spectral data into a context window.**
 
-> **Status.** `1.0.2` released and published on PyPI; `make check` runs the same gate as CI. The metadata
-> design is still a proposal.
+> **Status.** `1.0.2` released and published on PyPI; `make lint`, `make test` and
+> `make eval` run the same gate as CI. The metadata design is still a proposal.
 >
 > **Read this before trusting a number.** Search returns ranked similarity candidates
 > and computes no production p/q values. The omission is deliberate: permuted spectra
