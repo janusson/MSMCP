@@ -78,5 +78,5 @@ This is a single-maintainer project, so no response time is promised here, and
 nothing in this file is a service-level commitment. A slow reply is not a
 decision either way.
 
-[`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) is an internal review of this
-codebase, not a policy and not a disclosure channel.
+[`SECURITY-REVIEW.md`](SECURITY-REVIEW.md) is a review of this codebase kept in
+the repository for readers. It is not a policy and not a disclosure channel.
