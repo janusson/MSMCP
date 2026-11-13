@@ -38,15 +38,8 @@
     "validation/chromatograms/verify_public.py": "e913f4c460b19b53144dec5ba9083a001f0f56b0b234a6321bfb6777aea47cbf"
   },
   "source_tree_status": "",
-  "package_path": "<REPO_ROOT>/.worktrees/chromatogram-correctness/src/msmcp/__init__.py",
-  "environment_prefix": "<REPO_ROOT>/.worktrees/chromatogram-correctness/.venv",
-  "path_redaction": {
-    "date": "2026-11-12",
-    "reason": "Publication: the recorded paths named the maintainer's checkout and a temporary download directory.",
-    "rule": "<REPO_ROOT> replaces the checkout prefix and <TMP_DATASET_DIR> the staging directory; each file name and the relative remainder are unchanged.",
-    "unchanged": "Every measured value, count, digest and distribution is exactly what the verifier wrote.",
-    "generated_since": "verify_public.py now records these placeholders itself, so a re-run cannot reintroduce the prefixes; this file predates that and was redacted editorially."
-  },
+  "package_path": "/Users/ericjanusson/Programming/msmcp/.worktrees/chromatogram-correctness/src/msmcp/__init__.py",
+  "environment_prefix": "/Users/ericjanusson/Programming/msmcp/.worktrees/chromatogram-correctness/.venv",
   "python": "3.13.12",
   "packages": {
     "msmcp": "1.0.0",
@@ -188,7 +181,7 @@
         "No smoothing, normalization, baseline correction, alignment, blank subtraction, or identification was applied."
       ],
       "source": {
-        "file_path": "<TMP_DATASET_DIR>/Orbi_P_E2_CSSM10uMA.mzML",
+        "file_path": "/private/tmp/masspilot-MSV000089046/Orbi_P_E2_CSSM10uMA.mzML",
         "format": "mzML",
         "reader_backend": "msmcp.mzml",
         "size_bytes": 70767082,
@@ -318,7 +311,7 @@
         "No smoothing, normalization, baseline correction, alignment, blank subtraction, or identification was applied."
       ],
       "source": {
-        "file_path": "<TMP_DATASET_DIR>/Orbi_P_E2_EXBLANKA.mzML",
+        "file_path": "/private/tmp/masspilot-MSV000089046/Orbi_P_E2_EXBLANKA.mzML",
         "format": "mzML",
         "reader_backend": "msmcp.mzml",
         "size_bytes": 65242379,

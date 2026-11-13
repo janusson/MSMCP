@@ -105,16 +105,16 @@ identity evidence. Repeated calls must agree except provenance timestamps.
 `RESULTS.json` records exact versions, source commit, output-schema hash, counts,
 errors, observed elapsed times, warnings and representative numeric values.
 
-On 2026-11-12 the four machine-specific paths in it were replaced before
-publication: `package_path` and `environment_prefix` carry `<REPO_ROOT>`, and each
-per-input `source.file_path` carries `<TMP_DATASET_DIR>`. A `path_redaction` field
-records the substitution; file names, dataset accession and every digest are
-unchanged. The verifier now records those placeholders itself, so a re-run cannot
-reintroduce the prefixes — this file predates that change and was redacted
-editorially, which is why its own note says so. No recorded digest covers
-`RESULTS.json` itself: `manifest_sha256` pins `MANIFEST.json` (still matching),
-`source_files_sha256` pins the tree and the verifier **at commit `64cb1db`**, and
-`output_schema_sha256` pins the advertised `extract_chromatograms` schema.
+The committed `RESULTS.json` still carries the verifier's own absolute locations
+(`package_path`, `environment_prefix`, and each input's `source.file_path`). The
+verifier now writes `<REPO_ROOT>` and `<TMP_DATASET_DIR>` instead, so regenerating
+the report replaces them; this copy predates that change and is left exactly as
+measured, because a measured report is regenerated rather than retyped. Until it
+is, treat those fields as machine-local detail that says nothing about the
+numbers. No recorded digest covers `RESULTS.json` itself: `manifest_sha256` pins
+`MANIFEST.json` (still matching), `source_files_sha256` pins the tree and the
+verifier **at commit `64cb1db`**, and `output_schema_sha256` pins the advertised
+`extract_chromatograms` schema.
 
 ## Results recorded 2026-10-22
 
