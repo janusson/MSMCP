@@ -106,9 +106,9 @@ Constraints that follow from the offline posture:
 
 ### Core capabilities
 
-The table below describes the current core of the server. Two of its entries —
-the spectral library reader (`library.py`) — is merged to `main` but is **not** in any
-release tag; it is a v1.1 deliverable (see [`docs/roadmap.md`](docs/roadmap.md)).
+The table below describes the current core of the server. One of its entries —
+the spectral library reader (`library.py`) — is merged to `main` but is **not** in
+any release tag; it is a v1.1 deliverable (see [`docs/roadmap.md`](docs/roadmap.md)).
 Everything else, including the instrument-class defaults, is present in the released
 `1.0.2`.
 
