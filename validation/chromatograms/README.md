@@ -125,7 +125,10 @@ itself: `manifest_sha256` pins `MANIFEST.json` (still matching),
 `RESULTS.json` holds this run, at commit `a16ca36`, after the verifier stopped
 recording machine-specific paths. It re-verifies the same pinned inputs: both
 files used here match `MANIFEST.json` byte for byte, and the verifier checked that
-before starting a server.
+before starting a server. The run tested post-release `main` at `a16ca36`, not the
+`1.0.2` tag — ten files under `src/` differ between the two — and `packages.msmcp`
+reads `1.0.2` only because the verifier takes it from the installed package
+metadata, which still carries the release's version.
 
 Every measured quantity is identical to the 2026-10-22 run — the same 2,090 and
 2,100 selected MS1 points, zero maximum absolute error on RT, TIC, BPC and all

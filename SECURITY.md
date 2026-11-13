@@ -47,8 +47,10 @@ boundary that confines them — not a network listener, because there is none.
   imzML `.ibd` payload, and any way to exceed `MSMCP_MAX_FILE_SIZE_BYTES` or
   `MSMCP_MAX_SPECTRA`.
 - **Report rendering** — file-derived text (compound names, formulae, paths,
-  digests) that escapes the escaping in `msmcp.reporting` and can inject Markdown
-  structure or instructions into a report an LLM host reads.
+  digests) that reaches a report an LLM host reads and can inject Markdown
+  structure or instructions into it. The dedicated escaping layer for this text,
+  `msmcp.reporting`, is on `main` and not yet in a release; `1.0.2` does not
+  contain it.
 - **Packaging and supply chain** — a reachable vulnerability in a pinned
   dependency, or a defect in the published metadata or lockfile that makes an
   install resolve to something other than what the lock names.
