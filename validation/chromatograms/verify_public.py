@@ -38,6 +38,26 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
+REPO_ROOT = "<REPO_ROOT>"
+DATASET_DIR = "<TMP_DATASET_DIR>"
+
+
+def redact(value: str | Path, root: Path, placeholder: str) -> str:
+    """Replace one machine-specific prefix with a stable placeholder.
+
+    The relative remainder is kept, so a published report still names the
+    worktree, environment or input file the numbers came from. A value that is
+    not under ``root`` is returned unchanged: this never guesses at a path, and
+    it never rewrites anything it did not record itself.
+    """
+    text, prefix = str(value), str(root).rstrip(os.sep)
+    if text == prefix:
+        return placeholder
+    if text.startswith(prefix + os.sep):
+        return placeholder + text[len(prefix) :]
+    return text
+
+
 def reference(path: Path) -> dict[str, Any]:
     """Decode CV-described IEEE floats directly; sum with math.fsum, not numpy.
 
@@ -255,8 +275,16 @@ async def verify(data_dir: Path) -> dict[str, Any]:
             text=True,
             cwd=checkout,
         ).strip(),
-        package_path=str(package_path),
-        environment_prefix=sys.prefix,
+        package_path=redact(package_path, checkout, REPO_ROOT),
+        environment_prefix=redact(sys.prefix, checkout, REPO_ROOT),
+        path_redaction=dict(
+            repo_root=REPO_ROOT,
+            dataset_dir=DATASET_DIR,
+            rule=(
+                "Machine-specific prefixes are replaced by the placeholders; "
+                "the relative remainder is kept."
+            ),
+        ),
         python=platform.python_version(),
         packages={
             p: importlib.metadata.version(p)
@@ -322,6 +350,13 @@ async def verify(data_dir: Path) -> dict[str, Any]:
                 "warnings",
             ]:
                 assert payload[key] == again.structured_content[key], key
+            # Redact only now: summary["source"] is the payload's own object up to
+            # this point, and the repeated-call comparison above reads it. A copy
+            # keeps the wire payload untouched.
+            summary["source"] = dict(
+                summary["source"],
+                file_path=redact(summary["source"]["file_path"], data_dir, DATASET_DIR),
+            )
             summary["repeated_call_equal_except_provenance_timestamp"] = True
             summary["stdio_extraction_seconds"] = elapsed
             report["files"][name] = summary
