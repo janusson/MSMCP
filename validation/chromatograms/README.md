@@ -49,7 +49,8 @@ IDs and structured reader warnings close related contract gaps. TIC/XIC are
 still sums of decoded intensities and BPC is still their maximum. Nulls, empty
 scan zeros, minutes, source order and centroid/profile semantics are unchanged.
 Schema 1.0 adds `native_scan_ids`; it now advertises the supported revision as a
-constant. This is an unreleased draft interface; source pinning remains required.
+constant. The interface shipped in `1.0.2`; the results below stay pinned to the
+implementation commit recorded in `RESULTS.json`.
 
 ## Reproduction
 

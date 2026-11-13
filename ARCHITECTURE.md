@@ -106,17 +106,17 @@ Constraints that follow from the offline posture:
 
 ### Core capabilities
 
-The table below describes the current core of the server. One of its entries —
-the spectral library reader (`library.py`) — is merged to `main` but is **not** in
-any release tag; it is a v1.1 deliverable (see [`docs/roadmap.md`](docs/roadmap.md)).
-Everything else, including the instrument-class defaults, is present in the released
-`1.0.2`.
+The table below describes the current core of the server. Everything it lists —
+including the spectral library reader (`library.py`) and the instrument-class
+defaults (`instruments.py`) — is present in the released `1.0.2`; both arrived after
+`1.0.0`. What v1.1 still owes is the reader's format coverage and acquisition
+context, not the reader itself (see [`docs/roadmap.md`](docs/roadmap.md)).
 
 | Capability | Where | Notes |
 |---|---|---|
 | Optional imaging ingestion | `massflow_io.py`, `ingest.py` | imzML via lowercase `massflow`; requires the `imaging` extra |
 | MSMCP-owned readers | `mzml.py`, `mgf.py` | core mzML/MGF; independent of MassFlow |
-| Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions (on `main`, unreleased) |
+| Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions (shipped in `1.0.2`) |
 | Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py`, `tools/chromatograms.py` | exact mass, isotopes, ppm validation, cosine, QC and bounded scan-level TIC/BPC/XIC |
 | Spectral scoring contract | `models/scoring.py` | `SpectrumScorer`; classical (in-house, reference implementation) and embedding scorers behind one interface |
 | Instrument-class defaults | `instruments.py` | every experimental threshold, its default per instrument class, and the provenance of each default (in `1.0.2`) |

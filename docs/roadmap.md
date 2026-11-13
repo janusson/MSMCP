@@ -19,11 +19,11 @@ Nothing is deleted from either. Completed and abandoned work stays in the record
   `1.0.0` (commit `a58e50a`) was the first tagged release. `main` is protected by a required
   `gate` status check (`ruff format --check`, `ruff check`, `mypy`, `basedpyright`, `pytest`,
   `make eval`) and forbids deletion and force-push.
-- **The spectral-library reader is on `main` and deliberately unreleased.** `#12`, the fitted
-  upper-tail null, was the release blocker; it has now landed on the working branch
-  (`msmcp.models.null_model`), so a release that includes the reader is no longer waiting on
-  statistics. The reader is in no tag yet; the latest release stays `1.0.2` until a release that
-  includes it is cut — see *Version policy*.
+- **The spectral-library reader shipped in `1.0.2`.** `#12`, the fitted upper-tail null, was
+  the release blocker and landed with it (`msmcp.models.null_model`), so the current release
+  reads real MSP/NIST text and MGF libraries from disk through the same security boundary as
+  an acquisition. What remains for v1.1 is format coverage and acquisition context, not the
+  reader itself — see *Version policy*.
 - **What the reader can do today.** It opens an MSP/NIST-style library (`.msp`, `.msp.gz`) through
   the same security boundary as an acquisition and searches it for real. It reads the
   `m/z:intensity` spelling the Fiehn/Golm GMD exports use, skips and counts metadata-only records
@@ -118,9 +118,10 @@ and what would have to change first.
 
 ## Version policy
 
-The latest release is `1.0.2`, and the version stays at the latest tag until a release includes the library reader. The v1.1 criteria are declared
-in `ARCHITECTURE.md`; `#12` now meets its three, but the format-coverage and acquisition-context
-criteria are still open, and nothing here bumps a version or cuts a release.
+The latest release is `1.0.2`, and it already contains the library reader; the version stays at
+the latest tag until the v1.1 format-coverage and acquisition-context criteria are met. Those
+criteria are declared in `ARCHITECTURE.md`; `#12` meets its three, but the remaining ones are
+still open, and nothing here bumps a version or cuts a release.
 
 ## Source material
 
