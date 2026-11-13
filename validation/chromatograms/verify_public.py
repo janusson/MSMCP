@@ -21,7 +21,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 import zlib
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from mcp import ClientSession
@@ -39,23 +39,49 @@ def sha256(path: Path) -> str:
 
 
 REPO_ROOT = "<REPO_ROOT>"
+VENV_ROOT = "<VENV_ROOT>"
 DATASET_DIR = "<TMP_DATASET_DIR>"
+LOCAL_PATH_REDACTED = "<LOCAL_PATH_REDACTED>"
 
 
-def redact(value: str | Path, root: Path, placeholder: str) -> str:
-    """Replace one machine-specific prefix with a stable placeholder.
+def normalize_path(value: str | Path, *roots: tuple[Path, str | None]) -> str:
+    """Render a recorded path without publishing where this machine keeps it.
 
-    The relative remainder is kept, so a published report still names the
-    worktree, environment or input file the numbers came from. A value that is
-    not under ``root`` is returned unchanged: this never guesses at a path, and
-    it never rewrites anything it did not record itself.
+    ``roots`` pairs a directory with how to record it, and is matched
+    longest-first, so a nested root wins over its parent. Inside a root paired
+    with a placeholder, the path becomes ``placeholder/remainder``; inside a root
+    paired with ``None`` - the checkout - it becomes the bare relative path,
+    which identifies the file and keeps the record directly usable. Either way the
+    remainder keeps its file names, so the record still says which worktree,
+    environment or input file produced the numbers.
+
+    Any other absolute path - a home directory, a foreign checkout, a scratch
+    directory - keeps only its final component: enough to identify the file, not
+    enough to locate the machine. A value that is absolute under either platform's
+    rules is redacted, because the echoed input path arrives from a payload rather
+    than from this process, and an absolute path must never be published. A
+    relative path is already portable and passes through unchanged.
+
+    Components are joined with ``/`` (``Path.as_posix``), so the same logical
+    layout serializes identically on Windows and Unix.
     """
-    text, prefix = str(value), str(root).rstrip(os.sep)
-    if text == prefix:
-        return placeholder
-    if text.startswith(prefix + os.sep):
-        return placeholder + text[len(prefix) :]
-    return text
+    path = Path(value)
+    ordered = sorted(roots, key=lambda item: len(str(item[0])), reverse=True)
+    for root, placeholder in ordered:
+        if not path.is_relative_to(root):
+            continue
+        remainder = path.relative_to(root).as_posix()
+        if remainder in {"", "."}:
+            return placeholder or REPO_ROOT
+        return f"{placeholder}/{remainder}" if placeholder else remainder
+    if path.is_absolute():
+        return (
+            f"{LOCAL_PATH_REDACTED}/{path.name}" if path.name else LOCAL_PATH_REDACTED
+        )
+    windows = PureWindowsPath(str(value))
+    if windows.is_absolute() and windows.name:
+        return f"{LOCAL_PATH_REDACTED}/{windows.name}"
+    return path.as_posix()
 
 
 def reference(path: Path) -> dict[str, Any]:
@@ -224,6 +250,13 @@ async def verify(data_dir: Path) -> dict[str, Any]:
         raise RuntimeError(f"Wrong MSMCP package under test: {package_path}")
     if Path(sys.prefix).resolve() != (checkout / ".venv").resolve():
         raise RuntimeError("Run through this checkout's uv environment")
+    # Everything this script records about *where* it ran is rendered through
+    # these roots, so no report can name a home directory or a scratch path.
+    roots = (
+        (checkout / ".venv", VENV_ROOT),
+        (checkout, None),
+        (data_dir, DATASET_DIR),
+    )
     code_paths = subprocess.check_output(
         [
             "git",
@@ -275,14 +308,18 @@ async def verify(data_dir: Path) -> dict[str, Any]:
             text=True,
             cwd=checkout,
         ).strip(),
-        package_path=redact(package_path, checkout, REPO_ROOT),
-        environment_prefix=redact(sys.prefix, checkout, REPO_ROOT),
+        package_path=normalize_path(package_path, *roots),
+        environment_prefix=normalize_path(sys.prefix, *roots),
         path_redaction=dict(
             repo_root=REPO_ROOT,
+            venv_root=VENV_ROOT,
             dataset_dir=DATASET_DIR,
+            local=LOCAL_PATH_REDACTED,
             rule=(
-                "Machine-specific prefixes are replaced by the placeholders; "
-                "the relative remainder is kept."
+                "A path inside the checkout is recorded repository-relative; the "
+                "checkout, its .venv and the dataset directory become the "
+                "placeholders above; any other absolute path keeps only its "
+                "final component."
             ),
         ),
         python=platform.python_version(),
@@ -355,7 +392,7 @@ async def verify(data_dir: Path) -> dict[str, Any]:
             # keeps the wire payload untouched.
             summary["source"] = dict(
                 summary["source"],
-                file_path=redact(summary["source"]["file_path"], data_dir, DATASET_DIR),
+                file_path=normalize_path(summary["source"]["file_path"], *roots),
             )
             summary["repeated_call_equal_except_provenance_timestamp"] = True
             summary["stdio_extraction_seconds"] = elapsed
