@@ -2,8 +2,8 @@
 
 **A Model Context Protocol server that turns mass spectrometry into a first-class tool for agentic AI workflows — without ever stuffing spectral data into a context window.**
 
-> **Status.** `1.0.0` released; `make check` runs the same gate as CI. The metadata
-> design is still a proposal.
+> **Status.** `1.0.2` released and published on PyPI; `make lint`, `make test` and
+> `make eval` run the same gate as CI. The metadata design is still a proposal.
 >
 > **Read this before trusting a number.** Search returns ranked similarity candidates
 > and computes no production p/q values. The omission is deliberate: permuted spectra
@@ -283,8 +283,8 @@ When using the worked example above with this container, ask MSMCP to load
 `/data`, not at the checkout's `examples/` path.
 
 This image is a reproducible container starting point, not a published release
-or registry entry. Package publication, registry metadata, and release signing
-remain separate work under issue #19.
+or registry entry. Registry metadata (`server.json`), container publication, and
+release signing remain separate work under issue #19.
 
 ## Scientific validation
 
@@ -295,7 +295,7 @@ MSMCP keeps its *scientific* claims, its software tests and its identification c
 
 `make validate-similarity` runs that experiment **opt-in**: it needs the external dataset (`MSMCP_VALIDATION_DATA`) and supplies `matchms` for the one command, so neither the runtime nor the fast test suite depends on it. With no dataset it skips cleanly and downloads nothing.
 
-For a core-only runtime install from the source checkout, use `uv sync` (or `pip install .`). To enable imzML, use `uv sync --extra imaging` (or `pip install '.[imaging]'` from the checkout). To run the optional imaging integration tests, install both extras with `uv sync --extra dev --extra imaging` and run `uv run --extra imaging pytest tests/test_ingest.py`; otherwise those tests skip. This project does not currently claim a published PyPI distribution.
+For a core-only runtime install from the source checkout, use `uv sync` (or `pip install .`). To enable imzML, use `uv sync --extra imaging` (or `pip install '.[imaging]'` from the checkout). To run the optional imaging integration tests, install both extras with `uv sync --extra dev --extra imaging` and run `uv run --extra imaging pytest tests/test_ingest.py`; otherwise those tests skip. The `msmcp` distribution is published on PyPI; the current release is `1.0.2` (`uv pip install msmcp==1.0.2`).
 
 ## Connecting an LLM client
 
@@ -577,6 +577,8 @@ See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full limitations list and the
 ## Security notes
 
 MSMCP is a **local, single-user server**: the MCP host spawns it as a child process with your credentials, so anything the server can do, a misused agent can do too. Keep these boundaries in mind:
+
+To report a vulnerability, use GitHub's private vulnerability reporting for this repository — [SECURITY.md](SECURITY.md) has the scope and the process.
 
 - **Trust boundary** — anyone who can drive the LLM client can drive the server. Run it only on machines you own; it speaks stdio by design and must never be exposed as a network service.
 - **File access** — every file-reading tool (`load_mzml_summary`, `load_spectrum`, `generate_qc_summary`, and both `search_library`'s query and its `database_file` library path) is confined to a single allowed root directory (`src/msmcp/security.py`). The default root is the server's working directory, override it with `MSMCP_ALLOWED_ROOT`. Paths that resolve outside that root — including symlinks that point outside it — are rejected with `PathEscapeError`, and for imzML the paired `.ibd` payload is checked against the same root. Files are also capped by a size limit (`MSMCP_MAX_FILE_SIZE_BYTES`, default 500 MiB) and a per-request spectrum-count limit (`MSMCP_MAX_SPECTRA`); for compressed input — a `.gz` file or a zlib-compressed mzML binary array — the size limit is enforced against the **inflated** bytes as they are read (`bounded_stream` in `src/msmcp/security.py`), so a small compressed file cannot expand past the budget. Access failures are reported truthfully and distinctly (`InaccessiblePathError` for missing/unreadable paths, `MalformedFileError` for unparseable data, `UnsupportedFormatError` for vendor formats, `MissingDependencyError` when an optional decoder is absent) rather than as a generic failure.

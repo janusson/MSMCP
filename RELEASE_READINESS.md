@@ -49,6 +49,14 @@ Two tags were deleted on 2026-11-09 because their trees did not declare the vers
 
 ## Candidate identity
 
+> **Dated clarification (2026-11-12).** The table below records the candidate as
+> it stood *before* the upload, and its `PyPI` row — "not published — no trusted
+> publisher registered" — describes the 2026-10 state, not the outcome. The
+> header at the top of this file is the outcome: registering the pending trusted
+> publisher resolved the earlier `invalid-publisher` failures, the tag run was
+> approved, and `1.0.2` has been on PyPI since 2026-11-09. The row is left as
+> written because this file is a record; only this note is new.
+
 | Item | Value |
 |---|---|
 | Repository | `janusson/MSMCP` |

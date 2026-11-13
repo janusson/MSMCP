@@ -4,7 +4,7 @@ This document describes what MSMCP is, what it is not, and how the pieces fit
 together. It is the reference for deciding whether a change belongs in the
 released version, in an optional capability, or outside the project for now.
 
-`1.0.0` is released and its acceptance criteria are met below. `v1.1` is the
+`1.0.2` is the current release (published on PyPI). The `1.0.0` acceptance criteria are met below. `v1.1` is the
 next milestone: its criteria are at the end of this document, and its narrative —
 why the milestone exists and what is deliberately excluded — is in
 [`docs/roadmap.md`](docs/roadmap.md).
@@ -106,20 +106,20 @@ Constraints that follow from the offline posture:
 
 ### Core capabilities
 
-The table below describes the current core of the server. Two of its entries —
-the spectral library reader (`library.py`) and the instrument-class defaults
-(`instruments.py`) — are merged to `main` but are **not** in the `1.0.0` tag:
-they are the first v1.1 deliverables (see [`docs/roadmap.md`](docs/roadmap.md)).
-Everything else is present in the released version.
+The table below describes the current core of the server. Everything it lists —
+including the spectral library reader (`library.py`) and the instrument-class
+defaults (`instruments.py`) — is present in the released `1.0.2`; both arrived after
+`1.0.0`. What v1.1 still owes is the reader's format coverage and acquisition
+context, not the reader itself (see [`docs/roadmap.md`](docs/roadmap.md)).
 
 | Capability | Where | Notes |
 |---|---|---|
 | Optional imaging ingestion | `massflow_io.py`, `ingest.py` | imzML via lowercase `massflow`; requires the `imaging` extra |
 | MSMCP-owned readers | `mzml.py`, `mgf.py` | core mzML/MGF; independent of MassFlow |
-| Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions (on `main`, unreleased) |
+| Spectral library reader | `library.py` | `LibraryProvider`; MSP/NIST text libraries, behind the same security boundary as acquisitions (shipped in `1.0.2`) |
 | Core scientific tools | `tools/chem.py`, `tools/similarity.py`, `tools/qc.py`, `tools/io.py`, `tools/chromatograms.py` | exact mass, isotopes, ppm validation, cosine, QC and bounded scan-level TIC/BPC/XIC |
 | Spectral scoring contract | `models/scoring.py` | `SpectrumScorer`; classical (in-house, reference implementation) and embedding scorers behind one interface |
-| Instrument-class defaults | `instruments.py` | every experimental threshold, its default per instrument class, and the provenance of each default (on `main`, unreleased) |
+| Instrument-class defaults | `instruments.py` | every experimental threshold, its default per instrument class, and the provenance of each default (in `1.0.2`) |
 | Server-side data references | `state/pointers.py`, `state/store.py` | payloads never cross MCP/JSON |
 | Provenance / reproducibility | `provenance.py` | structured, immutable, JSON-safe |
 | Asynchronous execution | `execution/executor.py`, `tools/search.py` | pluggable; local asyncio implementation |
@@ -297,9 +297,9 @@ Statuses use the MCP vocabulary (`mcp.types.TaskStatus`), and
 `Task` (`task_id`, `status`, `status_message`, `created_at`,
 `last_updated_at`, `ttl`, `poll_interval`).
 
-The candidate lock resolves `mcp` 2.3.0, which is also the SDK version used by
+The committed lock resolves `mcp` 2.3.0, which is also the SDK version used by
 the recorded installed-client qualification; package metadata declares the
-broader lower bound `mcp[cli]>=2.0.0`. SDK 2.x supports generic extension request
+lower bound `mcp[cli]>=2.2.0`. SDK 2.x supports generic extension request
 registration and capability advertisement, but MSMCP has not registered the
 Tasks extension methods. It exposes job semantics through its own polling tool
 (`check_search_status`) and keeps the wire representation aligned with the MCP
@@ -364,11 +364,11 @@ during the v1.0 work:
    most recent deliveries. A job polled again after 1024 later searches re-sends
    its report once before digesting; a durable executor would keep this record
    beside the job instead.
-8. **Distribution is prepared but not published.** The repository's
-   `Dockerfile` is a local, stdio-only packaging starting point and builds from
-   the committed `uv.lock`. There is no registry manifest, published package,
-   signed image, or hosted runtime yet; those require release decisions beyond
-   this source-tree change.
+8. **PyPI distribution is published; registry and container distribution are not.**
+   `msmcp` 1.0.2 is on PyPI. The repository's `Dockerfile` is a local, stdio-only
+   packaging starting point and builds from the committed `uv.lock`. There is no
+   registry manifest (`server.json`), published image, signed artifact, or hosted
+   runtime yet; those require release decisions beyond this source-tree change.
 
 ## Scientific validation
 
