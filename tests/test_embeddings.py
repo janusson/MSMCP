@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +14,8 @@ import pytest
 
 from msmcp.models import backends
 from msmcp.models.backends import (
+    DREAMS_COMMIT,
+    DREAMS_INSTALL_SPEC,
     LSM_MS2_CKPT_ENV,
     LSM_UNSAFE_ENV,
     DreaMSInferenceEmbedder,
@@ -459,3 +463,28 @@ class TestLSMMS2InferenceAdapter:
         )
         assert emb.shape == (8,)
         assert float(np.linalg.norm(emb)) == pytest.approx(1.0, abs=1e-6)
+
+
+class TestDreaMSSupplyChainPin:
+    """DreaMS is installed from a git URL, so the commit is the supply chain.
+
+    A branch or tag ref would let an upstream change become this project's
+    behaviour without a diff here; the pin is asserted so nothing quietly
+    loosens it back to an unqualified URL.
+    """
+
+    def test_commit_pin_is_a_full_sha(self) -> None:
+        assert re.fullmatch(r"[0-9a-f]{40}", DREAMS_COMMIT)
+
+    def test_install_spec_pins_that_commit(self) -> None:
+        assert (
+            f"git+https://github.com/pluskal-lab/DreaMS.git@{DREAMS_COMMIT}"
+        ) == DREAMS_INSTALL_SPEC
+
+    def test_unavailable_message_quotes_the_pinned_spec(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(importlib.util, "find_spec", lambda _: None)
+        with pytest.raises(EmbeddingBackendUnavailable) as exc:
+            backends.DreaMSInferenceEmbedder.check_available()
+        assert DREAMS_INSTALL_SPEC in str(exc.value)

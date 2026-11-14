@@ -442,9 +442,14 @@ def _decode_binary(
             decoder = importlib.import_module("pynumpress")
         except ImportError as exc:
             raise MissingDependencyError(
-                "This mzML file uses MS-Numpress compression, which requires "
-                "the optional 'pynumpress' package. Install it and retry."
+                "MS-Numpress decoding requires pynumpress==0.1.5. "
+                "Install the MSMCP numpress extra and retry."
             ) from exc
+        if getattr(decoder, "__version__", None) != "0.1.5":
+            raise MissingDependencyError(
+                "MS-Numpress decoding requires the qualified pynumpress==0.1.5. "
+                "Install the MSMCP numpress extra and retry."
+            )
         codec = compression.removeprefix("numpress-")
         if codec == "numpress":
             codec = "linear"  # retain the internal compatibility name
@@ -843,33 +848,34 @@ def iter_spectra(
     handle = _open_binary(resolved, effective.max_file_size_bytes)
     mismatched_spectra = 0
     try:
-        for event, elem in ET.iterparse(handle, events=("end",)):
-            if event == "end" and _local(elem.tag) == "spectrum":
-                try:
-                    declared = _to_int_or_none(elem.get("defaultArrayLength"))
-                    spectrum = _parse_spectrum(
-                        elem, max_bytes=effective.max_file_size_bytes
-                    )
-                    if declared is not None and (
-                        spectrum.mz.size != declared
-                        or spectrum.intensity.size != declared
-                    ):
-                        mismatched_spectra += 1
-                    yield spectrum
-                except MalformedFileError as exc:
-                    scan_id = elem.get("id") or f"index={elem.get('index', '?')}"
-                    raise MalformedFileError(
-                        f"{resolved} spectrum {scan_id}: {exc}"
-                    ) from exc
-                finally:
-                    elem.clear()
-        if mismatched_spectra:
-            logger.warning(
-                "%s: %d spectrum/spectra declare a peak count their binary arrays "
-                "do not supply; they were read as decoded and nothing was refused.",
-                resolved,
-                mismatched_spectra,
-            )
+        with security.malformed_stream_errors(resolved):
+            for event, elem in ET.iterparse(handle, events=("end",)):
+                if event == "end" and _local(elem.tag) == "spectrum":
+                    try:
+                        declared = _to_int_or_none(elem.get("defaultArrayLength"))
+                        spectrum = _parse_spectrum(
+                            elem, max_bytes=effective.max_file_size_bytes
+                        )
+                        if declared is not None and (
+                            spectrum.mz.size != declared
+                            or spectrum.intensity.size != declared
+                        ):
+                            mismatched_spectra += 1
+                        yield spectrum
+                    except MalformedFileError as exc:
+                        scan_id = elem.get("id") or f"index={elem.get('index', '?')}"
+                        raise MalformedFileError(
+                            f"{resolved} spectrum {scan_id}: {exc}"
+                        ) from exc
+                    finally:
+                        elem.clear()
+            if mismatched_spectra:
+                logger.warning(
+                    "%s: %d spectrum/spectra declare a peak count their binary arrays "
+                    "do not supply; they were read as decoded and nothing was refused.",
+                    resolved,
+                    mismatched_spectra,
+                )
     except ET.ParseError as exc:
         raise MalformedFileError(f"Malformed mzML: {exc}") from exc
     finally:
@@ -881,18 +887,19 @@ def declared_spectrum_count(path: str | Path) -> int:
     resolved = Path(path)
     handle = _open_binary(resolved)
     try:
-        for event, elem in ET.iterparse(handle, events=("start",)):
-            if event == "start" and _local(elem.tag) == "spectrumList":
-                raw = elem.get("count")
-                if raw is None:
-                    return 0
-                try:
-                    return int(raw)
-                except ValueError as exc:
-                    raise MalformedFileError(
-                        "spectrumList/@count is not an integer."
-                    ) from exc
-        raise MalformedFileError("The file contains no spectrumList element.")
+        with security.malformed_stream_errors(resolved):
+            for event, elem in ET.iterparse(handle, events=("start",)):
+                if event == "start" and _local(elem.tag) == "spectrumList":
+                    raw = elem.get("count")
+                    if raw is None:
+                        return 0
+                    try:
+                        return int(raw)
+                    except ValueError as exc:
+                        raise MalformedFileError(
+                            "spectrumList/@count is not an integer."
+                        ) from exc
+            raise MalformedFileError("The file contains no spectrumList element.")
     except ET.ParseError as exc:
         raise MalformedFileError(f"Malformed mzML: {exc}") from exc
     finally:

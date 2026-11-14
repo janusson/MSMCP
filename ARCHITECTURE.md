@@ -345,10 +345,14 @@ during the v1.0 work:
    from disk through the same `SecurityPolicy` as acquisitions
    (`msmcp.library.LibraryProvider`) and searches it for real; the query and the
    library are both genuine data, and the report names the file it opened.
-   A path with no reader — an MGF library or a local SQLite peak store, both
-   still planned — falls back to a deterministic synthetic library, and the
-   report says so. This is the repository's stated forward focus — see
-   *Direction: local MS database connectivity*.
+   An MGF library (`.mgf`, `.mgf.gz`) and a local SQLite peak store are read
+   too. A path in any other format is **refused**, not answered from a
+   fabricated library: a synthetic hit table is still a fabricated hit table,
+   and a real library in an unsupported format is the likeliest way to meet
+   one. The deterministic demonstration library is reachable only by opting in
+   (`MSMCP_LIBRARY_FALLBACK=synthetic`, default `refuse`), the same rule as
+   `MSMCP_EMBEDDING_BACKEND=mock` for the mock embedders, and when it is used
+   both the report banner and the provenance record it.
 2. **Job state is in-process.** It does not survive a restart; the poller
    reports a lost job as failed rather than pending, so a client can never spin
    forever.

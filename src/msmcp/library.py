@@ -28,8 +28,6 @@ readers can be added without touching the search pipeline.
 
 from __future__ import annotations
 
-import gzip
-import io
 import json
 import re
 import sqlite3
@@ -38,7 +36,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import IO, Final, cast
+from typing import Final, cast
 
 from msmcp import security
 from msmcp.errors import (
@@ -235,24 +233,6 @@ class LibraryProvider(ABC):
 # ---------------------------------------------------------------------------
 # MSP / NIST-style text
 # ---------------------------------------------------------------------------
-def _open_text(path: Path) -> IO[str]:
-    """Open *path* read-only as text, transparently handling gzip.
-
-    A gzip payload is bounded by its *decompressed* size, not only by the bytes
-    on disk (see :func:`msmcp.security.bounded_stream`).
-    """
-    handle = path.open("rb")
-    magic = handle.read(2)
-    handle.seek(0)
-    if magic == b"\x1f\x8b":
-        buffered = gzip.GzipFile(fileobj=handle)
-        bounded = security.bounded_stream(
-            buffered, security.DEFAULT_POLICY.max_file_size_bytes
-        )
-        return io.TextIOWrapper(cast(IO[bytes], bounded))
-    return io.TextIOWrapper(handle)
-
-
 def _parse_peak_line(line: str, line_number: int) -> list[tuple[float, float]]:
     """Parse one MSP peak line into one or more ``(m/z, intensity)`` pairs.
 
@@ -389,7 +369,7 @@ def iter_msp_spectra(
     at all is skipped, and counted in *stats* when one is supplied, rather than
     invented or treated as fatal.
     """
-    handle = _open_text(path)
+    handle = security.open_text_stream(path)
     fields: dict[str, str] = {}
     peaks: list[tuple[float, float]] = []
     have_content = False
@@ -408,35 +388,36 @@ def iter_msp_spectra(
         yield spectrum
 
     try:
-        for raw_line in handle:
-            line_number += 1
-            line = raw_line.strip()
-            if not line:
-                if have_content:
+        with security.malformed_stream_errors(path):
+            for raw_line in handle:
+                line_number += 1
+                line = raw_line.strip()
+                if not line:
+                    if have_content:
+                        yield from _emit()
+                        index += 1
+                        fields, peaks, have_content = {}, [], False
+                    continue
+                if line.startswith(("#", ";", "!")):
+                    continue
+
+                match = _HEADER_RE.match(line)
+                if match is None:
+                    peaks.extend(_parse_peak_line(line, line_number))
+                    have_content = True
+                    continue
+
+                key = _normalise_key(match.group(1))
+                if key in _NAME_KEYS and have_content:
+                    # A new record without a separating blank line.
                     yield from _emit()
                     index += 1
-                    fields, peaks, have_content = {}, [], False
-                continue
-            if line.startswith(("#", ";", "!")):
-                continue
-
-            match = _HEADER_RE.match(line)
-            if match is None:
-                peaks.extend(_parse_peak_line(line, line_number))
+                    fields, peaks = {}, []
+                fields[key] = match.group(2).strip()
                 have_content = True
-                continue
 
-            key = _normalise_key(match.group(1))
-            if key in _NAME_KEYS and have_content:
-                # A new record without a separating blank line.
+            if have_content:
                 yield from _emit()
-                index += 1
-                fields, peaks = {}, []
-            fields[key] = match.group(2).strip()
-            have_content = True
-
-        if have_content:
-            yield from _emit()
     finally:
         handle.close()
 

@@ -26,6 +26,14 @@ import pytest
 # that exercise the real-inference pipeline inject stub models explicitly.
 os.environ["MSMCP_EMBEDDING_BACKEND"] = "mock"
 
+# Search tests exercise the dispatch/poll contract and the report's synthetic
+# banner using the demonstration library as a stand-in.  In production that path
+# is opt-in (``MSMCP_LIBRARY_FALLBACK`` unset refuses an unreadable library), so
+# the suite opts in here the way the flag is meant to be used.
+# ``tests/test_library_fallback.py`` clears it again to pin what a real
+# deployment sees.
+os.environ["MSMCP_LIBRARY_FALLBACK"] = "synthetic"
+
 from msmcp.tools import chem, chromatograms, io, qc, search, similarity
 
 

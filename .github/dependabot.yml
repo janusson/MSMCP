@@ -1,0 +1,34 @@
+# Dependency update loop.
+#
+# `uv.lock` is committed and CI syncs with `--locked`, so a dependency only
+# moves when the lockfile moves.  This is what moves it: weekly pull requests
+# that update the lockfile itself, and security alerts for anything already
+# pinned to a version with a published advisory.  CI runs the full gate on each
+# such pull request, which is the check that matters for the scientific
+# dependencies (numpy, scipy, pyteomics) as much as for the tooling.
+#
+# The DreaMS backend is installed from source rather than from the lockfile, so
+# Dependabot cannot see it; its commit pin lives in `DREAMS_COMMIT` in
+# src/msmcp/models/backends.py and is bumped by hand.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      # One pull request for the routine bumps keeps the review queue short;
+      # a major version change still arrives on its own.
+      python-dependencies:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
