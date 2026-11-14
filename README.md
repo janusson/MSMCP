@@ -385,6 +385,20 @@ Fifteen tools are exposed to the model: compact Markdown (or a single sentence) 
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID. The report is delivered once; later polls return a short digest, and `full_report=True` re-requests it |
 | `cancel_search` | `tools/search.py` | Cancel a pending or running search job |
 
+**Library-search score failures:** Search requires every scorer result to be a finite
+number in `[0, 1]`. A NaN, infinity, or out-of-range score fails the search
+before a ranking, report, or search provenance can be returned; it is never
+clamped, treated as a mismatch, or silently omitted. Valid scores of `0.0` and
+`1.0` remain accepted.
+
+**Signed learned embeddings:** Real embedding backends can produce signed vectors,
+whose cosine can legitimately be negative. That raw cosine is not a valid
+`[0, 1]` *library-search* score under the current contract. A negative cosine for
+any eligible candidate fails the entire job, even if other candidates score
+positively; it is not remapped or evidence of an analytical mismatch. The frequency
+of this failure for real encoders and libraries has not been measured. A policy
+for signed-model cosine scores requires [separate scientific review](https://github.com/janusson/MSMCP/issues/103).
+
 Only `cancel_search` and `release_reference` mutate server state, and both advertise that on the wire.
 
 ## Instrument classes
