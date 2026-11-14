@@ -40,8 +40,11 @@ orthogonal-vector undershoot. The public `EmbeddingScorer.score_many()`
 batch method shares that numerical calculation but is not a library-search
 entry point. Signed learned vectors may yield negative, mathematically valid
 cosines; no unreviewed mapping to `[0, 1]` is applied. Until scoring semantics
-for these models are decided, a search that encounters a negative cosine
-fails explicitly. These software checks are not scientific validation.
+for these models are decided, a negative cosine for any eligible candidate
+fails the entire search, even if other candidates score positively. Failure
+frequency for real encoders and libraries is unmeasured; see the [signed-score
+policy issue](https://github.com/janusson/MSMCP/issues/103). These software
+checks are not scientific validation.
 
 ## Asynchronous job orchestration
 

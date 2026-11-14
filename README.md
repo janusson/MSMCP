@@ -393,10 +393,11 @@ clamped, treated as a mismatch, or silently omitted. Valid scores of `0.0` and
 
 **Signed learned embeddings:** Real embedding backends can produce signed vectors,
 whose cosine can legitimately be negative. That raw cosine is not a valid
-`[0, 1]` *library-search* score under the current contract, so the job fails
-explicitly rather than remapping the model output. This is a known limitation of
-embedding-based search, not evidence that the candidate is an analytical mismatch.
-A policy for signed-model cosine scores requires separate scientific review.
+`[0, 1]` *library-search* score under the current contract. A negative cosine for
+any eligible candidate fails the entire job, even if other candidates score
+positively; it is not remapped or evidence of an analytical mismatch. The frequency
+of this failure for real encoders and libraries has not been measured. A policy
+for signed-model cosine scores requires [separate scientific review](https://github.com/janusson/MSMCP/issues/103).
 
 Only `cancel_search` and `release_reference` mutate server state, and both advertise that on the wire.
 
