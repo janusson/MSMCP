@@ -86,11 +86,24 @@ def _estimate_snr(intensity: np.ndarray) -> float:
     return signal / noise
 
 
-def _diagnostic_mask(mz: np.ndarray, tolerance: float) -> int:
-    """Return the bitmask of diagnostic ions present within *tolerance* Da."""
+def _diagnostic_mask(
+    mz: np.ndarray,
+    intensity: np.ndarray,
+    tolerance: float,
+) -> int:
+    """Return the bitmask of diagnostic ions present within *tolerance* Da with positive intensity."""
+    if mz.size == 0 or intensity.size == 0:
+        return 0
+    valid = (intensity > 0.0) & np.isfinite(intensity) & np.isfinite(mz) & (mz > 0.0)
+    if not np.any(valid):
+        return 0
+    pos_mz = mz[valid]
     mask = 0
     for _, mass, bit in _DIAGNOSTIC_IONS:
-        if np.any(np.abs(mz - mass) <= tolerance):
+        # Preserve the inclusive boundary when float subtraction rounds one ULP high.
+        lower = np.nextafter(mass - tolerance, -np.inf)
+        upper = np.nextafter(mass + tolerance, np.inf)
+        if np.any((pos_mz >= lower) & (pos_mz <= upper)):
             mask |= 1 << bit
     return mask
 
@@ -149,21 +162,38 @@ def _peak_density_report(n_peaks_list: list[int]) -> str:
 
 
 def _diagnostic_fragment_report(
-    masks: list[int], n_total: int, tolerance: float
+    masks: list[int],
+    n_evaluated: int,
+    tolerance: float,
+    *,
+    context_note: str | None = None,
+    not_applicable_message: str | None = None,
 ) -> str:
     lines = [
         "### Diagnostic Fragment Analysis",
         "",
-        f"Presence is defined as a peak within ±{tolerance:g} Da of the "
+        f"Presence is defined as a peak with positive intensity within ±{tolerance:g} Da of the "
         "theoretical m/z.",
-        "",
-        "| Bit | Diagnostic Ion            | Theoretical m/z | Spectra  | Prevalence |",
-        "|-----|---------------------------|-----------------|----------|------------|",
+        "A positive match is not noise-supported fragment evidence and is not a "
+        "compound identification; background and interference can also match.",
     ]
+    if not_applicable_message is not None:
+        lines.extend(["", not_applicable_message])
+        return "\n".join(lines)
+
+    if context_note:
+        lines.append(context_note)
+    lines.extend(
+        [
+            "",
+            "| Bit | Diagnostic Ion            | Theoretical m/z | Spectra  | Prevalence |",
+            "|-----|---------------------------|-----------------|----------|------------|",
+        ]
+    )
 
     for name, mass, bit in _DIAGNOSTIC_IONS:
         count = sum(1 for m in masks if m & (1 << bit))
-        pct = count / n_total * 100 if n_total > 0 else 0.0
+        pct = count / n_evaluated * 100 if n_evaluated > 0 else 0.0
         lines.append(
             f"| {bit:>3}  | {name:<25} | {mass:>15.4f} | {count:>8} | {pct:>9.1f}% |"
         )
@@ -236,7 +266,12 @@ def register_tools(mcp: Any) -> None:
         total_tic = 0.0
         snr_values: list[float] = []
         n_peaks_list: list[int] = []
-        diag_masks: list[int] = []
+        n_ms1 = 0
+        n_ms2_plus = 0
+        n_unknown_level = 0
+        n_invalid_level = 0
+        diag_masks_ms2: list[int] = []
+        diag_masks_unknown: list[int] = []
         spectra = source.iter_spectra()
         try:
             for spectrum in itertools.islice(spectra, spectrum_limit):
@@ -245,7 +280,25 @@ def register_tools(mcp: Any) -> None:
                 total_tic += tic
                 snr_values.append(_estimate_snr(spectrum.intensity))
                 n_peaks_list.append(spectrum.n_peaks)
-                diag_masks.append(_diagnostic_mask(spectrum.mz, diagnostic_tolerance))
+                level = spectrum.ms_level
+                if level == 1:
+                    n_ms1 += 1
+                elif level is not None and level >= 2:
+                    n_ms2_plus += 1
+                    diag_masks_ms2.append(
+                        _diagnostic_mask(
+                            spectrum.mz, spectrum.intensity, diagnostic_tolerance
+                        )
+                    )
+                elif level is None:
+                    n_unknown_level += 1
+                    diag_masks_unknown.append(
+                        _diagnostic_mask(
+                            spectrum.mz, spectrum.intensity, diagnostic_tolerance
+                        )
+                    )
+                else:
+                    n_invalid_level += 1
         finally:
             close = getattr(spectra, "close", None)
             if callable(close):
@@ -287,6 +340,84 @@ def register_tools(mcp: Any) -> None:
             "",
         ]
 
+        ms1_str = f"{n_ms1} MS1 spectrum" if n_ms1 == 1 else f"{n_ms1} MS1 spectra"
+        ms2_str = (
+            f"{n_ms2_plus} MS/MS spectrum"
+            if n_ms2_plus == 1
+            else f"{n_ms2_plus} MS/MS spectra"
+        )
+        unk_str = (
+            f"{n_unknown_level} spectrum"
+            if n_unknown_level == 1
+            else f"{n_unknown_level} spectra"
+        )
+        invalid_level_str = (
+            f"{n_invalid_level} invalid declared MS level value"
+            if n_invalid_level == 1
+            else f"{n_invalid_level} invalid declared MS level values"
+        )
+
+        not_applicable_message: str | None = None
+        context_note: str | None = None
+        diag_report_masks: list[int] = []
+        n_diag_evaluated: int = 0
+
+        if n_ms2_plus > 0:
+            diag_report_masks = diag_masks_ms2
+            n_diag_evaluated = n_ms2_plus
+            excluded = []
+            if n_ms1:
+                excluded.append(f"{ms1_str} excluded")
+            if n_unknown_level:
+                excluded.append(
+                    f"{unk_str} with absent or unparseable MS level omitted"
+                )
+            if n_invalid_level:
+                excluded.append(f"{invalid_level_str} (<1) omitted")
+            context_note = f"Evaluated across {ms2_str}"
+            if excluded:
+                context_note += " (" + "; ".join(excluded) + ")"
+            context_note += "."
+        elif n_unknown_level > 0:
+            diag_report_masks = diag_masks_unknown
+            n_diag_evaluated = n_unknown_level
+            excluded = []
+            if n_ms1:
+                excluded.append(f"{ms1_str} excluded")
+            if n_invalid_level:
+                excluded.append(f"{invalid_level_str} (<1) excluded")
+            context_note = (
+                f"MS level was absent or unparseable in the input; evaluated across "
+                f"{unk_str}"
+            )
+            if excluded:
+                context_note += " (" + "; ".join(excluded) + ")"
+            context_note += "."
+        elif n_invalid_level:
+            excluded = []
+            if n_ms1:
+                excluded.append(f"{ms1_str} declared MS1")
+            excluded.append(f"{invalid_level_str} (<1)")
+            not_applicable_message = (
+                "No eligible diagnostic spectra: "
+                + "; ".join(excluded)
+                + ". No declared MS/MS or absent/unparseable-level spectra are available."
+            )
+        else:
+            not_applicable_message = (
+                "Diagnostic reference-mass matching is evaluated only for tandem "
+                f"MS (MS/MS, MS2+) spectra. All {n_total:,} analysed "
+                "spectra are declared MS1; 0 MS/MS spectra available."
+            )
+
+        diag_report = _diagnostic_fragment_report(
+            diag_report_masks,
+            n_diag_evaluated,
+            diagnostic_tolerance,
+            context_note=context_note,
+            not_applicable_message=not_applicable_message,
+        )
+
         report = "\n".join(
             [
                 *header,
@@ -296,7 +427,7 @@ def register_tools(mcp: Any) -> None:
                 "",
                 _peak_density_report(n_peaks_list),
                 "",
-                _diagnostic_fragment_report(diag_masks, n_total, diagnostic_tolerance),
+                diag_report,
             ]
         )
 
