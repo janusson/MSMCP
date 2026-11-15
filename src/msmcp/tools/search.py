@@ -932,6 +932,57 @@ def _assess_eligibility(
     }
 
 
+def _validate_similarity_score(score: float, scoring_method: str) -> None:
+    if not 0.0 <= score <= 1.0:
+        raise MsmcpError(
+            f"{scoring_method} scorer returned invalid similarity score "
+            f"{score!r}; expected a finite value in [0, 1]. "
+            "Check the scoring backend and input spectra before retrying."
+        )
+
+
+def _classical_chunk_scores(
+    scorer: ClassicalScorer,
+    query: list[tuple[float, float]],
+    chunk: list[dict[str, Any]],
+    context: QueryContext,
+    profile: InstrumentProfile,
+) -> tuple[list[dict[str, Any]], list[float]]:
+    """Batch pure classical work, preserving the original first failure.
+
+    Eligibility and eager scoring can encounter a later error before an earlier
+    score is checked. On failure only, replay the original per-candidate order.
+    This is safe only for the built-in, stateless ClassicalScorer; a failed batch
+    never becomes a successful search, even if replay itself finds no error.
+    """
+    try:
+        assessments = [_assess_eligibility(context, spec, profile) for spec in chunk]
+        eligible = [
+            spec["peaks"]
+            for spec, assessment in zip(chunk, assessments, strict=True)
+            if assessment["status"] != "excluded"
+        ]
+        scores = scorer.score_many(query, eligible) if eligible else []
+        if len(scores) != len(eligible):
+            raise MsmcpError(
+                "classical scorer returned an incorrect batch score count: "
+                f"expected {len(eligible)}, got {len(scores)}."
+            )
+        for score in scores:
+            _validate_similarity_score(score, "classical")
+        return assessments, scores
+    except Exception:
+        # Do not mask an earlier invalid score/record with a later batch error.
+        # Both operations are pure; counters and output are updated by the caller.
+        for spec in chunk:
+            assessment = _assess_eligibility(context, spec, profile)
+            if assessment["status"] != "excluded":
+                _validate_similarity_score(
+                    scorer.score(query, spec["peaks"]), "classical"
+                )
+        raise
+
+
 def _run_scan(request: SearchRequest) -> SearchOutcome:
     """Run the full library search and return the report with its provenance.
 
@@ -1021,10 +1072,23 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                 yield from _iter_spectra_chunked(conn, chunk_size)
 
         for chunk_id, chunk in _chunks():
-            for spec in chunk:
+            if type(scorer) is ClassicalScorer:
+                assessments, scores = _classical_chunk_scores(
+                    scorer, exp_peaks, chunk, context, profile
+                )
+                batch_scores = iter(scores)
+            else:
+                # Embeddings and alternative scorers keep their original path.
+                assessments = []
+                batch_scores = None
+            for index, spec in enumerate(chunk):
                 if spec["precursor_mz"] is not None:
                     references_stating_precursor += 1
-                assessment = _assess_eligibility(context, spec, profile)
+                assessment = (
+                    assessments[index]
+                    if batch_scores is not None
+                    else _assess_eligibility(context, spec, profile)
+                )
                 status = str(assessment["status"])
                 eligibility_counts[status] += 1
                 precursor_gate_applied = precursor_gate_applied or bool(
@@ -1034,13 +1098,12 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
                     reason = str(assessment["reason"])
                     exclusion_reasons[reason] = exclusion_reasons.get(reason, 0) + 1
                     continue
-                score = scorer.score(exp_peaks, spec["peaks"])
-                if not 0.0 <= score <= 1.0:
-                    raise MsmcpError(
-                        f"{scoring_method} scorer returned invalid similarity score "
-                        f"{score!r}; expected a finite value in [0, 1]. "
-                        "Check the scoring backend and input spectra before retrying."
-                    )
+                score = (
+                    next(batch_scores)
+                    if batch_scores is not None
+                    else scorer.score(exp_peaks, spec["peaks"])
+                )
+                _validate_similarity_score(score, scoring_method)
                 target_meta.append(
                     {
                         "id": spec["id"],
