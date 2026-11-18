@@ -157,7 +157,7 @@ def test_windows_roots_normalize_like_unix_ones(verifier: Any) -> None:
     checkout = Path("C:/Users/someone/Programming/msmcp")
     windows_roots = (
         (checkout / ".venv", verifier.VENV_ROOT),
-        (checkout, verifier.REPO_ROOT),
+        (checkout, None),
     )
     rendered = verifier.normalize_path(
         checkout / "src" / "msmcp" / "__init__.py", *windows_roots
