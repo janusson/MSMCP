@@ -2,6 +2,18 @@
 
 **A Model Context Protocol server that turns mass spectrometry into a first-class tool for agentic AI workflows — without ever stuffing spectral data into a context window.**
 
+> **Status.** `1.0.0` released; `make check` runs the same gate as CI. The metadata
+> design is still a proposal.
+>
+> **Read this before trusting a number.** Search returns ranked similarity candidates
+> and computes no production p/q values. The omission is deliberate: permuted spectra
+> cannot establish wrong-compound calibration. Restoration conditions are in
+> [`VALIDATION_SIGNIFICANCE.md`](VALIDATION_SIGNIFICANCE.md), and
+> `tests/test_significance_safety.py` fails CI if the old behaviour is reintroduced.
+>
+> **Boundary.** Local, offline, self-contained. Ships no library data, downloads none,
+> contacts no hosted service.
+
 MSMCP exposes exact-mass validation, adduct and isotope chemistry, spectral similarity scoring (classical *and* foundation-model embeddings), quality control, and asynchronous spectral library search to any LLM client that speaks the [Model Context Protocol](https://modelcontextprotocol.io).
 
 Large acquisitions never enter the conversation: spectra are parsed into **server-side data references**, so an agent can hand a 100,000-peak spectrum to the next tool as a short `ptr:spectrum:…` string, with structured **provenance** attached to every derived result.
@@ -184,7 +196,7 @@ Prerequisites: [uv](https://docs.astral.sh/uv/) and Python 3.13 (managed automat
 ```bash
 # 1. Clone and sync (creates the venv, installs runtime + dev dependencies)
 git clone <repository-url> msmcp && cd msmcp
-uv sync --extra dev
+uv sync --extra dev --locked   # --locked fails rather than silently re-resolving
 
 # 2. Launch the server on stdio, then connect a host (see the next section).
 #    The remaining commands are the same local gate CI runs.
@@ -237,7 +249,7 @@ reported as a library match.
 
 | Task | Command |
 |---|---|
-| Sync environment | `uv sync --extra dev` |
+| Sync environment | `uv sync --extra dev --locked` |
 | Format | `uv run ruff format .` |
 | Lint | `uv run ruff format --check .` · `uv run ruff check .` · `uv run mypy` · `uv run basedpyright` |
 | Test | `uv run pytest` |
@@ -247,7 +259,9 @@ reported as a library match.
 
 The `Makefile` wraps these into one pipeline: `make lint`, `make test`, `make eval`, and `make all` (sync → format → lint → unit tests → evaluation notebook → repomix pack). Every target depends on `install`, so `make all` works from a fresh clone without a separate sync step. `make test` deliberately omits the evaluation notebook — that is `make eval` — to keep the inner loop at a few seconds.
 
-Re-run `uv sync --extra dev` after changing `pyproject.toml`. The optional `repomix` pack (Node-based) is run as `repomix --style xml --output repomix-output.xml`.
+Two optional layers are maintained alongside the gate: `.github/dependabot.yml` opens weekly lockfile and GitHub Actions updates (and delivers security advisories), and `.pre-commit-config.yaml` runs `detect-secrets` on commit if you install it with `uvx pre-commit install`. Ad-hoc vulnerability scanning of the resolved environment is `uvx pip-audit --path .venv/lib/python3.*/site-packages`.
+
+Re-run `uv sync --extra dev` (without `--locked`) after changing `pyproject.toml`; that regenerates `uv.lock`, which is committed and is what CI and `make install` sync to. The optional `repomix` pack (Node-based) is run as `repomix --style xml --output repomix-output.xml`.
 
 ## Container image (pre-release packaging)
 
@@ -347,7 +361,7 @@ Agent:   "The top hit is caffeine, but the precursor mass error (13.91 ppm)
 
 The agent carries references, job IDs and verdicts — never spectra.
 
-> **Note on this walkthrough:** the *query* spectrum is genuinely read from `experiment.mzML`. The **library** depends on the path: an MSP/NIST-style text library (`.msp`, `.msp.gz`), an MGF library (`.mgf`, `.mgf.gz`), or a SQLite peak store (`.sqlite`, `.db`) is read from disk through the same security boundary as the query, while a path with no reader (such as the `metabolomics.library` string above) falls back to a synthetic library of 500–5,000 spectra seeded from that string. Either way the dispatch reply and the final report carry a banner naming which library actually answered the query, ahead of any hit table. Treat the hits as scoring results, never as identifications. See *Known limitations & roadmap*.
+> **Note on this walkthrough:** the *query* spectrum is genuinely read from `experiment.mzML`. The **library** depends on the path: an MSP/NIST-style text library (`.msp`, `.msp.gz`), an MGF library (`.mgf`, `.mgf.gz`), or a SQLite peak store (`.sqlite`, `.db`) is read from disk through the same security boundary as the query. A path in any other format is **refused** — MSMCP will not answer a real search from a fabricated library, because a plausible hit table is worse than an error. To run the deterministic demonstration library on purpose, set `MSMCP_LIBRARY_FALLBACK=synthetic`; the report and provenance then say so, seeded from the path's *file name* so the same fixture yields the same library in every checkout. Either way the dispatch reply and the final report carry a banner naming which library answered the query, ahead of any hit table. Treat the hits as scoring results, never as identifications. See *Known limitations & roadmap*.
 
 ## Tool reference
 
@@ -367,9 +381,23 @@ Fifteen tools are exposed to the model: compact Markdown (or a single sentence) 
 | `validate_precursor` | `tools/similarity.py` | Mass-error gate at the instrument class's precursor tolerance (5.0 ppm for the default `generic` class) |
 | `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference). Peak coordinates must be finite positive m/z and intensities finite non-negative values. The matching window comes from `ms2_tolerance`, or the instrument class when it is unset |
 | `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file, using the instrument class's diagnostic-ion window and SNR bands |
-| `search_library` | `tools/search.py` | Asynchronous similarity-ranked library search (job executor; classical or real-embedding scoring). MSP/NIST text and MGF libraries are read from disk through the security boundary; unsupported formats use a labelled synthetic fallback. The **query** is always real data. MS1/non-MS2 queries are refused; for MS2 queries the stated precursor, polarity, charge and adduct are checked before ranking, and only the tolerance actually applied is recorded. Candidates missing a field stay ranked but are labelled *unknown*. Statistical significance is uncalibrated: production search applies no significance filter and reports no p-values or q-values.
+| `search_library` | `tools/search.py` | Asynchronous similarity-ranked library search (job executor; classical or real-embedding scoring). MSP/NIST text and MGF libraries are read from disk through the security boundary; an unsupported format is refused unless `MSMCP_LIBRARY_FALLBACK=synthetic` opts into the labelled demonstration library. The **query** is always real data. MS1/non-MS2 queries are refused; for MS2 queries the stated precursor, polarity, charge and adduct are checked before ranking, and only the tolerance actually applied is recorded. Candidates missing a field stay ranked but are labelled *unknown*. Statistical significance is uncalibrated: production search applies no significance filter and reports no p-values or q-values.
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID. The report is delivered once; later polls return a short digest, and `full_report=True` re-requests it |
 | `cancel_search` | `tools/search.py` | Cancel a pending or running search job |
+
+**Library-search score failures:** Search requires every scorer result to be a finite
+number in `[0, 1]`. A NaN, infinity, or out-of-range score fails the search
+before a ranking, report, or search provenance can be returned; it is never
+clamped, treated as a mismatch, or silently omitted. Valid scores of `0.0` and
+`1.0` remain accepted.
+
+**Signed learned embeddings:** Real embedding backends can produce signed vectors,
+whose cosine can legitimately be negative. That raw cosine is not a valid
+`[0, 1]` *library-search* score under the current contract. A negative cosine for
+any eligible candidate fails the entire job, even if other candidates score
+positively; it is not remapped or evidence of an analytical mismatch. The frequency
+of this failure for real encoders and libraries has not been measured. A policy
+for signed-model cosine scores requires [separate scientific review](https://github.com/janusson/MSMCP/issues/103).
 
 Only `cancel_search` and `release_reference` mutate server state, and both advertise that on the wire.
 
@@ -548,7 +576,7 @@ user- and agent-facing story.
 
 **Forward focus: local MS database connectivity.** Reading spectral libraries the user already has is under way: **MSP/NIST-style text and MGF** libraries are read from disk now, behind a `LibraryProvider` interface, alongside the acquisition readers. Still to come: a local SQLite peak store, so `search_library` covers the formats libraries ship as. MSMCP remains local, offline and self-contained: it ships no library data, downloads none, and never talks to a hosted service. See [ARCHITECTURE.md](ARCHITECTURE.md) → *Direction*.
 
-- **Search names which library answered it**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. A library path in a readable format (MSP/NIST text or MGF, `.msp`/`.msp.gz`/`.mgf`/`.mgf.gz`) is read from disk through the same `SecurityPolicy` as acquisitions — allowed root, size limit, read-only — and is refused with `PathEscapeError` if it resolves outside the allowed root. A path with no reader still falls back to a synthetic library, and the report says which path was used, in a banner ahead of any hit table. Still to come is the local SQLite peak store.
+- **Search names which library answered it**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. A library path in a readable format (MSP/NIST text or MGF, `.msp`/`.msp.gz`/`.mgf`/`.mgf.gz`) is read from disk through the same `SecurityPolicy` as acquisitions — allowed root, size limit, read-only — and is refused with `PathEscapeError` if it resolves outside the allowed root. A path with no reader is refused before a job is dispatched; the synthetic library is a demonstration reachable only with `MSMCP_LIBRARY_FALLBACK=synthetic`, and the report then says so in a banner ahead of any hit table. Still to come is the local SQLite peak store.
 - **In-process job state**: jobs live in server memory and do not survive a restart; the poller reports a lost job as failed rather than pending. A durable executor is a drop-in `JobExecutor` implementation.
 - **MCP Tasks are not implemented by MSMCP**: the MCP Python SDK supports generic extension request handlers, but MSMCP has not registered the Tasks extension methods. It exposes local job state through `check_search_status`; representing a job snapshot with the MCP `Task` fields does not make it a Tasks-protocol implementation. See [ARCHITECTURE.md](ARCHITECTURE.md) for the tested SDK version and details.
 - **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself without MassFlow. `.imzML` requires the optional imaging extra. Vendor formats are refused with conversion guidance.
@@ -583,6 +611,7 @@ MSMCP is a **local, single-user server**: the MCP host spawns it as a child proc
 | `MSMCP_MAX_TOTAL_BYTES` | 512 MiB | Summed payload size held by the reference store |
 | `MSMCP_REFERENCE_TTL_SECONDS` | 3600 | Reference lifetime (`0` disables expiry) |
 | `MSMCP_EMBEDDING_BACKEND` | `real` | `real` requires real inference; `mock` selects the test/dev-only stand-ins |
+| `MSMCP_LIBRARY_FALLBACK` | `refuse` | `refuse` fails a search whose library is in an unsupported format; the exact value `synthetic` runs the labelled demonstration library instead. Any other value refuses |
 | `MSMCP_LSM_MS2_CKPT` | unset | Path to a bring-your-own LSM-MS2 checkpoint |
 | `MSMCP_LSM_MS2_ALLOW_UNSAFE` | unset | `1` opts into full-pickle checkpoint loading (unsafe) |
 

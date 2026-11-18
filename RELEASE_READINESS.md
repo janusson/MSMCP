@@ -1,8 +1,51 @@
 # MSMCP 1.0.2 release readiness
 
-Status: **qualification corrections integrated into the 1.0.2 candidate; awaiting final owner approval on PR #82**. PR #86 was merged into `release/1.0.2-candidate` at `e9a1599402143dd211fa64adb2b3f260ea574836`. PR #82 remains open/draft. No merge to `main`, tag, PyPI upload, or website deployment has been performed.
+Status: **published — `msmcp 1.0.2` is on PyPI as of 2026-11-09.**
 
-Updated 2026-10-31 after qualification PR #86. The corrected code tree is identical to the reviewed PR #86 source tree `af1d79a4cfeecb0b451ba522ffac2bd7ba87e82f`; the merge commit adds no code changes. Hosted gate run `41253058734` passed on that code tree. The documentation below preserves earlier candidate receipts; the current detailed qualification packet is [`docs/release-qualification/QUALIFICATION_REPORT.md`](docs/release-qualification/QUALIFICATION_REPORT.md). A later documentation-only refresh changes no packaged files; use PR #82's live head/checks for its current CI state.
+`main` is at `4aa052001b4449f575ea13c0a7907394479a3dae` (the 1.0.2 candidate plus PR #89) and the annotated tag `1.0.2` names exactly that commit. The tag run ([`42564654644`](https://github.com/janusson/MSMCP/actions/runs/42564654644)) passed `gate and build` — the full gate, the tag-names-the-packaged-version check, and `uv build` — then the `upload to PyPI` job was approved and published. Both artifacts match byte for byte the ones that run built, and an independent rebuild from the tagged tree reproduces the same digests:
+
+| File | sha256 | Uploaded |
+|---|---|---|
+| `msmcp-1.0.2-py3-none-any.whl` | `92500b39002a4676395f9264fa952bab55bd6e32755952eb1ad8ac679c6c9bdf` | 2026-11-09T17:57:19Z |
+| `msmcp-1.0.2.tar.gz` | `99a6ec43c7361b4357699900d5eabe0bcb7f60a2b1e22080fd089f9048f3812e` | 2026-11-09T17:57:21Z |
+
+PyPI lists `1.0.2` as the only release (`requires-python >=3.13`). A clean Python 3.13 install from the index advertises 15 tools, answers `ping`, and returns the expected chemistry (`[M+H]+` = +1.007276 Da; caffeine `C8H10N4O2` monoisotopic 194.0804 Da; a 0.0006 Da precursor error reported as 3.09 ppm).
+
+### Installed-package qualification
+
+`make validate-installed QUALIFY_SERVER=<venv>/bin/msmcp` runs
+[`validation/installed_mcp_qualification.py`](validation/installed_mcp_qualification.py)
+— the evidence script that drives the *installed* server with a real MCP stdio
+client, rather than importing the source tree — against the artifact installed
+from the index. The 1.0.2 run is committed as
+[`validation/installed-1.0.2-2026-11-09.json`](validation/installed-1.0.2-2026-11-09.json)
+with machine paths scrubbed. It records: 15 tools; an MGF query searched against
+a real MSP library read from disk with the precursor gate enabled; provenance
+naming `msmcp 1.0.2`, `mcp 2.3.0`, `numpy 2.5.4` and Python 3.13.12; adduct
+chemistry for `[M+2H]2+`, `[M+2Na-H]+`, `[M+3H]3+` and `[M+Na-2H]-`;
+`C6H12O6` at 180.0634 Da; and structured errors for an out-of-root path, a
+malformed library, an MS1 query and an over-budget indexed read, with the
+session still healthy afterwards. It characterizes packaging, protocol and
+error-path behaviour: it is not a compound-identification or false-discovery
+validation.
+
+The receipt is evidence about the **published artifact** — installed from the
+index into a clean virtual environment. The unit, evaluation and coverage
+figures elsewhere in this repository come from the **development checkout** and
+say nothing about the contents of the published wheel, or the reverse.
+
+The four earlier `workflow_dispatch` attempts (2026-10-21 ×3, 2026-10-25) failed at the upload step with `invalid-publisher`; registering the pending trusted publisher for `janusson` / `MSMCP` / `publish.yml` / `pypi` resolved it. No owner action remains for 1.0.2.
+
+### Tag history correction
+
+Two tags were deleted on 2026-11-09 because their trees did not declare the version they named: `1.0.1`, and the earlier `1.0.2`. Both pointed at commits whose `pyproject.toml` reads `version = "1.0.0"`, so `publish.yml`'s tag/version guard would have rejected either. Restore one with `git push origin <commit>:refs/tags/<name>` if it is needed:
+
+| Deleted tag | Tag object | Commit |
+|---|---|---|
+| `1.0.1` | `f07ce092dbe43aae6f8210600830380d0d1017a6` | `3d031cf7d854c6a24742af5a89d283ca8c3272ae` |
+| `1.0.2` (pre-correction) | `8af8b905b563905e61f81a0077653df02afe5094` | `8e34387f12dfe7de1ace6fa13aa8105480317407` |
+
+*Historical:* the qualification packet was refreshed on 2026-10-31 after PR #86. The corrected code tree was identical to the reviewed PR #86 source tree `af1d79a4cfeecb0b451ba522ffac2bd7ba87e82f`; that merge added no code changes, and hosted gate run `41253058734` passed on it. The detailed packet is [`docs/release-qualification/QUALIFICATION_REPORT.md`](docs/release-qualification/QUALIFICATION_REPORT.md). The identity and scope sections below still describe the released tree.
 
 ## Candidate identity
 
@@ -12,12 +55,15 @@ Updated 2026-10-31 after qualification PR #86. The corrected code tree is identi
 | Candidate branch | `release/1.0.2-candidate` |
 | Base | `origin/main` @ `18e183a5873d6622b0cd09432b4056d13b0f3499` |
 | Qualified code tree SHA | `e9a1599402143dd211fa64adb2b3f260ea574836` (merge tree equals PR #86 source tree `af1d79a4cfeecb0b451ba522ffac2bd7ba87e82f`) |
-| Package version | `1.0.2` (candidate only; no tag) |
+| Released commit | `main` @ `4aa052001b4449f575ea13c0a7907394479a3dae` (1.0.2 candidate + PR #89) |
+| Version tag | `1.0.2` (annotated, pushed 2026-11-09) |
+| Package version | `1.0.2` |
+| PyPI | **not published** — no trusted publisher registered |
 | Python requirement | `>=3.13` |
 | Core dependencies | `mcp[cli]>=2.2.0`, `pydantic>=2.12.5`, `numpy>=1.26.4` |
 | Optional extras | `imaging` (`massflow>=0.1.2,<0.2`), `chem`, `ml`, `test`, `dev` |
 
-The package version remains `1.0.2`; no version tag exists. The PR #82 branch may advance for documentation-only readiness updates; the live PR head and check run are authoritative for owner review.
+The tagged tree declares `1.0.2`, which is what the tag names. Earlier candidate branches (`release/1.0.2-candidate`, PR #82) are superseded by the merge onto `main`.
 
 ## Supported core server
 
@@ -260,9 +306,30 @@ Repository `janusson/msmcp-site`, reconciled branch `release/site-1.0.2`:
 - Deployment will happen only after an authorised merge to site `main`. The site
   deployment checklist is `SITE_DEPLOYMENT_CHECKLIST.md` on the site branch.
 
+## Known follow-ups (recorded, not part of this release)
+
+1. **Optional-dependency paths are never exercised.** `rdkit`, `massflow`, `torch`
+   and `dreams` are absent from every environment used here, so 18 tests skip and
+   the `chem`, `imaging` and `ml` extras are unqualified. A matrix job per extra
+   is the obvious fix; it is deliberately not added here.
+2. **Resource leaks in tests.** `pytest -W always::ResourceWarning` reports 38
+   warnings on the current suite, all pre-existing and none affecting results:
+   19 unclosed SQLite connections from
+   `tests/test_library.py::TestSQLiteLibraryProvider::test_peak_batches_respect_sqlite_variable_limit`,
+   and unclosed gzip `FileIO` handles behind the compressed-input tests in
+   `test_mgf.py`, `test_mzml.py`, `test_security.py`, `test_library.py` and
+   `test_zed_config.py`. They surface late under a runner that treats warnings
+   as errors.
+3. **Coverage is diagnostic only.** The suite covers 91% of `src/msmcp`
+   (`mzml.py` 82%, `models/backends.py` 84%, `tools/chem.py` 88%). No threshold is
+   enforced, deliberately: boundary and scientific correctness matter more than a
+   number, and a threshold invites tests written to clear it.
+
 ## Remaining blockers and risks
 
-1. **Approval gate.** No merge, tag, PyPI upload or site deployment is authorised.
+1. **PyPI publication.** The merge and the `1.0.2` tag are done; the upload is
+   not. It needs the account-level trusted publisher below, and an approval of
+   the `pypi` environment deployment.
 2. **PyPI pending publisher.** The invalid-publisher error cannot be fixed from
    the repository; the account-level publisher above must be created by the owner.
 3. **Diagnostic detail over MCP.** The SDK masks exception text in `is_error`
@@ -272,15 +339,19 @@ Repository `janusson/msmcp-site`, reconciled branch `release/site-1.0.2`:
    identification or FDR procedure. Context gating depends on metadata the source
    declares; missing context is labelled unknown rather than inferred.
 5. **Optional capabilities.** imzML, real embedding weights, remote transport and
-   durable jobs are not qualified by this candidate. GitHub Dependabot alerts on
-   the default branch include advisories in optional-extras chains (`rdkit`/
-   `torch`/`massflow`); the core installed wheel has none of those packages. The
-   candidate does not claim a dependency-security audit beyond the core install.
-6. **Default-branch security read-back.** GitHub reported 59 open Dependabot
-   alerts on `main` (5 critical, 24 high, 27 medium, 3 low). The qualified candidate
-   lock includes patched versions for the affected packages, and the MCP minimum
-   is now `2.2.0`. Recheck `main` alerts after an approved merge; optional extras
-   were not comprehensively audited.
+   durable jobs are not qualified by this candidate. The optional extras
+   (`rdkit`, `torch`, `massflow`) are not installed by a default `pip install`
+   and are not audited as a set; as of 2026-11-09 no advisory was open against
+   them on the default branch either. The candidate does not claim a
+   dependency-security audit beyond the core install.
+6. **Default-branch security read-back.** Dated observation, not a guarantee: on
+   2026-11-09 GitHub reported **0 open** Dependabot alerts on `main` (75 fixed, 0
+   dismissed), which closes the 59-open figure (5 critical, 24 high, 27 medium,
+   3 low) recorded earlier. On the same date `pip-audit` against the 37-package
+   runtime closure installed from the published wheel reported no known
+   vulnerabilities. Both are readings of that moment: a later advisory against
+   one of those versions would not be reflected here, and this does not extend
+   to the optional extras, which were not audited as a set.
 7. **Website deploy trigger.** Merging the site branch to `main` triggers the
    existing Pages workflow by design; do not merge until the owner approves the
    deployment.

@@ -234,3 +234,8 @@ drafts/
 
 # Local git worktrees (isolated branch/agent checkouts; local scratch, never committed)
 .worktrees/
+
+# examples/workflow: derived data and run output (built by prepare_data.py;
+# the 137 MB MassBank release is cached outside the repository)
+examples/workflow/data/
+examples/workflow/workflow_report.json

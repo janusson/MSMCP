@@ -6,9 +6,9 @@ This module provides the real-inference counterparts behind the same
 * :class:`DreaMSInferenceEmbedder` - the official DreaMS transformer
   (Bushuiev et al., *Nature Biotechnology* 2025,
   https://doi.org/10.1038/s41587-025-02663-3), pre-trained on millions of
-  tandem mass spectra.  The package is installed from source
-  (``uv pip install "git+https://github.com/pluskal-lab/DreaMS.git"``; the
-  ``dreams`` name on PyPI is an unrelated nanophotonics library) and the
+  tandem mass spectra.  The package is installed from source at the commit
+  pinned in :data:`DREAMS_COMMIT` (the ``dreams`` name on PyPI is an unrelated
+  nanophotonics library) and the
   pre-trained 1024-dimensional embedding checkpoint is downloaded
   automatically on first use.  Spectra are embedded through the model's own
   preprocessing pipeline (DataFormat-A: fragment peaks strictly below the
@@ -49,7 +49,7 @@ import tempfile
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Final
 
 import numpy as np
 
@@ -148,6 +148,17 @@ def _normalise_intensity(peaks: np.ndarray) -> np.ndarray:
 # ======================================================================
 # DreaMS — official pre-trained transformer (Nat. Biotechnol. 2025)
 # ======================================================================
+# DreaMS is installed from source, so it has no lockfile entry and nothing
+# would otherwise pin the code the embedding numbers come from.  The commit is
+# fixed here instead: an upstream force-push or a silent change to the
+# preprocessing pipeline would move results without any local change.  Bump it
+# deliberately, and re-run the embedding tests when you do.
+DREAMS_COMMIT: Final[str] = "dbec3a0b514a99e5056cfccde4559fda8cfe8129"
+DREAMS_INSTALL_SPEC: Final[str] = (
+    f"git+https://github.com/pluskal-lab/DreaMS.git@{DREAMS_COMMIT}"
+)
+
+
 def _run_dreams_inference(api: Any, model: Any, mgf_path: Path) -> np.ndarray:
     """Embed the spectra in *mgf_path* with the loaded DreaMS model.
 
@@ -198,7 +209,7 @@ class DreaMSInferenceEmbedder(SpectralEmbedder):
             raise EmbeddingBackendUnavailable(
                 "The DreaMS package is not installed.  Install it from "
                 "source with: "
-                '`uv pip install "git+https://github.com/pluskal-lab/DreaMS.git"` '
+                f'`uv pip install "{DREAMS_INSTALL_SPEC}"` '
                 "(the `dreams` name on PyPI is an unrelated nanophotonics "
                 "library).  The pre-trained 1024-d embedding checkpoint is "
                 "downloaded automatically on first use."
@@ -212,7 +223,7 @@ class DreaMSInferenceEmbedder(SpectralEmbedder):
             raise EmbeddingBackendUnavailable(
                 "The DreaMS package is not installed.  Install it from "
                 "source with: "
-                '`uv pip install "git+https://github.com/pluskal-lab/DreaMS.git"` '
+                f'`uv pip install "{DREAMS_INSTALL_SPEC}"` '
                 "(the `dreams` name on PyPI is an unrelated nanophotonics "
                 "library)."
             ) from exc

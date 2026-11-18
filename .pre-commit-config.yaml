@@ -1,0 +1,19 @@
+# Optional local secret scanning.  Pre-commit is not required to build or test
+# this project; install it with `uvx pre-commit install` if you want the check
+# on every commit.  GitHub's own secret scanning and push protection are already
+# enabled on the public repository, so this is the offline, pre-push layer that
+# works without network access and covers commits that never leave the machine.
+#
+# See skills/untrusted-report-text/ for the report-rendering half of the same
+# "never trust content that came from outside the process" rule.
+repos:
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        name: detect-secrets (no credentials in tracked files)
+        # notebooks/ is generated output whose cell ids are random hex and would
+        # be reported as high-entropy strings on every notebook edit; uv.lock is
+        # a machine-written lockfile full of hashes.  Both are audited by eye
+        # when they change rather than by this hook.
+        exclude: ^(notebooks/|uv\.lock$|\.venv/)

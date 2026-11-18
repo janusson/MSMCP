@@ -1,0 +1,105 @@
+{
+  "artifacts_sha256": {
+    "msmcp-1.0.2-py3-none-any.whl": "92500b39002a4676395f9264fa952bab55bd6e32755952eb1ad8ac679c6c9bdf",
+    "msmcp-1.0.2.tar.gz": "99a6ec43c7361b4357699900d5eabe0bcb7f60a2b1e22080fd089f9048f3812e"
+  },
+  "evidence": {
+    "adduct_chemistry": {
+      "[M+2H]2+": "Adduct: [M+2H]2+\nPolarity: positive\nCharge state: +2\nExact mass shift (\u0394): +2.014553 Da\nm/z offset for neutral M: (M + 2.014553) / |2| Da\n\nFormula:  m/z = (M + 2.014553) / |2| Da",
+      "[M+2Na-H]+": "Adduct: [M+2Na-H]+\nPolarity: positive\nCharge state: +1\nExact mass shift (\u0394): +44.971165 Da\nm/z offset for neutral M: M + 44.971165 Da\n\nFormula:  m/z = M + 44.971165 Da",
+      "[M+3H]3+": "Adduct: [M+3H]3+\nPolarity: positive\nCharge state: +3\nExact mass shift (\u0394): +3.021829 Da\nm/z offset for neutral M: (M + 3.021829) / |3| Da\n\nFormula:  m/z = (M + 3.021829) / |3| Da",
+      "[M+Na-2H]-": "Adduct: [M+Na-2H]-\nPolarity: negative\nCharge state: -1\nExact mass shift (\u0394): +20.974668 Da\nm/z offset for neutral M: (M + 20.974668) / |-1| Da\n\nFormula:  m/z = (M + 20.974668) / |-1| Da"
+    },
+    "dispatch": "## Search Dispatched\n\n**Job ID:** `79a1cb8ce64c46dfa11bba3aaf9e773c`\n\n**Query:** `<tmp>/msmcp-installed-XXXX/query.mgf` (spectrum #0, MS2, precursor m/z 195.0877, 5 peaks)\n\n**Query context:** MS2, precursor m/z 195.0877, ion mode positive, charge 1 (precursor gate enabled)\n\n\u2705 Library `<tmp>/msmcp-installed-XXXX/library.msp` will be read from disk (MSP) through the security boundary and searched for real.\n\nPoll for the report with:\n\n    check_search_status(job_id=\"79a1cb8ce64c46dfa11bba3aaf9e773c\")\n    cancel_search(job_id=\"79a1cb8ce64c46dfa11bba3aaf9e773c\")\n",
+    "formula_chemistry": "## Isotope Pattern: C6H12O6\n\nMonoisotopic mass: **180.0634 Da**\n\n| Isotopologue | Theoretical Mass (Da) | Relative Abundance |\n|-------------|----------------------|--------------------|\n| M           |             180.0634 |             1.0000 |\n| M+1         |             181.0668 |             0.0686 |\n| M+2         |             182.0680 |             0.0143 |\n\n*Abundances are normalised to the monoisotopic peak (M = 1.0000).*",
+    "load": {
+      "backend": "msmcp.mgf",
+      "coordinate": null,
+      "format": "MGF",
+      "kind": "spectrum",
+      "ms_level": 2,
+      "mz_range": [
+        110.0713,
+        500.1
+      ],
+      "n_bytes": 80,
+      "n_peaks": 5,
+      "precursor_mz": 195.0877,
+      "provenance": {
+        "created_at": "2026-11-09T18:38:38.274666+00:00",
+        "model": null,
+        "operation": "load_spectrum",
+        "parameters": {
+          "reader_backend": "msmcp.mgf",
+          "source_format": "MGF",
+          "spectrum_index": 0
+        },
+        "parents": [],
+        "software": {
+          "name": "msmcp",
+          "versions": {
+            "mcp": "2.3.0",
+            "msmcp": "1.0.2",
+            "numpy": "2.5.4",
+            "python": "3.13.12"
+          }
+        },
+        "sources": [
+          {
+            "backend": "msmcp.mgf",
+            "digest": "sha256:c90ed44275159f0d55416b8c8f500493c206efd5669d632255e2d89994a322a0",
+            "format": "MGF",
+            "path": "<tmp>/msmcp-installed-XXXX/query.mgf",
+            "size_bytes": 168
+          }
+        ]
+      },
+      "reference": "ptr:spectrum:ee263dcfe1ce679afc719c6a",
+      "retention_time": null,
+      "source": "<tmp>/msmcp-installed-XXXX/query.mgf",
+      "spectrum_index": 0,
+      "tic": 675.0
+    },
+    "malformed_formula": "ERROR: Malformed formula 'C6H12O6!': unexpected text at position 7.",
+    "malformed_library_error": "Error executing tool search_library",
+    "ms1_error": "Error executing tool search_library",
+    "outside_root_error": "Error executing tool load_spectrum",
+    "ping": "{\n  \"status\": \"ok\",\n  \"message\": \"MSMCP-MassFlow-Adapter is operational.\",\n  \"massflow_available\": false,\n  \"massflow_version\": null\n}",
+    "qc": "## QC Summary Report\n\n**File:** `<tmp>/msmcp-installed-XXXX/query.mgf`\n**Format:** MGF (reader: `msmcp.mgf`)\n**Spectra analysed:** 1\n**Coverage:** complete; the reader reached the end of the acquisition.\n**Total ion current (analysed spectra):** 6.750000e+02\n**Mean TIC / analysed spectrum:** 6.750000e+02\n**Instrument class:** generic (diagnostic-ion window \u00b10.02 Da, SNR bands 5/20)\n\n---\n\n### Signal-to-Noise Ratio (estimated)\n\n| Metric              | Value     |\n|---------------------|----------|\n| Mean SNR            |      7.0 |\n| Median SNR          |      7.0 |\n| Min SNR             |      7.0 |\n| Max SNR             |      7.0 |\n| Spectra < 5 SNR     |     0.0% |\n| Spectra > 20 SNR    |     0.0% |\n\nEstimator: base-peak intensity \u00f7 median positive intensity.  This is a transparent proxy, not a calibrated instrument SNR.\n\n### Peak Density\n\n| Metric                 | Value     |\n|------------------------|----------|\n| Mean peaks / spectrum  |      5.0 |\n| Median peaks / spectrum|      5.0 |\n| Std deviation          |      0.0 |\n| Spectra < 5 peaks      |     0.0% |\n| Spectra > 100 peaks    |     0.0% |\n\n\n### Diagnostic Fragment Analysis\n\nPresence is defined as a peak within \u00b10.02 Da of the theoretical m/z.\n\n| Bit | Diagnostic Ion            | Theoretical m/z | Spectra  | Prevalence |\n|-----|---------------------------|-----------------|----------|------------|\n|   0  | Tyrosine immonium         |        136.0757 |        1 |     100.0% |\n|   1  | Phenylalanine immonium    |        120.0808 |        1 |     100.0% |\n|   2  | Tryptophan immonium       |        159.0917 |        0 |       0.0% |\n|   3  | Histidine immonium        |        110.0713 |        1 |     100.0% |\n|   4  | Arginine immonium         |        129.1135 |        0 |       0.0% |\n|   5  | Proline immonium          |         70.0651 |        0 |       0.0% |\n|   6  | Leu/Ile immonium          |         86.0964 |        0 |       0.0% |\n|   7  | Methionine immonium       |        104.0528 |        0 |       0.0% |\n|  14  | Oxonium (glycan)          |        163.0601 |        0 |       0.0% |\n|  15  | Oxonium (HexNAc)          |        204.0867 |        0 |       0.0% |",
+    "report": "> \u2705  **REAL LIBRARY \u2014 READ FROM DISK.**\n>\n> The library below was read from disk as MSP (NIST/MSP text) and searched for real.  Hits are candidate library matches ranked by the stated scorer, not validated compound identifications.\n>\n> Library digest: `sha256:60d27b9358bcf814c91cbdfa9e7d6709296dac09d1103c4a5c7971d5aaf5d6e9`\n\n## Spectral Library Search Results\n\nRequested database: `<tmp>/msmcp-installed-XXXX/library.msp` \u2014 MSP library read from disk (3 spectra)\nQuery spectrum: `<tmp>/msmcp-installed-XXXX/query.mgf` (5 real peaks, read from disk)\nQuery context: MS2, precursor m/z 195.0877, ion mode positive, charge 1\nScoring method: classical (greedy peak matching, \u00b10.02 Da)\nInstrument class: generic (MS2 window \u00b10.02 Da)\n\n> \u26a0\ufe0f **SIGNIFICANCE UNCALIBRATED.** Wrong-compound null admissibility and false-discovery-rate control have not been validated. These are similarity-ranked candidates; no p-values, q-values, or 5% error-rate guarantee are provided.\n\nContext gate: precursor m/z within \u00b15.0 ppm; polarity, charge and adduct compared when both query and reference state them.\nContext eligibility: 0 matched, 1 unknown, 2 excluded before ranking (reasons: precursor outside declared tolerance (1), polarity mismatch (1)).\n\nShowing the top 1 of 1 candidate(s), ranked by similarity; no significance filter applied:\n\n| Rank | Compound | Score | Precursor m/z | Formula | Polarity | Context |\n|------|----------|-------|---------------|---------|----------|---------|\n| 1 | Caffeine | 1.0000 | 195.0877 | C8H10N4O2 | positive | unknown: reference charge not stated |\n\n\u26a0 1 of the candidates shown do not state all the context needed to verify compatibility. They remain ranked as exploratory candidates, not context-matched identifications.\n\n---\n*Provenance: search_library, method `classical`; query source `<tmp>/msmcp-installed-XXXX/query.mgf`.  Library: MSP read from disk (3 spectra), `<tmp>/msmcp-installed-XXXX/library.msp`.*",
+    "server": {
+      "name": "MSMCP-MassFlow-Adapter",
+      "protocol": "2025-11-25",
+      "version": "1.0.2"
+    },
+    "session_survived_errors": true,
+    "smiles_chemistry": "ERROR: SMILES-to-formula conversion failed (invalid SMILES or RDKit unavailable).\n\nInstall the optional `chem` extra (`uv sync --extra chem`) to enable RDKit SMILES parsing, or compute the chemical formula for this structure manually and resubmit using **is_smiles=False** with the formula string as *identifier*.",
+    "smiles_mode": "core-only: failed closed without RDKit",
+    "spectrum_bound_error": "Error executing tool load_spectrum: 1 validation error for load_spectrumArguments\nspectrum_index\n  Input should be less than or equal to 1 [type=less_than_equal, input_value=5, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.14/v/less_than_equal",
+    "summarise": "Reference: ptr:spectrum:ee263dcfe1ce679afc719c6a\nHeld server-side: [5] (80 bytes)\n--------------------------------------------------\nSpectrum #0  |  MS2  |  RT: N/A min\n  TIC: 675.00\n  Peaks (>=0.0): 5\n  Top 5 peaks (m/z -> intensity):\n    138.0662 -> 420.00\n    120.0808 -> 100.00\n    136.0757 -> 60.00\n    500.1000 -> 55.00\n    110.0713 -> 40.00\n  Base peak: 138.0662  (420.00)\n\n\n--------------------------------------------------\nProvenance: load_spectrum at 2026-11-09T18:38:38.274666+00:00\n  source: <tmp>/msmcp-installed-XXXX/query.mgf (format=MGF, reader=msmcp.mgf, digest=sha256:c90ed44275159f0d55416b8c8f500493c206efd5669d632255e2d89994a322a0)\n  software: python 3.13.12, msmcp 1.0.2, numpy 2.5.4, mcp 2.3.0\n  TIC recomputed from stored peaks: 675.00",
+    "tools": [
+      "annotate_isotopes",
+      "cancel_search",
+      "check_search_status",
+      "compute_cosine",
+      "extract_chromatograms",
+      "generate_qc_summary",
+      "list_spectra",
+      "load_mzml_summary",
+      "load_spectrum",
+      "ping",
+      "predict_adduct_offset",
+      "release_reference",
+      "search_library",
+      "summarise_reference",
+      "validate_precursor"
+    ]
+  },
+  "index_metadata": "https://pypi.org/pypi/msmcp/1.0.2/json",
+  "installed_from": "public PyPI (uv pip install msmcp==1.0.2)",
+  "note": "Output of the evidence script, temp paths scrubbed. Passing checks characterize packaging, protocol and error-path behaviour for this published artifact; they are not a compound-identification or false-discovery validation.",
+  "package": "msmcp",
+  "probe": "validation/installed_mcp_qualification.py",
+  "python": "3.13.12",
+  "version": "1.0.2"
+}

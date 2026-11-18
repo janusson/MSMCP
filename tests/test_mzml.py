@@ -255,6 +255,37 @@ class TestMzMLParser:
         with pytest.raises(MalformedFileError):
             list(iter_spectra(truncated_mzml))
 
+    def test_truncated_gzip_is_reported_as_malformed(self, tmp_path: Path) -> None:
+        """gzip integrity failures are the file being wrong, not an internal bug.
+
+        ``gzip.GzipFile`` raises ``EOFError``/``BadGzipFile`` while the parser is
+        iterating, and neither is an ``MsmcpError``; uncaught they reach the job
+        executor as an internal failure the caller can only see as "server log".
+        """
+        import gzip
+
+        payload = gzip.compress(
+            b"<mzML><run><spectrumList count='0'/></run></mzML>" * 16
+        )
+        path = tmp_path / "truncated.mzML.gz"
+        path.write_bytes(payload[: len(payload) // 2])
+        with pytest.raises(MalformedFileError, match="corrupt or truncated"):
+            list(iter_spectra(path))
+        with pytest.raises(MalformedFileError, match="corrupt or truncated"):
+            declared_spectrum_count(path)
+
+    def test_corrupt_gzip_crc_is_reported_as_malformed(self, tmp_path: Path) -> None:
+        import gzip
+
+        payload = bytearray(
+            gzip.compress(b"<mzML><run><spectrumList count='0'/></run></mzML>")
+        )
+        payload[-6] ^= 0xFF  # last four bytes are the CRC32
+        path = tmp_path / "bad_crc.mzML.gz"
+        path.write_bytes(bytes(payload))
+        with pytest.raises(MalformedFileError, match="corrupt or truncated"):
+            list(iter_spectra(path))
+
     def test_polarity_is_parsed_when_the_file_states_it(
         self, mzml_with_polarity: Path
     ) -> None:

@@ -68,8 +68,10 @@ mcp = MCPServer(
         "Caveat: search_library's query spectrum is always real data.  When "
         "database_file names an MSP/NIST-style text library (.msp, .msp.gz) "
         "it is read from disk through the same security boundary as an "
-        "acquisition and searched for real; any other path falls back to a "
-        "labelled synthetic library.  Hits are candidate matches ranked by "
+        "acquisition and searched for real.  A path in a format MSMCP cannot "
+        "read is refused, unless the server was started with "
+        "MSMCP_LIBRARY_FALLBACK=synthetic, which substitutes a labelled "
+        "synthetic demonstration library.  Hits are candidate matches ranked by "
         "the stated scorer — not validated identifications.  The report "
         "names which library answered it."
     ),
