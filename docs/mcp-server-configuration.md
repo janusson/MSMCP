@@ -3,6 +3,12 @@
 > It is kept as a record of the reasoning, not maintained as documentation; some
 > options discussed here were not taken. For the maintained description see
 > [`README.md`](../README.md) and [`ARCHITECTURE.md`](../ARCHITECTURE.md).
+>
+> **Editorial note (2026-11-12, publication).** Eleven occurrences of the
+> maintainer's checkout path — one `File outline for …` heading and ten
+> `file://…` links added by the editor — were replaced with `<REPO_ROOT>`; the
+> repository-relative remainder is unchanged. The transcript is otherwise
+> unedited.
 
 ## User (checkpoint)
 
@@ -7013,7 +7019,7 @@ SUCCESS: File outline retrieved. This file is too large to read all at once, so 
 IMPORTANT: Do NOT retry this call without line numbers - you will get the same outline.
 Instead, use the line numbers below to read specific sections by calling this tool again with start_line and end_line parameters.
 
-# File outline for /Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py
+# File outline for <REPO_ROOT>/src/msmcp/tools/search.py
 
 class SearchInput [L19-31]
 def _generate_peak_list [L82-106]
@@ -8393,7 +8399,7 @@ Status: Completed
 **Tool Call: Search files for regex `async def |_JOB_STORE|asyncio\.create_task|asyncio\.to_thread|def _build_report|def register_tools`**
 Status: Completed
 
-file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L46:50
+file://<REPO_ROOT>/src/msmcp/tools/search.py#L46:50
 
 ```
 # Async job store — maps job_id → {status, result, error, …}
@@ -8404,7 +8410,7 @@ _JOB_STORE: dict[str, dict[str, Any]] = {}
 ```
 
 
-file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L317:329
+file://<REPO_ROOT>/src/msmcp/tools/search.py#L317:329
 
 ```
 
@@ -8423,7 +8429,7 @@ def _build_report(
 ```
 
 
-file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L499:517
+file://<REPO_ROOT>/src/msmcp/tools/search.py#L499:517
 
 ```
 async def _run_search_task(
@@ -8448,7 +8454,7 @@ async def _run_search_task(
 ```
 
 
-file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L520:522
+file://<REPO_ROOT>/src/msmcp/tools/search.py#L520:522
 
 ```
         logger.exception("Search task %s failed", job_id)
@@ -8457,7 +8463,7 @@ file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L520:522
 ```
 
 
-file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L528:544
+file://<REPO_ROOT>/src/msmcp/tools/search.py#L528:544
 
 ```
 def register_tools(mcp: Any) -> None:
@@ -8480,7 +8486,7 @@ def register_tools(mcp: Any) -> None:
 ```
 
 
-file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L552:556
+file://<REPO_ROOT>/src/msmcp/tools/search.py#L552:556
 
 ```
         job_id = uuid.uuid4().hex[:8]
@@ -8491,7 +8497,7 @@ file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L552:556
 ```
 
 
-file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L560:564
+file://<REPO_ROOT>/src/msmcp/tools/search.py#L560:564
 
 ```
         }
@@ -8502,7 +8508,7 @@ file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L560:564
 ```
 
 
-file:///Users/ericjanusson/Programming/msmcp/src/msmcp/tools/search.py#L582:594
+file://<REPO_ROOT>/src/msmcp/tools/search.py#L582:594
 
 ```
     @mcp.tool()
@@ -8544,7 +8550,7 @@ All the structural pieces are in the right places. Let me verify the server regi
 **Tool Call: Search files for regex `_register_search_tools`**
 Status: Completed
 
-file:///Users/ericjanusson/Programming/msmcp/src/msmcp/server.py#L61:65
+file://<REPO_ROOT>/src/msmcp/server.py#L61:65
 
 ```
 from src.msmcp.tools.chem import register_tools as _register_chem_tools  # noqa: E402
@@ -8555,7 +8561,7 @@ from src.msmcp.tools.qc import register_tools as _register_qc_tools  # noqa: E40
 ```
 
 
-file:///Users/ericjanusson/Programming/msmcp/src/msmcp/server.py#L67:71
+file://<REPO_ROOT>/src/msmcp/server.py#L67:71
 
 ```
 _register_chem_tools(mcp)

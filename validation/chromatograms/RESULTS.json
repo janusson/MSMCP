@@ -1,49 +1,57 @@
 {
   "dataset_accession": "MSV000089046",
   "manifest_sha256": "486f65e5d0ec1d449c47dc3e5aaee2eaed4aa9119f1c7df07c491c38218293b4",
-  "source_commit": "64cb1db69a2b6ba1369ee4eb7c6bd296979a3c56",
+  "source_commit": "a16ca3634f539f8f0a14615c81b6531df7bd68f3",
   "source_files_sha256": {
-    "pyproject.toml": "11ee40eac34630ba1df49c085634025469d6615436718d1ce13038c068a312f2",
+    "pyproject.toml": "128ed889e729bd342709a2226007df839fb26e3c9a80f33bd09067cd391c816d",
     "src/msmcp/__init__.py": "e47a2b78d832d600685f241b2bf077359c60afc1bbbb31e93988c2d078724bb1",
-    "src/msmcp/chromatograms.py": "d242ecdc093719f7ccd3b3cf139917127084e18f8855e8e70230df8f45325950",
+    "src/msmcp/chromatograms.py": "a799a3b207a518ea9ad0fc0c9e7bec03fdc85a2333f124e0a364fe8bf0e816ce",
     "src/msmcp/errors.py": "6a2bccdd1356c95729425b5c87f873ec32959b74db1fd34f028bf7e6a4250c56",
     "src/msmcp/execution/__init__.py": "2a9a90f213672cfeb8aa565fe6ab021371c997cbd3db662e04c03b022c4c609f",
     "src/msmcp/execution/executor.py": "8ae86459a49388df73ad5cb57a142df006ee06b6212e7177c07c551dc2efe8d7",
-    "src/msmcp/ingest.py": "62e652429d9f5dcc3a1a72f81eee57abbe4966e5448dbf344d0b71ca99283248",
+    "src/msmcp/ingest.py": "bf297ff928106046e17261e278ecff83a1d1f254d93130dcbb5815fa9ac8070d",
     "src/msmcp/instruments.py": "75bf4b49ac1e5afeb78fdd3a37d4f75e91b13f141111d5de6ec0f1057b419259",
-    "src/msmcp/library.py": "3009c078b03b21c6bdd95b914b9e158b9c242db5f72316bf3f03acc5638e5c36",
-    "src/msmcp/massflow_io.py": "45a83223be04a81cdf29050a551dda7512db048abde49d2b74a00f5c13ecd9f3",
-    "src/msmcp/mgf.py": "c1b05788611f228df90268e1898a3fa9282afbc907a2bc82f236b277f85694e2",
+    "src/msmcp/library.py": "9f1b940d5f6294b044445a6b671a3197cd3c80b15557f753100626723fa5cf6e",
+    "src/msmcp/massflow_io.py": "0e991ecbc9999a7ee76d92a55043e1f221148dfc3900c32e834998c92450cb24",
+    "src/msmcp/mgf.py": "01ca7bd6806f845541bef97727c6f48cc93190233143c84f5fb01f53a2c09c11",
     "src/msmcp/models/__init__.py": "64710a1cab27e020d0564d9b88eeb4b98ca508a237a88c22363cd06fd2b0128b",
-    "src/msmcp/models/backends.py": "2fff9192a29b95a413accc1e2b2a01c9afaae1311c3978c96e2af1afe88ef3a4",
+    "src/msmcp/models/backends.py": "2206cf8012343c1a05d1b53581912b5536c18e13d5d504fda639bf67dd7be95b",
     "src/msmcp/models/embeddings.py": "136823329361faacaafd99da95615522a0af801c26151c2a7561fee1abfeb0c6",
     "src/msmcp/models/null_model.py": "87f23ce48146d5965402b42e3d87175dde1dd4dfcd1c0a5f70ff5c9646f592b9",
-    "src/msmcp/models/scoring.py": "0b1a50333248826c919819c97cb225f77008a65057048606f22582d6f9e8d04e",
-    "src/msmcp/mzml.py": "902b9be79889a8396f603337ed544c73134d118db196df2b9b5a7b7d734ac3a1",
-    "src/msmcp/provenance.py": "ca2997acede93a1a97ba48bf2f32f4b21bfcc038fcc8149138063cd6c36a52ea",
-    "src/msmcp/security.py": "67e6d7b8918a1ea8b42ccabe45491f6d7f2c1ac91311373d3f287339ec11840b",
-    "src/msmcp/server.py": "f24045265ee1646707e5c4029205395e44245da22da799e7a221e2e806a05b7a",
+    "src/msmcp/models/scoring.py": "fb75a1d46790698db7114816dde2d349301a426b9d9510ddbb89d1ad7dd5419d",
+    "src/msmcp/mzml.py": "cdf2b592a7c520723dcf3b74e7a01f1f75c33870770c458a65a7c34ebc7c025b",
+    "src/msmcp/provenance.py": "6d66cda8b7cf5b6cdadee385dd68d5254aa71f498ca4d1cb62a001bdd90f02cb",
+    "src/msmcp/reporting.py": "fc9a5264fdac2fdaf565bfc2634fa51d644cafeab9647b4d5b7bda23be13484b",
+    "src/msmcp/security.py": "ad599f3bf483ecea1fc85aca770ffcdb93f2873666f708cf2e98c8cb73693128",
+    "src/msmcp/server.py": "969cc308e5454e90a27dee1d107d43f6f503f690294821e7dcdfe7b1e6a59ab6",
     "src/msmcp/state/__init__.py": "b1368d6638b11799ee5775574f4a1587b4cd0acacf2f2d677fbf14430159ae8a",
     "src/msmcp/state/pointers.py": "f9f8f0dbc272a69e0ccda0455e506f760c2aac34124893552af316b536697cfa",
     "src/msmcp/state/store.py": "38baa13d37e15a8071c49e0b965ff043b343dbd7e99aac53b793b671b81f697c",
     "src/msmcp/tools/__init__.py": "e9d2b4fc4c4db5fea089e7cef4f103db951d94084c79e01f65fb707c394c4a44",
-    "src/msmcp/tools/chem.py": "d8adf41d2a191752f320301e1b1a66ac85a965e7b7753d8031d5e3ff676afa9e",
-    "src/msmcp/tools/chromatograms.py": "92b9c77c84496962b2adaaedb3712ba53f7fc97dc973772ebc6e8311de177a15",
-    "src/msmcp/tools/io.py": "a5d3d944fe5679459dc828ae93994c100ddda004407dace1e6274dfca7199212",
-    "src/msmcp/tools/qc.py": "1976a8009c31fcbb579c71820afce522e956441a259d79e25ecacb6d7d7cfc3f",
-    "src/msmcp/tools/search.py": "c0d013e6a919c827f15806f9fbf78034765e1672931cfa006624ad07c439474d",
-    "src/msmcp/tools/similarity.py": "89e82515c8e701963c5817f7e83ba1481e75740abb91ca8b8337ae141ac2d8e3",
-    "src/msmcp/tools/system.py": "5a4fc0d862e10667f4304ef508dccffc24f836c403992f22f07fd414fb507f1a",
-    "uv.lock": "380c475b1412dd314b883b965915815e54be100fac56cab6ceae57b84bc89438",
-    "validation/chromatograms/verify_public.py": "e913f4c460b19b53144dec5ba9083a001f0f56b0b234a6321bfb6777aea47cbf"
+    "src/msmcp/tools/chem.py": "9281dd649f9929f66a41ca6f3ea4180770d210365cafec4de25bad3f01c61b76",
+    "src/msmcp/tools/chromatograms.py": "dd21cdb457ed557fdfbec9472a774e97bca890bdb66253d51d64df711692bdba",
+    "src/msmcp/tools/io.py": "e67b3605ed9fcf0f8ab71234aa0f2189bb114999818e437ef543ba83c57f40d1",
+    "src/msmcp/tools/qc.py": "e89039fc69b1dca798d903c8aa154cb1d0dbda5b8596220c969d874b27f6538f",
+    "src/msmcp/tools/search.py": "9c5088a2dcfa5ac0a99575f351c74fb2dcb2b95f11bdec64d998eb1ac1612f71",
+    "src/msmcp/tools/similarity.py": "10c0be8c2695d4a60cb83f1e61d9653577b1f326d3d91ca57bc7f93a22abf615",
+    "src/msmcp/tools/system.py": "7118585ef714d6bf65351ae3690b4864aa083cb7cd3479f2caa19af5ee0f7313",
+    "uv.lock": "7e893f538c0247c75ca647ecd907c90220cf9aaeb43baa8817c976a4c8d8de23",
+    "validation/chromatograms/verify_public.py": "ed934806c4e993af649369521932245830ab8ec44c8f99d3b1049c4ea6538e32"
   },
   "source_tree_status": "",
-  "package_path": "/Users/ericjanusson/Programming/msmcp/.worktrees/chromatogram-correctness/src/msmcp/__init__.py",
-  "environment_prefix": "/Users/ericjanusson/Programming/msmcp/.worktrees/chromatogram-correctness/.venv",
+  "package_path": "src/msmcp/__init__.py",
+  "environment_prefix": "<VENV_ROOT>",
+  "path_redaction": {
+    "repo_root": "<REPO_ROOT>",
+    "venv_root": "<VENV_ROOT>",
+    "dataset_dir": "<TMP_DATASET_DIR>",
+    "local": "<LOCAL_PATH_REDACTED>",
+    "rule": "A path inside the checkout is recorded repository-relative; the checkout, its .venv and the dataset directory become the placeholders above; any other absolute path keeps only its final component."
+  },
   "python": "3.13.12",
   "packages": {
-    "msmcp": "1.0.0",
-    "mcp": "2.1.1",
+    "msmcp": "1.0.2",
+    "mcp": "2.3.0",
     "numpy": "2.4.6",
     "pydantic": "2.13.4",
     "massflow": "0.1.2"
@@ -181,14 +189,14 @@
         "No smoothing, normalization, baseline correction, alignment, blank subtraction, or identification was applied."
       ],
       "source": {
-        "file_path": "/private/tmp/masspilot-MSV000089046/Orbi_P_E2_CSSM10uMA.mzML",
+        "file_path": "<TMP_DATASET_DIR>/Orbi_P_E2_CSSM10uMA.mzML",
         "format": "mzML",
         "reader_backend": "msmcp.mzml",
         "size_bytes": 70767082,
         "digest": "sha256:91a112752847048be77dc07ad2550af7ada9e02bbfcf71d365593f3d7fe6989b"
       },
       "repeated_call_equal_except_provenance_timestamp": true,
-      "stdio_extraction_seconds": 1.037858708994463
+      "stdio_extraction_seconds": 0.7523443340032827
     },
     "Orbi_P_E2_EXBLANKA.mzML": {
       "scanned_spectra": 7916,
@@ -311,15 +319,15 @@
         "No smoothing, normalization, baseline correction, alignment, blank subtraction, or identification was applied."
       ],
       "source": {
-        "file_path": "/private/tmp/masspilot-MSV000089046/Orbi_P_E2_EXBLANKA.mzML",
+        "file_path": "<TMP_DATASET_DIR>/Orbi_P_E2_EXBLANKA.mzML",
         "format": "mzML",
         "reader_backend": "msmcp.mzml",
         "size_bytes": 65242379,
         "digest": "sha256:93eddd49a943beed5c24dd3b96e1fa10fd2a1c85e17dec12532abffc5e8aa71f"
       },
       "repeated_call_equal_except_provenance_timestamp": true,
-      "stdio_extraction_seconds": 0.902320541033987
+      "stdio_extraction_seconds": 0.6846072079933947
     }
   },
-  "output_schema_sha256": "ab4d76e75faa52921ae4ab5a29860d941e4a4df38a52b1c2ae5580fcaa02302c"
+  "output_schema_sha256": "a47475fba713349a1f672952d85fe9ea34342f251e7dcb6381ca151552deb943"
 }

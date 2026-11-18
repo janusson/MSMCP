@@ -49,7 +49,8 @@ IDs and structured reader warnings close related contract gaps. TIC/XIC are
 still sums of decoded intensities and BPC is still their maximum. Nulls, empty
 scan zeros, minutes, source order and centroid/profile semantics are unchanged.
 Schema 1.0 adds `native_scan_ids`; it now advertises the supported revision as a
-constant. This is an unreleased draft interface; source pinning remains required.
+constant. The interface shipped in `1.0.2`; the results below stay pinned to the
+implementation commit recorded in `RESULTS.json`.
 
 ## Reproduction
 
@@ -60,8 +61,10 @@ MassIVE and let this verifier check their identity. No MassPilot change is neede
 to run this verification.
 
 ```bash
-# Install the exact locked dependencies in this checkout.
-uv sync --locked --extra dev
+# Install the exact locked dependencies in this checkout. The imaging extra is
+# required: the report records every relevant distribution version, including
+# the optional `massflow`, and a missing one stops the run.
+uv sync --locked --extra dev --extra imaging
 ```
 
 ```bash
@@ -105,7 +108,59 @@ identity evidence. Repeated calls must agree except provenance timestamps.
 `RESULTS.json` records exact versions, source commit, output-schema hash, counts,
 errors, observed elapsed times, warnings and representative numeric values.
 
-## Results recorded 2026-10-22
+Every recorded path is now normalized, and the report states its own convention
+in `path_redaction`: a file inside the checkout is written repository-relative
+(`package_path` is `src/msmcp/__init__.py`), the environment is `<VENV_ROOT>`, each
+input is `<TMP_DATASET_DIR>/<file name>`, and any other absolute path keeps only
+its final component as `<LOCAL_PATH_REDACTED>`. The report names where the run
+happened without naming the machine; the dataset accession stays in
+`dataset_accession`, not in a path. No recorded digest covers `RESULTS.json`
+itself: `manifest_sha256` pins `MANIFEST.json` (still matching),
+`source_files_sha256` pins the tree and the verifier at the recorded
+`source_commit`, and `output_schema_sha256` pins the advertised
+`extract_chromatograms` schema.
+
+## Results recorded 2026-11-12
+
+`RESULTS.json` holds this run, at commit `a16ca36`, after the verifier stopped
+recording machine-specific paths. It re-verifies the same pinned inputs: both
+files used here match `MANIFEST.json` byte for byte, and the verifier checked that
+before starting a server. The run tested post-release `main` at `a16ca36`, not the
+`1.0.2` tag — ten files under `src/` differ between the two — and `packages.msmcp`
+reads `1.0.2` only because the verifier takes it from the installed package
+metadata, which still carries the release's version.
+
+Every measured quantity is identical to the 2026-10-22 run — the same 2,090 and
+2,100 selected MS1 points, zero maximum absolute error on RT, TIC, BPC and all
+four XIC vectors, the same representative maxima, acquisition counts and
+warnings — and the all-point comparison against an independent decoder passed
+under the same acceptance rule.
+
+What differs is environmental, and the report records it rather than hiding it:
+
+| Field | 2026-10-22 | 2026-11-12 |
+|---|---|---|
+| `source_commit` | `64cb1db` | `a16ca36` |
+| `packages.msmcp` | 1.0.0 | 1.0.2 |
+| `packages.mcp` | 2.1.1 | 2.3.0 |
+| `source_files_sha256` | pinned at `64cb1db` | re-pinned at `a16ca36` |
+| `output_schema_sha256` | `ab4d76e7…` | `a47475fb…` |
+| `stdio_extraction_seconds` | 1.04 / 0.90 | 0.75 / 0.68 |
+
+The schema hash moved because the advertised `extract_chromatograms` schema is not
+identical at the two revisions — `src/msmcp/tools/chromatograms.py` differs between
+them — and it now pins the schema at `a16ca36`. The elapsed times are observations
+on one machine, not a performance claim. NumPy 2.4.6, Pydantic 2.13.4, imaging
+`massflow` 0.1.2 and Python 3.13.12 are unchanged.
+
+Reproduce it with `uv sync --locked --extra dev --extra imaging`, then the
+`verify_public.py` command above pointed at a directory holding the two manifest
+files.
+
+## Results recorded 2026-10-22 — the original run
+
+`RESULTS.json` now holds the 2026-11-12 run above. This section records the first
+run, at the revision that first qualified the tool.
 
 Implementation commit: `64cb1db69a2b6ba1369ee4eb7c6bd296979a3c56`. The verifier ran with a clean
 source tree, checked this checkout's package/environment, forced the child to
@@ -185,10 +240,13 @@ calibrated FDR or analytical validation is inferred.
 
 ## MassPilot integration handoff
 
-PR #63 remains draft, unmerged and unreleased. Released package version `1.0.0`
-does not uniquely identify this code; use the exact implementation SHA in
-`RESULTS.json` and the locked dependencies, then record the source SHA separately
-from the package's version field. No MassPilot files were edited in this task.
+**Historical context.** This handoff was written while PR #63 was still draft and
+unmerged, when `1.0.0` was the current release and did not contain this code.
+PR #63 has since merged (`01de270`, 2026-11-01) and chromatogram extraction ships
+in `1.0.2`. The results above nonetheless stay pinned to the implementation commit
+recorded as `source_commit` in `RESULTS.json`, together with the locked
+dependencies: use that SHA and record it separately from the package's version
+field. No MassPilot files were edited in this task.
 
 After human review, the MassPilot owner can update its dependency pin, verify
 that `tools/list` advertises this output schema, and replay PR #28's exact

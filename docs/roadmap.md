@@ -15,13 +15,15 @@ Nothing is deleted from either. Completed and abandoned work stays in the record
 
 ## Where the repository is
 
-- **`1.0.0` is released** — tag `a58e50a`, with a GitHub release. `main` is protected by a required
+- **`1.0.2` is the current release** — published on PyPI on 2026-11-09 (tag `1.0.2`, commit `4aa0520`).
+  `1.0.0` (commit `a58e50a`) was the first tagged release. `main` is protected by a required
   `gate` status check (`ruff format --check`, `ruff check`, `mypy`, `basedpyright`, `pytest`,
   `make eval`) and forbids deletion and force-push.
-- **The spectral-library reader is on `main` and deliberately unreleased.** `#12`, the fitted
-  upper-tail null, was the release blocker; it has now landed on the working branch
-  (`msmcp.models.null_model`), so a release that includes the reader is no longer waiting on
-  statistics. The version still stays `1.0.0` until that release is cut — see *Version policy*.
+- **The spectral-library reader shipped in `1.0.2`.** `#12`, the fitted upper-tail null, was
+  the release blocker and landed with it (`msmcp.models.null_model`), so the current release
+  reads real MSP/NIST text and MGF libraries from disk through the same security boundary as
+  an acquisition. What remains for v1.1 is format coverage and acquisition context, not the
+  reader itself — see *Version policy*.
 - **What the reader can do today.** It opens an MSP/NIST-style library (`.msp`, `.msp.gz`) through
   the same security boundary as an acquisition and searches it for real. It reads the
   `m/z:intensity` spelling the Fiehn/Golm GMD exports use, skips and counts metadata-only records
@@ -62,7 +64,7 @@ and this repository has already been bitten by exactly that.
 | `#8` MS-Numpress mzML arrays | Documented limitation with an opt-in extra; no criterion references it. |
 | `#3` whole-slide imzML benchmark | Measurement, not capability. |
 | `#6` durable job execution | `ARCHITECTURE.md` files it under *Future extension (not v1.0)*; `JobExecutor` is the seam. |
-| `#19` distribution: `server.json`, PyPI, container | Adoption infrastructure, not correctness. |
+| `#19` distribution: `server.json`, container, release signing | Adoption infrastructure, not correctness. PyPI publication is done (`1.0.2`). |
 
 ---
 
@@ -116,9 +118,10 @@ and what would have to change first.
 
 ## Version policy
 
-The version stays `1.0.0` until a release includes the library reader. The v1.1 criteria are declared
-in `ARCHITECTURE.md`; `#12` now meets its three, but the format-coverage and acquisition-context
-criteria are still open, and nothing here bumps a version or cuts a release.
+The latest release is `1.0.2`, and it already contains the library reader; the version stays at
+the latest tag until the v1.1 format-coverage and acquisition-context criteria are met. Those
+criteria are declared in `ARCHITECTURE.md`; `#12` meets its three, but the remaining ones are
+still open, and nothing here bumps a version or cuts a release.
 
 ## Source material
 
