@@ -389,25 +389,25 @@ class LocalAsyncExecutor(JobExecutor):
         """Execute *fn* under the concurrency cap and record the outcome."""
         try:
             if record.cancel_event.is_set():
-                self._settle(record, "cancelled", "cancelled")
                 return
             async with self._limits():
                 if record.cancel_event.is_set():
-                    self._settle(record, "cancelled", "cancelled")
                     return
                 record.phase = "running"
                 record.status_message = "running"
                 record.updated_at = self._clock()
                 value = await asyncio.to_thread(fn)
                 if record.cancel_event.is_set():
-                    self._settle(record, "cancelled", "cancelled")
                     return
                 record.value = value
                 self._settle(record, "completed", "completed")
         except asyncio.CancelledError:
-            self._settle(record, "cancelled", "cancelled")
+            if not record.cancel_event.is_set():
+                self._settle(record, "cancelled", "cancelled")
             raise
         except Exception as exc:
+            if record.cancel_event.is_set():
+                return
             logger.exception("Job %s failed", record.job_id)
             record.error = _summarise_exception(exc)
             record.traceback = "".join(
@@ -416,7 +416,8 @@ class LocalAsyncExecutor(JobExecutor):
             self._settle(record, "failed", record.error)
         finally:
             record.task = None
-            self._schedule_expiry(record)
+            if not record.cancel_event.is_set():
+                self._schedule_expiry(record)
 
     def _settle(self, record: _Record, status: TaskStatus, message: str) -> None:
         """Move *record* to a terminal state and stamp the update time."""
@@ -487,21 +488,24 @@ class LocalAsyncExecutor(JobExecutor):
             )
             return self._snapshot(record)
 
-        record.cancel_event.set()
-        if record.task is not None and not record.task.done():
-            record.task.cancel()
+        self._cancel_work(record)
         self._settle(record, "cancelled", "cancelled")
+        self._schedule_expiry(record)
         logger.info("Cancellation requested for job %s", record.job_id)
         return self._snapshot(record)
+
+    def _cancel_work(self, record: _Record) -> None:
+        record.cancel_event.set()
+        # A running task owns its permit until to_thread returns or raises.
+        if record.phase == "queued" and record.task is not None:
+            record.task.cancel()
 
     def forget(self, job_id: str) -> bool:
         """Drop all record of *job_id*."""
         record = self._records.pop(job_id, None)
         if record is None:
             return False
-        if record.task is not None and not record.task.done():
-            record.cancel_event.set()
-            record.task.cancel()
+        self._cancel_work(record)
         return True
 
     def purge_expired(self) -> int:
@@ -526,9 +530,7 @@ class LocalAsyncExecutor(JobExecutor):
     def shutdown(self) -> None:
         """Cancel outstanding work and drop every record."""
         for record in list(self._records.values()):
-            if record.task is not None and not record.task.done():
-                record.cancel_event.set()
-                record.task.cancel()
+            self._cancel_work(record)
         for task in list(self._cleanup_tasks):
             task.cancel()
         self._cleanup_tasks.clear()

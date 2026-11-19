@@ -232,24 +232,51 @@ class TestCancellation:
         assert snapshot.status == "completed"
         assert exec_.result(handle.job_id).value == 1
 
-    async def test_cancelled_job_discards_a_late_result(self) -> None:
-        """A worker thread cannot be interrupted, so its output must be dropped."""
-        exec_ = executor()
-        started = threading.Event()
+    @pytest.mark.parametrize("finish", ["return", "raise", "forget", "shutdown"])
+    async def test_cancelled_worker_holds_capacity(self, finish: str) -> None:
+        exec_ = executor(max_concurrency=1)
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+        release = threading.Event()
+        skipped = threading.Event()
 
-        def slow() -> str:
-            started.wait(5.0)
-            threading.Event().wait(0.05)
+        def work() -> str:
+            loop.call_soon_threadsafe(started.set)
+            release.wait()
+            if finish == "raise":
+                raise RuntimeError("late failure")
             return "late result"
 
-        handle = exec_.submit("op", slow)
-        started.set()
-        exec_.cancel(handle.job_id)
+        first = exec_.submit("first", work)
+        try:
+            await asyncio.wait_for(started.wait(), 5)
+            queued = exec_.submit("queued", skipped.set)
+            await asyncio.sleep(0)  # Let the queued job reach semaphore acquisition.
+            cancelled = exec_.cancel(first.job_id)
+            assert cancelled.status == "cancelled"
+            assert exec_.cancel(first.job_id) == cancelled
+            if finish == "shutdown":
+                exec_.shutdown()
+                assert exec_.list_jobs() == ()
+            else:
+                exec_.cancel(queued.job_id)
+                if finish == "forget":
+                    assert exec_.forget(first.job_id)
+            second = exec_.submit("second", lambda: "ok")
+            await asyncio.sleep(
+                0
+            )  # Run the newly submitted task up to its first await.
+            assert exec_.status(second.job_id).phase == "queued"
+        finally:
+            release.set()
 
-        await asyncio.sleep(0.2)
-        outcome = exec_.result(handle.job_id)
-        assert outcome.status == "cancelled"
-        assert outcome.value is None
+        await _wait_until_settled(exec_, second.job_id)
+        assert exec_.result(second.job_id).value == "ok"
+        assert not skipped.is_set()
+        if finish in {"return", "raise"}:
+            assert exec_.status(first.job_id) == cancelled
+            outcome = exec_.result(first.job_id)
+            assert outcome.value is outcome.error is outcome.traceback is None
 
 
 # ---------------------------------------------------------------------------
