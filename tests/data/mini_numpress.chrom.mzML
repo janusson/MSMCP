@@ -126,15 +126,15 @@
 			<processingMethod order="0" softwareRef="so_dp_sp_0_pm_5">
 				<cvParam cvRef="MS" accession="MS:1000592" name="smoothing" />
 				<cvParam cvRef="MS" accession="MS:1000747" name="completion time" value="2013-10-03+15:01" />
-				<userParam name="parameter: in" type="xsd:string" value="[/home/hr/Desktop/tmp/osw_tut/OpenSWATH_Tutorial/data/split_napedro_L120420_010_SW-400AQUA__human_2ul_dilution_1_13.nf.pp.mzML.gz]"/>
+				<userParam name="parameter: in" type="xsd:string" value="[UPSTREAM_DIR/osw_tut/OpenSWATH_Tutorial/data/split_napedro_L120420_010_SW-400AQUA__human_2ul_dilution_1_13.nf.pp.mzML.gz]"/>
 				<userParam name="parameter: out" type="xsd:string" value="extracted_chroms_human_13_tutorial.mzML"/>
 				<userParam name="parameter: log" type="xsd:string" value=""/>
 				<userParam name="parameter: debug" type="xsd:integer" value="0"/>
 				<userParam name="parameter: threads" type="xsd:integer" value="1"/>
 				<userParam name="parameter: no_progress" type="xsd:string" value="false"/>
 				<userParam name="parameter: test" type="xsd:string" value="false"/>
-				<userParam name="parameter: tr" type="xsd:string" value="/home/hr/Desktop/tmp/osw_tut/OpenSWATH_Tutorial/assay/OpenSWATH_SGS_AssayLibrary.TraML"/>
-				<userParam name="parameter: rt_norm" type="xsd:string" value="/home/hr/Desktop/tmp/osw_tut/OpenSWATH_Tutorial/split_napedro_L120420_010_SW-400AQUA.rtnorm.trafoXML"/>
+				<userParam name="parameter: tr" type="xsd:string" value="UPSTREAM_DIR/osw_tut/OpenSWATH_Tutorial/assay/OpenSWATH_SGS_AssayLibrary.TraML"/>
+				<userParam name="parameter: rt_norm" type="xsd:string" value="UPSTREAM_DIR/osw_tut/OpenSWATH_Tutorial/split_napedro_L120420_010_SW-400AQUA.rtnorm.trafoXML"/>
 				<userParam name="parameter: min_upper_edge_dist" type="xsd:double" value="1"/>
 				<userParam name="parameter: extraction_window" type="xsd:double" value="0.05"/>
 				<userParam name="parameter: rt_extraction_window" type="xsd:double" value="300"/>

@@ -80,6 +80,38 @@ Boundary evidence, for both residual signs:
 | 92,681 | 417,081 bytes | accepted, 92,683 values |
 | 92,682 | 417,085 bytes | refused before native decoding |
 
+## Native failure modes the preflight must prevent
+
+pynumpress 0.1.5 declares `decodeLinear`, `decodePic` and `decodeSlof`
+without `except +`, and its generated wrapper calls them outside any
+`try` block. A C++ exception therefore reaches `std::terminate` and
+aborts the interpreter. It never becomes a Python exception, so the
+`except` clause around the native call in `_decode_binary` cannot
+handle it. Against the pinned sources:
+
+| Input reaching native code | Native behaviour |
+|---|---|
+| truncated integer payload (linear, PIC), e.g. PIC `b"\x01"` | `decodeInt` throws `const char*`; the process aborts (SIGABRT, reproduced with the shipped wheel) |
+| SLOF body after the 8-byte fixed point has odd length | one byte read past the input and one `double` written past the result vector (ASan heap-buffer-overflow; a null write for a one-byte body) |
+| linear predictor overflow | signed overflow, undefined behaviour (above) |
+| reservation larger than available memory | `std::bad_alloc` inside `resize`; the process aborts |
+
+The preflight refuses the first three before `getattr(decoder, ...)` is
+evaluated. The regressions in `tests/test_numpress_adversarial.py` replace
+the native function to prove it is not reached. The fourth is bounded by
+the reservation check against the source's `SecurityPolicy`; a policy
+limit larger than available memory can still abort.
+
+Independent differential check (November 2026, PR head `c42d84a`):
+11,848 generated inputs across the three codecs. The pinned sources were
+built with ASan and UBSan and driven exactly like the Cython wrappers.
+No input the preflight accepted produced a throw, a signal or a sanitizer
+report. On accepted inputs the sanitized build, the shipped wheel and an
+independent clean-room decoder agreed bit for bit. The linear boundary was
+exact for four seed pairs and both residual signs. The only inputs the
+preflight refuses that native code would decode cleanly are non-finite or
+non-positive fixed points, which the reader refuses by policy.
+
 ## Verification
 
 Run in this worktree with `uv run --no-sync`, which reuses the synced
@@ -116,10 +148,14 @@ The 18 skips are optional extras absent from this environment
 
 ## Remaining limits
 
-- The guard covers the linear predictor, where the pinned decoder's only
-  reachable signed overflow lives. PIC accumulates in `int32` and SLOF
-  in `int16`; both are bounded by their residual widths and by the
-  allocation checks, but neither has had the same sanitizer exercise.
+- The linear predictor is the pinned decoder's only arithmetic across
+  decoded values. `decodePic` converts each `uint32` independently and
+  `decodeSlof` computes `exp(uint16 / fixedPoint) - 1` per value. Neither
+  accumulates, so neither can overflow. Their hazards are structural; see
+  "Native failure modes" above.
+- The linear preflight walks every nibble in Python: about 1.5 µs per
+  value, 10 to 14 times the native decode. A 1,000,000-point profile
+  array spends about 1.5 s in preflight. PIC costs about 0.2 µs per value.
 - The sanitizer reproduction is a qualification record, not a CI step:
   it needs a compiler and network access, so it stays opt-in and
   hash-pinned.
