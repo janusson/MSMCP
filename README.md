@@ -87,7 +87,7 @@ for are these:
 
 | Ask… | What happens | Tools it uses |
 |---|---|---|
-| "What's in this acquisition, and does it look healthy?" | Summarise a run, then score its quality | `load_mzml_summary`, `generate_qc_summary` |
+| "What's in this acquisition, and does it look healthy?" | Summarise a run and inspect its descriptive QC metrics | `load_mzml_summary`, `generate_qc_summary` |
 | "Which MS2 spectra are in this run, and which should I search?" | An index of the run's spectra — index, MS level, retention time, precursor m/z, peak count — to choose a query | `list_spectra` |
 | "Pull up the MS2 spectrum at index 12 and describe it." | Read one spectrum server-side and report its peaks | `load_spectrum`, `summarise_reference` |
 | "I think this feature is caffeine — does the chemistry hold up?" | Check the adduct, isotope envelope and precursor mass error | `predict_adduct_offset`, `annotate_isotopes`, `validate_precursor` |
@@ -380,7 +380,7 @@ Fifteen tools are exposed to the model: compact Markdown (or a single sentence) 
 | `annotate_isotopes` | `tools/chem.py` | Exact isotope envelope (M … M+n) from a formula or SMILES; `isotopologues` sets the depth, so a halogen-rich formula's M+4 is reachable. Formula/SMILES input is capped at 4,096 characters and 10,000 atoms to bound exact expansion. |
 | `validate_precursor` | `tools/similarity.py` | Mass-error gate at the instrument class's precursor tolerance (5.0 ppm for the default `generic` class) |
 | `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference). Peak coordinates must be finite positive m/z and intensities finite non-negative values. The matching window comes from `ms2_tolerance`, or the instrument class when it is unset |
-| `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file, using the instrument class's diagnostic-ion window and SNR bands |
+| `generate_qc_summary` | `tools/qc.py` | Descriptive QC metrics (TIC, spectrum counts, peak density and intensity distribution), diagnostic m/z matches and isolation-window metadata |
 | `search_library` | `tools/search.py` | Asynchronous similarity-ranked library search (job executor; classical or real-embedding scoring). MSP/NIST text, MGF and schema-compatible SQLite libraries are read from disk through the security boundary; an unsupported format is refused unless `MSMCP_LIBRARY_FALLBACK=synthetic` opts into the labelled demonstration library. The **query** is always real data. MS1/non-MS2 queries are refused; for MS2 queries the stated precursor, polarity, charge and adduct are checked before ranking, and only the tolerance actually applied is recorded. Candidates missing a field stay ranked but are labelled *unknown*. Statistical significance is uncalibrated: production search applies no significance filter and reports no p-values or q-values.
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID. The report is delivered once; later polls return a short digest, and `full_report=True` re-requests it |
 | `cancel_search` | `tools/search.py` | Cancel a pending or running search job |
@@ -405,20 +405,20 @@ for signed-model cosine scores requires [separate scientific review](https://git
 
 Several tools apply an experimental threshold: `validate_precursor`'s precursor
 gate, `compute_cosine`'s and `search_library`'s m/z matching window, and
-`generate_qc_summary`'s diagnostic-ion window and SNR bands. Each is resolved
+`generate_qc_summary`'s diagnostic-ion window. Each is resolved
 from the `instrument_class` argument (default `generic`), which names a
 documented profile in `src/msmcp/instruments.py`. For `search_library`, the
 precursor gate is applied only when the query is MS2 and states a precursor;
 the report and provenance say whether it was applied. Search has no significance
 threshold; historical profile values are metadata only and are not applied:
 
-| Class | Precursor gate | MS2 / diagnostic-ion window | SNR bands |
-|---|---|---|---|
-| `generic` (default) | 5.0 ppm | 0.02 Da | 5 / 20 |
-| `orbitrap` | 5.0 ppm | 0.01 Da | 5 / 20 |
-| `tof` | 15.0 ppm | 0.05 Da | 5 / 20 |
-| `ion_trap` | 0.5 Da | 0.5 Da | 5 / 20 |
-| `triple_quad` | 0.7 Da | 0.7 Da | 5 / 20 |
+| Class | Precursor gate | MS2 / diagnostic-ion window |
+|---|---|---|
+| `generic` (default) | 5.0 ppm | 0.02 Da |
+| `orbitrap` | 5.0 ppm | 0.01 Da |
+| `tof` | 15.0 ppm | 0.05 Da |
+| `ion_trap` | 0.5 Da | 0.5 Da |
+| `triple_quad` | 0.7 Da | 0.7 Da |
 
 Accurate-mass classes express the precursor gate in ppm; unit-resolution
 classes (`ion_trap`, `triple_quad`) use a Da window, because a ppm gate shrinks
