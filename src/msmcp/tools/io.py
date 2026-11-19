@@ -543,7 +543,7 @@ def register_tools(mcp: Any) -> None:
                 break
         if spectrum is None:
             raise SpectrumIndexError(
-                f"`{escape_inline(validated.file_path)}` contains no spectrum at index "
+                f"'{validated.file_path}' contains no spectrum at index "
                 f"{validated.spectrum_index}.  The file was read successfully, "
                 f"so the index is out of range; check the file's spectrum count."
             )
