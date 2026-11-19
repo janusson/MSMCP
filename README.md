@@ -87,7 +87,7 @@ for are these:
 
 | Ask… | What happens | Tools it uses |
 |---|---|---|
-| "What's in this acquisition, and does it look healthy?" | Summarise a run, then score its quality | `load_mzml_summary`, `generate_qc_summary` |
+| "What's in this acquisition, and does it look healthy?" | Summarise a run and inspect its descriptive QC metrics | `load_mzml_summary`, `generate_qc_summary` |
 | "Which MS2 spectra are in this run, and which should I search?" | An index of the run's spectra — index, MS level, retention time, precursor m/z, peak count — to choose a query | `list_spectra` |
 | "Pull up the MS2 spectrum at index 12 and describe it." | Read one spectrum server-side and report its peaks | `load_spectrum`, `summarise_reference` |
 | "I think this feature is caffeine — does the chemistry hold up?" | Check the adduct, isotope envelope and precursor mass error | `predict_adduct_offset`, `annotate_isotopes`, `validate_precursor` |
@@ -146,8 +146,8 @@ MSMCP's dispatcher/poller split changes the failure model:
 |---|---|
 | Tool call exceeds the host timeout | `submit` returns in milliseconds; the scan continues on a worker thread via `asyncio.to_thread` |
 | Server restarts mid-search | Job state is in-memory and is lost — the price of zero infrastructure (see [limitations](#known-limitations--roadmap)) |
-| Too many concurrent searches | A bounded semaphore caps simultaneously running scans, so an eager agent cannot exhaust the CPU |
-| Failure with no signal | Failed jobs carry the full exception traceback, retrievable by the poller |
+| Too many concurrent searches | A semaphore limits active job coroutines. A cancelled coroutine can leave its worker thread running |
+| Failure with no signal | The poller reports failure. The full traceback goes to server stderr |
 | "Is it done yet?" | Status transitions (queued → running → completed/failed/cancelled) are queryable by job ID at any time |
 
 Finished jobs are expired from the executor after a one-hour TTL, so a long-running server never accumulates unbounded state.
@@ -332,7 +332,7 @@ Agent:   summarise_reference(reference="ptr:spectrum:9f3c…")
      Provenance: load_spectrum … source: run42/experiment.mzML"
 
 Agent:   search_library(spectrum_reference="ptr:spectrum:9f3c…",
-                        database_file="libraries/metabolomics.library",
+                        database_file="libraries/metabolomics.msp",
                         scoring_method="dreams")
   → "Job ID: 362c0267… (the peaks never entered the conversation)"
 
@@ -380,8 +380,8 @@ Fifteen tools are exposed to the model: compact Markdown (or a single sentence) 
 | `annotate_isotopes` | `tools/chem.py` | Exact isotope envelope (M … M+n) from a formula or SMILES; `isotopologues` sets the depth, so a halogen-rich formula's M+4 is reachable. Formula/SMILES input is capped at 4,096 characters and 10,000 atoms to bound exact expansion. |
 | `validate_precursor` | `tools/similarity.py` | Mass-error gate at the instrument class's precursor tolerance (5.0 ppm for the default `generic` class) |
 | `compute_cosine` | `tools/similarity.py` | Classical or real-embedding spectral similarity; each side may be inline peaks or a server-side reference (embeddings require real inference). Peak coordinates must be finite positive m/z and intensities finite non-negative values. The matching window comes from `ms2_tolerance`, or the instrument class when it is unset |
-| `generate_qc_summary` | `tools/qc.py` | Truthful QC metrics (TIC, spectrum counts, peak density, estimated SNR) from a real file, using the instrument class's diagnostic-ion window and SNR bands |
-| `search_library` | `tools/search.py` | Asynchronous similarity-ranked library search (job executor; classical or real-embedding scoring). MSP/NIST text and MGF libraries are read from disk through the security boundary; an unsupported format is refused unless `MSMCP_LIBRARY_FALLBACK=synthetic` opts into the labelled demonstration library. The **query** is always real data. MS1/non-MS2 queries are refused; for MS2 queries the stated precursor, polarity, charge and adduct are checked before ranking, and only the tolerance actually applied is recorded. Candidates missing a field stay ranked but are labelled *unknown*. Statistical significance is uncalibrated: production search applies no significance filter and reports no p-values or q-values.
+| `generate_qc_summary` | `tools/qc.py` | Descriptive QC metrics (TIC, spectrum counts, peak density and intensity distribution), diagnostic m/z matches and isolation-window metadata |
+| `search_library` | `tools/search.py` | Asynchronous similarity-ranked library search (job executor; classical or real-embedding scoring). MSP/NIST text, MGF and schema-compatible SQLite libraries are read from disk through the security boundary; an unsupported format is refused unless `MSMCP_LIBRARY_FALLBACK=synthetic` opts into the labelled demonstration library. The **query** is always real data. MS1/non-MS2 queries are refused; for MS2 queries the stated precursor, polarity, charge and adduct are checked before ranking, and only the tolerance actually applied is recorded. Candidates missing a field stay ranked but are labelled *unknown*. Statistical significance is uncalibrated: production search applies no significance filter and reports no p-values or q-values.
 | `check_search_status` | `tools/search.py` | Poll a dispatched search by job ID. The report is delivered once; later polls return a short digest, and `full_report=True` re-requests it |
 | `cancel_search` | `tools/search.py` | Cancel a pending or running search job |
 
@@ -399,26 +399,26 @@ positively; it is not remapped or evidence of an analytical mismatch. The freque
 of this failure for real encoders and libraries has not been measured. A policy
 for signed-model cosine scores requires [separate scientific review](https://github.com/janusson/MSMCP/issues/103).
 
-Only `cancel_search` and `release_reference` mutate server state, and both advertise that on the wire.
+`load_spectrum` registers a reference and `search_library` creates a job. `release_reference` and `cancel_search` provide explicit lifecycle controls.
 
 ## Instrument classes
 
 Several tools apply an experimental threshold: `validate_precursor`'s precursor
 gate, `compute_cosine`'s and `search_library`'s m/z matching window, and
-`generate_qc_summary`'s diagnostic-ion window and SNR bands. Each is resolved
+`generate_qc_summary`'s diagnostic-ion window. Each is resolved
 from the `instrument_class` argument (default `generic`), which names a
 documented profile in `src/msmcp/instruments.py`. For `search_library`, the
 precursor gate is applied only when the query is MS2 and states a precursor;
 the report and provenance say whether it was applied. Search has no significance
 threshold; historical profile values are metadata only and are not applied:
 
-| Class | Precursor gate | MS2 / diagnostic-ion window | SNR bands |
-|---|---|---|---|
-| `generic` (default) | 5.0 ppm | 0.02 Da | 5 / 20 |
-| `orbitrap` | 5.0 ppm | 0.01 Da | 5 / 20 |
-| `tof` | 15.0 ppm | 0.05 Da | 5 / 20 |
-| `ion_trap` | 0.5 Da | 0.5 Da | 5 / 20 |
-| `triple_quad` | 0.7 Da | 0.7 Da | 5 / 20 |
+| Class | Precursor gate | MS2 / diagnostic-ion window |
+|---|---|---|
+| `generic` (default) | 5.0 ppm | 0.02 Da |
+| `orbitrap` | 5.0 ppm | 0.01 Da |
+| `tof` | 15.0 ppm | 0.05 Da |
+| `ion_trap` | 0.5 Da | 0.5 Da |
+| `triple_quad` | 0.7 Da | 0.7 Da |
 
 Accurate-mass classes express the precursor gate in ppm; unit-resolution
 classes (`ion_trap`, `triple_quad`) use a Da window, because a ppm gate shrinks
@@ -459,7 +459,7 @@ Two imaging-backend behaviours are worth knowing; the import is lazy and neither
 - Importing MassFlow's data manager **reconfigures the root logger to write to stdout**, which would corrupt the stdio JSON-RPC framing. `massflow_io` repoints those handlers at stderr on import, and a test asserts that no handler in the process targets stdout after a read.
 - The same import **creates a `logs/` directory** in the working directory. That is library behaviour MSMCP cannot suppress; it is gitignored and documented rather than hidden.
 
-MS-Numpress-compressed mzML arrays require the optional `pynumpress` package and raise a missing-dependency error without it.
+The mzML reader detects MS-Numpress compression but cannot decode it, even with `pynumpress` installed.
 
 The mzML reader normalizes scan start times to minutes from an explicit second or minute unit (`unitAccession` or `unitName`) and retains the source value and unit on each parsed spectrum. It refuses absent, unsupported, or contradictory scan-time units and unequal decoded m/z and intensity arrays. A disagreement between paired decoded arrays and `defaultArrayLength` remains a warning.
 
@@ -486,7 +486,7 @@ jargon.
 | **M, M+1, M+2, …** | The isotope envelope: peaks one, two, … neutrons heavier than M. Annotated to M+2 by default; a halogen-rich formula carries its signal in M+2 and M+4. |
 | **ppm error** | Mass error in parts per million; MSMCP's default precursor gate is 5.0 ppm (class-dependent). |
 | **Cosine similarity** | A 0–1 score for how well two spectra's matched peaks agree; 1.0 means the matched peaks account for all intensity in both. |
-| **Spectral library** | A collection of reference spectra to search against; MSMCP reads MSP/NIST-style text (`.msp`, `.msp.gz`). |
+| **Spectral library** | A collection of reference spectra to search against; MSMCP reads MSP/NIST text, MGF and [SQLite peak stores](docs/sqlite_schema.md). |
 | **MSP / NIST text** | The plain-text interchange format most public libraries ship as. |
 | **imzML** | An open format for mass-spectrometry **imaging** data; MSMCP reads it with the optional imaging `massflow` extra. |
 | **p-value / q-value / FDR** | Statistical significance and false-discovery-rate concepts. MSMCP does not currently report calibrated search significance. |
@@ -574,16 +574,16 @@ user- and agent-facing story.
 
 ## Known limitations & roadmap
 
-**Forward focus: local MS database connectivity.** Reading spectral libraries the user already has is under way: **MSP/NIST-style text and MGF** libraries are read from disk now, behind a `LibraryProvider` interface, alongside the acquisition readers. Still to come: a local SQLite peak store, so `search_library` covers the formats libraries ship as. MSMCP remains local, offline and self-contained: it ships no library data, downloads none, and never talks to a hosted service. See [ARCHITECTURE.md](ARCHITECTURE.md) → *Direction*.
+**Local spectral libraries.** `search_library` reads MSP/NIST text, MGF and SQLite. A SQLite library must be a checkpointed, sidecar-free `.sqlite` or `.db` file with the [supported spectra and peaks schema](docs/sqlite_schema.md). The provider opens the database read-only.
 
-- **Search names which library answered it**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. A library path in a readable format (MSP/NIST text or MGF, `.msp`/`.msp.gz`/`.mgf`/`.mgf.gz`) is read from disk through the same `SecurityPolicy` as acquisitions — allowed root, size limit, read-only — and is refused with `PathEscapeError` if it resolves outside the allowed root. A path with no reader is refused before a job is dispatched; the synthetic library is a demonstration reachable only with `MSMCP_LIBRARY_FALLBACK=synthetic`, and the report then says so in a banner ahead of any hit table. Still to come is the local SQLite peak store.
+- **Search names which library answered it**: the **query** spectrum is genuine data, read from disk through the ingestion layer or dereferenced from the store, so a missing or malformed query fails loudly before dispatch. A library path in a readable format (MSP/NIST text, MGF or a compatible SQLite peak store) is read from disk through the same `SecurityPolicy` as acquisitions — allowed root, size limit, read-only — and is refused with `PathEscapeError` if it resolves outside the allowed root. A path with no reader is refused before a job is dispatched; the synthetic library is a demonstration reachable only with `MSMCP_LIBRARY_FALLBACK=synthetic`, and the report then says so in a banner ahead of any hit table.
 - **In-process job state**: jobs live in server memory and do not survive a restart; the poller reports a lost job as failed rather than pending. A durable executor is a drop-in `JobExecutor` implementation.
 - **MCP Tasks are not implemented by MSMCP**: the MCP Python SDK supports generic extension request handlers, but MSMCP has not registered the Tasks extension methods. It exposes local job state through `check_search_status`; representing a job snapshot with the MCP `Task` fields does not make it a Tasks-protocol implementation. See [ARCHITECTURE.md](ARCHITECTURE.md) for the tested SDK version and details.
 - **Readers MSMCP owns**: `.mzML`/`.mzML.gz` and `.mgf`/`.mgf.gz` are parsed by MSMCP itself without MassFlow. `.imzML` requires the optional imaging extra. Vendor formats are refused with conversion guidance.
 - **Model adapters — DreaMS real, LSM-MS2 blocked upstream**: `DreaMSInferenceEmbedder` runs real transformer inference behind the `SpectralEmbedder` interface (install the `dreams` package from source; weights auto-download). LSM-MS2 awaits a public weights release; its adapter activates via `MSMCP_LSM_MS2_CKPT`. Backend resolution is governed by `MSMCP_EMBEDDING_BACKEND` (`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
 (`real` / `mock`). Neither is required for core MSMCP to run or to be tested.
 - **Whole-slide images**: MassFlow materialises one placeholder per pixel when loading an imzML acquisition, so very large images are bounded by MassFlow's own behaviour.
-- **MS-Numpress-compressed mzML arrays** need the optional `pynumpress` package and report a missing-dependency error without it.
+- **MS-Numpress-compressed mzML arrays** are unsupported by the current reader.
 - **Hardware control is out of scope for this repository, not just for v1.0.** Direct instrument control, actuation and the safety interlock layer that must precede them belong to a **different project**. MSMCP is a data and computation interface; the MCP application layer must never be the only barrier between a model and physical hardware. There is no instrument-control code here and none will be added.
 
 See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full limitations list and the acceptance criteria (v1.0 and v1.1).
@@ -597,7 +597,7 @@ To report a vulnerability, use GitHub's private vulnerability reporting for this
 - **Trust boundary** — anyone who can drive the LLM client can drive the server. Run it only on machines you own; it speaks stdio by design and must never be exposed as a network service.
 - **File access** — every file-reading tool (`load_mzml_summary`, `load_spectrum`, `generate_qc_summary`, and both `search_library`'s query and its `database_file` library path) is confined to a single allowed root directory (`src/msmcp/security.py`). The default root is the server's working directory, override it with `MSMCP_ALLOWED_ROOT`. Paths that resolve outside that root — including symlinks that point outside it — are rejected with `PathEscapeError`, and for imzML the paired `.ibd` payload is checked against the same root. Files are also capped by a size limit (`MSMCP_MAX_FILE_SIZE_BYTES`, default 500 MiB) and a per-request spectrum-count limit (`MSMCP_MAX_SPECTRA`); for compressed input — a `.gz` file or a zlib-compressed mzML binary array — the size limit is enforced against the **inflated** bytes as they are read (`bounded_stream` in `src/msmcp/security.py`), so a small compressed file cannot expand past the budget. Access failures are reported truthfully and distinctly (`InaccessiblePathError` for missing/unreadable paths, `MalformedFileError` for unparseable data, `UnsupportedFormatError` for vendor formats, `MissingDependencyError` when an optional decoder is absent) rather than as a generic failure.
 - **Server-side data** — registered references are bounded (`MSMCP_MAX_REFERENCES`, `MSMCP_MAX_TOTAL_BYTES`), expire after `MSMCP_REFERENCE_TTL_SECONDS` (default 3600), are held read-only, and are namespaced. Exceeding a limit refuses the request; it never silently discards data a caller still holds. Reference identifiers are opaque random tokens, never object ids, addresses or paths.
-- **Execution** — concurrent jobs are capped by the executor (default 4). A cancelled job's partial output is discarded rather than returned.
+- **Execution** — the executor limits active job coroutines (default 4). Running worker threads can outlive cancellation. A cancelled job's partial output is discarded rather than returned.
 - **Checkpoint loading** — the LSM-MS2 adapter deserialises a checkpoint file (`torch.jit.load`, falling back to `torch.load` with `weights_only=True`); checkpoint files can execute arbitrary code, so only point `MSMCP_LSM_MS2_CKPT` at files you trust. A checkpoint that needs full-pickle loading is **rejected unless `MSMCP_LSM_MS2_ALLOW_UNSAFE=1` explicitly opts in** — that fallback (`torch.load` without `weights_only`) can execute arbitrary code from the file. The DreaMS adapter downloads pre-trained weights from the upstream repository on first use — pin the `dreams` install to a commit you trust.
 - **Optional imaging dependency side effects** — importing the imaging `massflow` data manager reconfigures the Python root logger to write to stdout and creates a `logs/` directory in the working directory. MSMCP neutralises the first (it would corrupt the stdio framing) and documents the second. See [Supported input formats](#supported-input-formats).
 - **No secrets** — the server stores no credentials, requires no API keys, and makes no network calls of its own. This is a design constraint, not a current limitation: MSMCP is intended for onsite, offline use, so remote database adapters are explicitly out of scope (see [ARCHITECTURE.md](ARCHITECTURE.md) → *Out of scope*).
