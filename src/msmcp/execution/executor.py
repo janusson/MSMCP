@@ -398,7 +398,25 @@ class LocalAsyncExecutor(JobExecutor):
                 record.phase = "running"
                 record.status_message = "running"
                 record.updated_at = self._clock()
-                value = await asyncio.to_thread(fn)
+                worker = asyncio.create_task(asyncio.to_thread(fn))
+                try:
+                    value = await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    # Cancelling the job task cannot interrupt to_thread.
+                    # Keep the semaphore while the underlying thread finishes,
+                    # including if cancellation is requested repeatedly.
+                    while not worker.done():
+                        try:
+                            await asyncio.shield(worker)
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            # A late worker error must not change the already
+                            # cancelled result or release the slot prematurely.
+                            break
+                    if not worker.cancelled():
+                        worker.exception()  # Retrieve a possible late error.
+                    raise
                 if record.cancel_event.is_set():
                     self._settle(record, "cancelled", "cancelled")
                     return
@@ -433,7 +451,7 @@ class LocalAsyncExecutor(JobExecutor):
         afterwards it is removed so a long-running server never accumulates
         unbounded state.
         """
-        if record.ttl_seconds is None:
+        if record.ttl_seconds is None or self._records.get(record.job_id) is not record:
             return
         task = asyncio.create_task(
             self._expire_later(record.job_id, record.ttl_seconds)
