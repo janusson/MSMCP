@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+from collections import Counter
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
@@ -12,6 +13,7 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
 from msmcp import ingest
+from msmcp.acquisition import activation_summary
 from msmcp.errors import MalformedFileError
 from msmcp.instruments import (
     DEFAULT_INSTRUMENT_CLASS,
@@ -429,6 +431,7 @@ def register_tools(mcp: Any) -> None:
         source = ingest.resolve_source(file_path, DEFAULT_POLICY)
 
         spectrum_limit = DEFAULT_POLICY.max_spectra
+        activation_counts: Counter[str] = Counter()
         n_total = 0
         total_tic = 0.0
         intensity_summaries: list[_PeakIntensitySummary] = []
@@ -444,6 +447,8 @@ def register_tools(mcp: Any) -> None:
         spectra = source.iter_spectra()
         try:
             for spectrum in itertools.islice(spectra, spectrum_limit):
+                if n_total < _MAX_INTENSITY_ROWS:
+                    activation_counts[activation_summary(spectrum.acquisition)] += 1
                 n_total += 1
                 tic = spectrum.tic
                 total_tic += tic
@@ -600,6 +605,8 @@ def register_tools(mcp: Any) -> None:
                 _intensity_distribution_report(intensity_summaries),
                 "",
                 _peak_density_report(n_peaks_list),
+                f"Source precursor activation (first {sum(activation_counts.values())} of {n_total} spectra):",
+                *(f"{count} x {label}" for label, count in activation_counts.items()),
                 "",
                 diag_report,
                 "",

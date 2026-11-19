@@ -464,8 +464,10 @@ conditions for restoration.
 
 *Partially implemented (#79).* Search now carries MS level, precursor m/z,
 polarity, charge and isolation window from mzML/MGF and gates library
-candidates on them. Collision energy, analyser type, resolution and source
-conditions remain unparsed and are not claimed.
+candidates using the existing eligibility policy. The [acquisition context
+record](docs/acquisition-context.md) also preserves scoped PSI-MS declarations
+for activation, isolation, scan and instrument configuration. The linked table
+maps the criteria below to their current evidence and remaining gaps.
 
 Preserving *how* a spectrum was acquired matters as much as the spectrum itself:
 source settings can be manipulated to produce wildly different results against a

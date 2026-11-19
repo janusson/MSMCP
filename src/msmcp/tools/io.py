@@ -29,6 +29,7 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
 from msmcp import ingest
+from msmcp.acquisition import activation_summary
 from msmcp.errors import SpectrumIndexError
 from msmcp.mzml import declared_spectrum_count, resolve_mzml_path
 from msmcp.mzml import iter_spectra as iter_mzml_spectra
@@ -154,7 +155,8 @@ def _summarise_spectrum(
     header = f"Spectrum #{idx}  |  MS{ms_level}  |  RT: {_safe_fmt(rt, _fmt_rt)} min"
     if coordinate is not None:
         header += f"  |  pixel {tuple(coordinate)}"
-    lines.append(header)
+    activation = activation_summary(getattr(spectrum, "acquisition", None))
+    lines.append(f"{header}  |  Activation: {activation}")
 
     mz = _to_float64(getattr(spectrum, "mz", None))
     intensity = _to_float64(getattr(spectrum, "intensity", None))
@@ -550,6 +552,7 @@ def register_tools(mcp: Any) -> None:
 
         provenance = provenance_for(
             "load_spectrum",
+            acquisition=spectrum.acquisition,
             parameters={
                 "spectrum_index": validated.spectrum_index,
                 "source_format": source.format,

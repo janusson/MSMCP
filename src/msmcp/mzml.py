@@ -28,13 +28,14 @@ import math
 import xml.etree.ElementTree as ET
 import zlib
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO, cast
 
 import numpy as np
 
 from msmcp import security
+from msmcp.acquisition import AcquisitionReader, SourceAcquisition
 from msmcp.errors import (
     MalformedFileError,
     MissingDependencyError,
@@ -136,6 +137,8 @@ class Spectrum:
     native_id: str | None = None
     """Exact mzML spectrum/@id; never inferred from index or ordinal."""
     source_warnings: tuple[str, ...] = ()
+
+    acquisition: SourceAcquisition | None = None
 
     @property
     def tic(self) -> float:
@@ -652,7 +655,9 @@ def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
     mismatched_spectra = 0
     try:
         with security.malformed_stream_errors(resolved):
-            for event, elem in ET.iterparse(handle, events=("end",)):
+            acquisition = AcquisitionReader()
+            for event, elem in ET.iterparse(handle, events=("start", "end")):
+                acquisition.header(event, elem)
                 if event == "end" and _local(elem.tag) == "spectrum":
                     try:
                         declared = _to_int_or_none(elem.get("defaultArrayLength"))
@@ -662,7 +667,7 @@ def iter_spectra(path: str | Path) -> Iterator[Spectrum]:
                             or spectrum.intensity.size != declared
                         ):
                             mismatched_spectra += 1
-                        yield spectrum
+                        yield replace(spectrum, acquisition=acquisition.spectrum(elem))
                     except MalformedFileError as exc:
                         scan_id = elem.get("id") or f"index={elem.get('index', '?')}"
                         raise MalformedFileError(

@@ -39,6 +39,8 @@ from typing import Any, Final
 
 import numpy as np
 
+from msmcp.acquisition import SourceAcquisition
+
 __all__ = [
     "DEFAULT_DIGEST_LIMIT_BYTES",
     "ModelInfo",
@@ -288,6 +290,7 @@ class Provenance:
 
     model: ModelInfo | None = None
     created_at: float = field(default_factory=time.time)
+    acquisition: SourceAcquisition | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -302,6 +305,9 @@ class Provenance:
         """Return a JSON-safe, MCP-serialisable mapping of the whole record."""
         return {
             "operation": self.operation,
+            "source_acquisition": self.acquisition.to_dict()
+            if self.acquisition
+            else None,
             "software": self.software.to_dict(),
             "parameters": dict(self.parameters),
             "sources": [source.to_dict() for source in self.sources],
@@ -319,6 +325,7 @@ def provenance_for(
     parents: tuple[str, ...] | list[str] = (),
     model: ModelInfo | None = None,
     software: SoftwareInfo | None = None,
+    acquisition: SourceAcquisition | None = None,
 ) -> Provenance:
     """Build a :class:`Provenance` record for *operation*.
 
@@ -327,6 +334,7 @@ def provenance_for(
     """
     return Provenance(
         operation=operation,
+        acquisition=acquisition,
         software=software
         if software is not None
         else SoftwareInfo(versions=software_versions()),
