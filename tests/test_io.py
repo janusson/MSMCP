@@ -18,6 +18,7 @@ import pytest
 from pydantic import ValidationError
 
 from msmcp import ingest
+from msmcp.errors import SpectrumIndexError
 from msmcp.security import PathEscapeError, SecurityPolicy, SpectrumCountExceededError
 from msmcp.tools import io as msmcp_io
 from msmcp.tools.io import ListSpectraInput
@@ -154,3 +155,13 @@ class TestListSpectraInput:
         assert validated.ms_level is None
         assert validated.max_spectra == 200
         assert validated.min_peaks == 0
+
+
+def test_load_spectrum_renders_missing_index_path_inline(
+    io_tools: IOTools, valid_mzml: Path, data_root: Path
+) -> None:
+    path = data_root / "sample & replicate.mzML"
+    path.write_bytes(valid_mzml.read_bytes())
+    with pytest.raises(SpectrumIndexError) as caught:
+        io_tools["load_spectrum"](str(path), spectrum_index=3)
+    assert "sample &amp; replicate.mzML" in str(caught.value)

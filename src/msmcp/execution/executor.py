@@ -31,6 +31,21 @@ Work runs on a worker thread, and a thread cannot be interrupted.  Cancelling
 therefore marks the job cancelled and discards its result: the caller observes
 a terminal ``cancelled`` state and never sees partial output, while the worker
 thread is left to unwind on its own.
+
+Client cancellation is immediate; release of capacity is not.  A queued job
+never starts.  A running job's worker keeps its concurrency slot until the
+callable returns or raises, so jobs queued behind it keep waiting.  Its late
+value, error and traceback are discarded, and its terminal snapshot does not
+change when the worker exits.  ``forget`` and ``shutdown`` follow the same
+rule.  Nothing here terminates a thread: a callable that never returns holds
+its slot for the life of the process.
+
+Residual limitation: the slot is held only when cancellation goes through
+:meth:`LocalAsyncExecutor.cancel`, ``forget`` or ``shutdown``.  If the job's
+internal asyncio task is cancelled from outside the executor, for example when
+the event loop is torn down, the slot is released while the thread may still be
+running.  At loop teardown the slot no longer matters, and the loop still waits
+for its worker threads.
 """
 
 from __future__ import annotations
@@ -389,25 +404,33 @@ class LocalAsyncExecutor(JobExecutor):
         """Execute *fn* under the concurrency cap and record the outcome."""
         try:
             if record.cancel_event.is_set():
-                self._settle(record, "cancelled", "cancelled")
                 return
             async with self._limits():
                 if record.cancel_event.is_set():
-                    self._settle(record, "cancelled", "cancelled")
                     return
                 record.phase = "running"
                 record.status_message = "running"
                 record.updated_at = self._clock()
                 value = await asyncio.to_thread(fn)
                 if record.cancel_event.is_set():
-                    self._settle(record, "cancelled", "cancelled")
                     return
                 record.value = value
                 self._settle(record, "completed", "completed")
         except asyncio.CancelledError:
-            self._settle(record, "cancelled", "cancelled")
+            if not record.cancel_event.is_set():
+                self._settle(record, "cancelled", "cancelled")
             raise
         except Exception as exc:
+            if record.cancel_event.is_set():
+                # The job is already terminal, so the failure is discarded.
+                # Log only the type: a message or traceback can carry file
+                # paths or data from the caller's input.
+                logger.debug(
+                    "Discarded late %s from cancelled job %s",
+                    type(exc).__name__,
+                    record.job_id,
+                )
+                return
             logger.exception("Job %s failed", record.job_id)
             record.error = _summarise_exception(exc)
             record.traceback = "".join(
@@ -416,7 +439,8 @@ class LocalAsyncExecutor(JobExecutor):
             self._settle(record, "failed", record.error)
         finally:
             record.task = None
-            self._schedule_expiry(record)
+            if not record.cancel_event.is_set():
+                self._schedule_expiry(record)
 
     def _settle(self, record: _Record, status: TaskStatus, message: str) -> None:
         """Move *record* to a terminal state and stamp the update time."""
@@ -477,6 +501,8 @@ class LocalAsyncExecutor(JobExecutor):
         A thread already executing cannot be interrupted, so the job is marked
         cancelled immediately and any late result is discarded.  This keeps the
         caller-visible contract honest: ``cancelled`` never carries output.
+        The worker keeps its concurrency slot until the callable returns or
+        raises; retention of the record starts now.
         """
         record = self._record(job_id)
         if record.status in _TERMINAL_STATUSES:
@@ -487,21 +513,24 @@ class LocalAsyncExecutor(JobExecutor):
             )
             return self._snapshot(record)
 
-        record.cancel_event.set()
-        if record.task is not None and not record.task.done():
-            record.task.cancel()
+        self._cancel_work(record)
         self._settle(record, "cancelled", "cancelled")
+        self._schedule_expiry(record)
         logger.info("Cancellation requested for job %s", record.job_id)
         return self._snapshot(record)
+
+    def _cancel_work(self, record: _Record) -> None:
+        record.cancel_event.set()
+        # A running task owns its permit until to_thread returns or raises.
+        if record.phase == "queued" and record.task is not None:
+            record.task.cancel()
 
     def forget(self, job_id: str) -> bool:
         """Drop all record of *job_id*."""
         record = self._records.pop(job_id, None)
         if record is None:
             return False
-        if record.task is not None and not record.task.done():
-            record.cancel_event.set()
-            record.task.cancel()
+        self._cancel_work(record)
         return True
 
     def purge_expired(self) -> int:
@@ -526,9 +555,7 @@ class LocalAsyncExecutor(JobExecutor):
     def shutdown(self) -> None:
         """Cancel outstanding work and drop every record."""
         for record in list(self._records.values()):
-            if record.task is not None and not record.task.done():
-                record.cancel_event.set()
-                record.task.cancel()
+            self._cancel_work(record)
         for task in list(self._cleanup_tasks):
             task.cancel()
         self._cleanup_tasks.clear()
