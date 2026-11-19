@@ -17,9 +17,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from msmcp.errors import SpectrumIndexError
-
 from msmcp import ingest
+from msmcp.errors import SpectrumIndexError
 from msmcp.security import PathEscapeError, SecurityPolicy, SpectrumCountExceededError
 from msmcp.tools import io as msmcp_io
 from msmcp.tools.io import ListSpectraInput
