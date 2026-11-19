@@ -17,6 +17,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from msmcp.errors import SpectrumIndexError
+
 from msmcp import ingest
 from msmcp.security import PathEscapeError, SecurityPolicy, SpectrumCountExceededError
 from msmcp.tools import io as msmcp_io
@@ -126,6 +128,25 @@ class TestListSpectra:
 
 
 class TestLoadSpectrumBudget:
+    def test_missing_spectrum_error_escapes_untrusted_path(
+        self, io_tools: IOTools, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hostile path cannot escape the tool-error Markdown code span."""
+
+        class EmptySource:
+            def iter_spectra(self) -> Iterator[object]:
+                return iter(())
+
+        monkeypatch.setattr(
+            msmcp_io.ingest, "resolve_source", lambda _path, _policy: EmptySource()
+        )
+        hostile_path = "run\u0060\n# forged heading.mzML"
+        with pytest.raises(SpectrumIndexError) as caught:
+            io_tools["load_spectrum"](hostile_path, spectrum_index=0)
+        message = str(caught.value)
+        assert "\n" not in message
+        assert chr(96) + "run' # forged heading.mzML" + chr(96) in message
+
     def test_load_spectrum_refuses_an_index_beyond_the_scan_budget(
         self,
         io_tools: IOTools,
