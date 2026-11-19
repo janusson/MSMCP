@@ -46,6 +46,7 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field, model_validator
 
 from msmcp import ingest, library, security
+from msmcp.acquisition import SourceAcquisition, activation_summary
 from msmcp.errors import MsmcpError, SpectrumIndexError, UnsupportedFormatError
 from msmcp.execution import (
     JobStatusSnapshot,
@@ -151,6 +152,8 @@ class QueryContext:
     adduct: str | None = None
     isolation_window: float | None = None
     source: Literal["file", "reference", "unknown"] = "unknown"
+
+    acquisition: SourceAcquisition | None = None
 
     @property
     def usable_for_library_search(self) -> bool:
@@ -558,6 +561,7 @@ def _context_from_spectrum(
         charge=getattr(spectrum, "charge", None),
         isolation_window=getattr(spectrum, "isolation_window", None),
         source=source,
+        acquisition=spectrum.acquisition,
     )
 
 
@@ -1151,15 +1155,18 @@ def _run_scan(request: SearchRequest) -> SearchOutcome:
             lines.append("Query context: " + ", ".join(context_parts))
         else:
             lines.append(
-                "Query context: unavailable (direct peak list; fragment-only "
-                "exploratory ranking, not a context-aware library match)"
+                "Query context: unavailable for eligibility (fragment-only exploratory ranking)"
             )
+        lines.append(
+            "Query precursor activation: " + activation_summary(context.acquisition)
+        )
+        lines.append("Library activation comparability: unknown (not assessed).")
         lines.append(
             f"Scoring method: {_scoring_label(scoring_method, ms2_tolerance_da)}"
         )
         lines.append(
             f"Instrument class: {profile.instrument_class} "
-            f"(MS2 window ±{ms2_tolerance_da:g} Da)"
+            f"(configured MS2 window ±{ms2_tolerance_da:g} Da)"
         )
         lines.append("")
 
@@ -1401,6 +1408,12 @@ def _search_provenance(
         "query_is_real_data": True,
         "instrument_class": profile.instrument_class,
         "ms2_tolerance_da": profile.ms2_tolerance_da,
+        "ms2_tolerance_used_da": (
+            profile.ms2_tolerance_da
+            if request.scoring_method == "classical"
+            and eligibility_counts["matched"] + eligibility_counts["unknown"] > 0
+            else None
+        ),
         "declared_precursor_tolerance": profile.precursor_tolerance.to_dict(),
         "precursor_tolerance_applied": precursor_gate_applied,
         "precursor_tolerance_used": (
@@ -1409,7 +1422,7 @@ def _search_provenance(
         "precursor_tolerance_reason": (
             "applied to MS2 query with stated precursor"
             if precursor_gate_applied
-            else "not applied: query MS2 precursor context unavailable"
+            else "not applied: no query/reference precursor comparison"
         ),
         "query_context": context.to_dict(),
         "eligibility_policy": "ms2_precursor_polarity_charge_adduct.v1",
@@ -1451,6 +1464,7 @@ def _search_provenance(
         )
     return provenance_for(
         "search_library",
+        acquisition=context.acquisition,
         parameters=parameters,
         sources=tuple(sources),
         parents=(request.spectrum_reference,) if request.spectrum_reference else (),
@@ -1535,10 +1549,7 @@ def _context_note(context: QueryContext) -> str:
     if context.isolation_window is not None:
         parts.append(f"isolation window {context.isolation_window:g} m/z")
     if not parts:
-        return (
-            "unavailable (direct peak list); the search is fragment-only "
-            "exploratory and not context-aware"
-        )
+        return "unavailable for eligibility (fragment-only exploratory ranking)"
     if not context.usable_for_library_search:
         return ", ".join(parts) + " (precursor gate unavailable)"
     return ", ".join(parts) + " (precursor gate enabled)"

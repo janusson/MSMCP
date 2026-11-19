@@ -1,0 +1,3 @@
+# Preserve pinned upstream bytes, including their line endings.
+*.mzML -text -diff
+OpenMS-LICENSE.txt -text whitespace=-blank-at-eof

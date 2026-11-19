@@ -32,6 +32,7 @@ from typing import Final
 import numpy as np
 
 from msmcp import security
+from msmcp.acquisition import MGFAcquisition
 from msmcp.errors import (
     MalformedFileError,
     UnsupportedFormatError,
@@ -162,6 +163,15 @@ def _build_spectrum(
 
     return Spectrum(
         index=index,
+        acquisition=MGFAcquisition(
+            pepmass=fields.get("PEPMASS"),
+            mslevel=fields.get("MSLEVEL"),
+            ionmode=fields.get("IONMODE"),
+            charge=fields.get("CHARGE"),
+            z=fields.get("Z"),
+            rtinseconds=fields.get("RTINSECONDS"),
+            rtinminutes=fields.get("RTINMINUTES"),
+        ),
         ms_level=_to_int_or_none(fields.get("MSLEVEL")),
         retention_time=retention_time,
         precursor_mz=_to_float_or_none(fields.get("PEPMASS")),
