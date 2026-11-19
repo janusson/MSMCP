@@ -335,6 +335,115 @@ class TestConcurrencyCap:
             await _wait_until_settled(exec_, handle.job_id)
         assert all(exec_.result(h.job_id).status == "completed" for h in handles)
 
+    async def test_cancelling_running_worker_keeps_concurrency_slot(self) -> None:
+        """A cancelled to_thread worker must keep its slot until it exits."""
+        exec_ = executor(max_concurrency=1)
+        started = threading.Event()
+        release = threading.Event()
+        follower_started = threading.Event()
+
+        def first() -> str:
+            started.set()
+            if not release.wait(5.0):
+                raise RuntimeError("worker gate timed out")
+            return "late output"
+
+        def follower() -> str:
+            follower_started.set()
+            return "second output"
+
+        first_job = exec_.submit("first", first)
+        try:
+            assert await asyncio.to_thread(started.wait, 2.0)
+            second_job = exec_.submit("follower", follower)
+            await asyncio.sleep(0)
+            assert exec_.status(second_job.job_id).phase == "queued"
+
+            assert exec_.cancel(first_job.job_id).status == "cancelled"
+            assert exec_.result(first_job.job_id).value is None
+
+            # The first thread is still blocked. Cancelling its asyncio task
+            # must not allow the second worker to start.
+            assert not await asyncio.to_thread(follower_started.wait, 0.15)
+            assert exec_.status(second_job.job_id).phase == "queued"
+
+            release.set()
+            assert await asyncio.to_thread(follower_started.wait, 2.0)
+            await _wait_until_settled(exec_, second_job.job_id)
+            assert exec_.result(second_job.job_id).value == "second output"
+            assert exec_.result(first_job.job_id).status == "cancelled"
+            assert exec_.result(first_job.job_id).value is None
+        finally:
+            release.set()
+
+    async def test_cancelled_worker_exception_and_repeated_cancel_keep_slot(
+        self,
+    ) -> None:
+        """A late worker failure cannot replace cancellation or free its slot."""
+        exec_ = executor(max_concurrency=1)
+        started = threading.Event()
+        release = threading.Event()
+        follower_started = threading.Event()
+
+        def failing_worker() -> None:
+            started.set()
+            if not release.wait(5.0):
+                raise RuntimeError("worker gate timed out")
+            raise RuntimeError("late failure after cancellation")
+
+        first_job = exec_.submit("failing", failing_worker)
+        try:
+            assert await asyncio.to_thread(started.wait, 2.0)
+            follower = exec_.submit("follower", lambda: follower_started.set())
+            assert exec_.cancel(first_job.job_id).status == "cancelled"
+            assert exec_.cancel(first_job.job_id).status == "cancelled"
+            assert not await asyncio.to_thread(follower_started.wait, 0.15)
+
+            release.set()
+            assert await asyncio.to_thread(follower_started.wait, 2.0)
+            await _wait_until_settled(exec_, follower.job_id)
+            await asyncio.sleep(0)
+            cancelled = exec_.result(first_job.job_id)
+            assert cancelled.status == "cancelled"
+            assert cancelled.value is None
+            assert cancelled.error is None
+            assert cancelled.traceback is None
+        finally:
+            release.set()
+
+    async def test_shutdown_preserves_slot_until_running_worker_exits(self) -> None:
+        """Shutdown cancels job records, not already-running worker threads."""
+        exec_ = executor(max_concurrency=1)
+        started = threading.Event()
+        release = threading.Event()
+        queued_started = threading.Event()
+        follower_started = threading.Event()
+
+        def first() -> None:
+            started.set()
+            if not release.wait(5.0):
+                raise RuntimeError("worker gate timed out")
+
+        first_job = exec_.submit("first", first)
+        try:
+            assert await asyncio.to_thread(started.wait, 2.0)
+            exec_.submit("queued", lambda: queued_started.set())
+            exec_.shutdown()
+            assert len(exec_) == 0
+
+            # A new submission on the same executor cannot use the resource
+            # occupied by the shutdown-cancelled worker.
+            follower = exec_.submit("follower", lambda: follower_started.set())
+            assert not await asyncio.to_thread(follower_started.wait, 0.15)
+            release.set()
+            assert await asyncio.to_thread(follower_started.wait, 2.0)
+            await _wait_until_settled(exec_, follower.job_id)
+            assert not queued_started.is_set()
+            with pytest.raises(UnknownJobError):
+                exec_.status(first_job.job_id)
+        finally:
+            release.set()
+
     async def test_list_jobs_reports_every_record(self) -> None:
         exec_ = executor()
         handles = [exec_.submit("op", lambda: 1) for _ in range(3)]
