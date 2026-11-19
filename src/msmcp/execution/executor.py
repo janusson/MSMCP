@@ -31,6 +31,21 @@ Work runs on a worker thread, and a thread cannot be interrupted.  Cancelling
 therefore marks the job cancelled and discards its result: the caller observes
 a terminal ``cancelled`` state and never sees partial output, while the worker
 thread is left to unwind on its own.
+
+Client cancellation is immediate; release of capacity is not.  A queued job
+never starts.  A running job's worker keeps its concurrency slot until the
+callable returns or raises, so jobs queued behind it keep waiting.  Its late
+value, error and traceback are discarded, and its terminal snapshot does not
+change when the worker exits.  ``forget`` and ``shutdown`` follow the same
+rule.  Nothing here terminates a thread: a callable that never returns holds
+its slot for the life of the process.
+
+Residual limitation: the slot is held only when cancellation goes through
+:meth:`LocalAsyncExecutor.cancel`, ``forget`` or ``shutdown``.  If the job's
+internal asyncio task is cancelled from outside the executor, for example when
+the event loop is torn down, the slot is released while the thread may still be
+running.  At loop teardown the slot no longer matters, and the loop still waits
+for its worker threads.
 """
 
 from __future__ import annotations
@@ -407,6 +422,14 @@ class LocalAsyncExecutor(JobExecutor):
             raise
         except Exception as exc:
             if record.cancel_event.is_set():
+                # The job is already terminal, so the failure is discarded.
+                # Log only the type: a message or traceback can carry file
+                # paths or data from the caller's input.
+                logger.debug(
+                    "Discarded late %s from cancelled job %s",
+                    type(exc).__name__,
+                    record.job_id,
+                )
                 return
             logger.exception("Job %s failed", record.job_id)
             record.error = _summarise_exception(exc)
@@ -478,6 +501,8 @@ class LocalAsyncExecutor(JobExecutor):
         A thread already executing cannot be interrupted, so the job is marked
         cancelled immediately and any late result is discarded.  This keeps the
         caller-visible contract honest: ``cancelled`` never carries output.
+        The worker keeps its concurrency slot until the callable returns or
+        raises; retention of the record starts now.
         """
         record = self._record(job_id)
         if record.status in _TERMINAL_STATUSES:

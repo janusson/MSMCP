@@ -10,6 +10,7 @@ swallowed.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 
 import pytest
@@ -277,6 +278,88 @@ class TestCancellation:
             assert exec_.status(first.job_id) == cancelled
             outcome = exec_.result(first.job_id)
             assert outcome.value is outcome.error is outcome.traceback is None
+
+    async def test_cancel_before_worker_starts_expires_under_ttl(self) -> None:
+        """A job cancelled before its task first runs is still retired by TTL.
+
+        Cancelling a task that has not started means its coroutine body never
+        runs, so expiry cannot be scheduled from inside the job; ``cancel``
+        has to start retention itself.
+        """
+        exec_ = executor(default_ttl_seconds=0.0)
+        ran = threading.Event()
+        handle = exec_.submit("op", ran.set)
+        snapshot = exec_.cancel(handle.job_id)  # no await: the task never started
+        assert snapshot.status == "cancelled"
+        assert snapshot.phase == "settled"
+
+        for _ in range(100):  # bounded event-loop turns, no wall-clock sleep
+            if len(exec_) == 0:
+                break
+            await asyncio.sleep(0)
+        assert len(exec_) == 0
+        with pytest.raises(UnknownJobError):
+            exec_.status(handle.job_id)
+        assert not ran.is_set()
+
+    @pytest.mark.parametrize("finish", ["return", "raise"])
+    async def test_cancelled_terminal_snapshot_is_unchanged_after_worker_exits(
+        self, finish: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The worker exiting after public cancellation changes nothing visible.
+
+        The clock is advanced between cancellation and worker exit, so any
+        re-settlement would change ``last_updated_at``.  A late failure is
+        logged at debug level by exception type only.
+        """
+        caplog.set_level(logging.DEBUG, logger="msmcp.execution")
+        exec_ = executor(max_concurrency=1)
+        loop = asyncio.get_running_loop()
+        entered = asyncio.Event()
+        exited = asyncio.Event()
+        release = threading.Event()
+        secret = "sensitive detail /private/sample.mzML"
+
+        def work() -> str:
+            loop.call_soon_threadsafe(entered.set)
+            try:
+                release.wait()
+                if finish == "raise":
+                    raise RuntimeError(secret)
+                return "late result"
+            finally:
+                loop.call_soon_threadsafe(exited.set)
+
+        handle = exec_.submit("op", work)
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            cancelled = exec_.cancel(handle.job_id)
+            exec_.clock.advance(60.0)  # type: ignore[attr-defined]
+        finally:
+            release.set()
+        await asyncio.wait_for(exited.wait(), 5)
+        # The follower can only run once the cancelled job's task has left
+        # its slot, i.e. after the late outcome has been handled.
+        follower = exec_.submit("follower", lambda: "ok")
+        await _wait_until_settled(exec_, follower.job_id)
+
+        assert exec_.status(handle.job_id) == cancelled
+        outcome = exec_.result(handle.job_id)
+        assert outcome.status == "cancelled"
+        assert outcome.value is outcome.error is outcome.traceback is None
+
+        records = [r for r in caplog.records if r.name == "msmcp.execution"]
+        assert all(r.levelno < logging.WARNING for r in records)
+        assert all(r.exc_info is None for r in records)
+        assert all(secret not in r.getMessage() for r in records)
+        discarded = [r for r in records if "Discarded late" in r.getMessage()]
+        if finish == "raise":
+            assert len(discarded) == 1
+            assert discarded[0].levelno == logging.DEBUG
+            assert "RuntimeError" in discarded[0].getMessage()
+            assert handle.job_id in discarded[0].getMessage()
+        else:
+            assert discarded == []
 
 
 # ---------------------------------------------------------------------------

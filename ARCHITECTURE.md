@@ -284,6 +284,17 @@ Cancellation semantics are explicit: a worker thread cannot be interrupted, so
 cancelling marks the job terminal and **discards** its output. A caller that
 sees `cancelled` never sees partial results.
 
+Client cancellation is immediate; release of capacity is not. A running
+cancelled job keeps its concurrency slot until its callable returns or raises,
+so queued jobs keep waiting behind it. Its terminal snapshot does not change
+when the worker exits, and a late failure is logged at debug level by
+exception type only. `forget` and `shutdown` follow the same rule. Nothing
+terminates a thread: a callable that never returns holds its slot for the life
+of the process. The slot is held only when cancellation goes through the
+executor's `cancel`, `forget` or `shutdown`; if the job's internal asyncio task
+is cancelled from outside, for example at event-loop teardown, the slot is
+released while the thread may still run.
+
 Delivery semantics are explicit too: a finished job's report is handed out
 **once**, and every later poll answers with a short digest of it (library size,
 hit count, top hit); `check_search_status(..., full_report=True)` re-requests
