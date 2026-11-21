@@ -17,6 +17,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Screen-style reports also carry `UNTRUSTED_DATA_NOTE`. See
   `skills/untrusted-report-text/`. The rendering rule is now part of
   `AGENTS.md`.
+- **File-usage refusals escape the path they quote.** `search_library`'s
+  out-of-range and empty-query messages and `generate_qc_summary`'s
+  no-spectra message now pass the caller-supplied path through
+  `escape_inline`, so a file name containing `&`, `>` or a backtick cannot
+  reshape those messages - or close the code span they sit in - before an LLM
+  host reads them. The refusals are the remaining tool-layer path
+  interpolations; report text was already covered.
 - **Malformed input can no longer surface as an internal fault.** A non-UTF-8
   MGF/MSP and a truncated or CRC-corrupt `.gz` mzML/MGF now raise
   `MalformedFileError` instead of leaking `UnicodeDecodeError`, `EOFError` or

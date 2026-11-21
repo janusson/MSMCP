@@ -831,6 +831,55 @@ class TestQuerySpectrumSelection:
                 database_file=DB_FILE,
             )
 
+    async def test_out_of_range_refusal_escapes_the_file_name(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        ms2_query_mzml: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The refusal quotes the path as data, not as report structure."""
+        from msmcp.errors import SpectrumIndexError
+
+        hostile = ms2_query_mzml.parent / "run & calc`index`.mzML"
+        hostile.write_bytes(ms2_query_mzml.read_bytes())
+        self._allow(hostile, monkeypatch)
+
+        with pytest.raises(SpectrumIndexError) as caught:
+            await search_tools["search_library"](
+                experimental_file=str(hostile),
+                spectrum_index=99,
+                database_file=DB_FILE,
+            )
+
+        message = str(caught.value)
+        assert "run & calc`index`.mzML" not in message
+        assert "run &amp; calc'index'.mzML" in message
+
+    async def test_empty_scan_refusal_escapes_the_file_name(
+        self,
+        search_tools: dict[str, Callable[..., Awaitable[str]]],
+        mzml_with_empty_scan: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The empty-scan message escapes the path the same way."""
+        from msmcp.errors import MsmcpError
+
+        hostile = mzml_with_empty_scan.parent / "run & calc`empty`.mzML"
+        hostile.write_bytes(mzml_with_empty_scan.read_bytes())
+        self._allow(hostile, monkeypatch)
+
+        with pytest.raises(MsmcpError) as caught:
+            await search_tools["search_library"](
+                experimental_file=str(hostile),
+                spectrum_index=1,
+                database_file=DB_FILE,
+            )
+
+        message = str(caught.value)
+        assert "no peaks" in message
+        assert "run & calc`empty`.mzML" not in message
+        assert "run &amp; calc'empty'.mzML" in message
+
     async def test_spectrum_index_without_a_file_is_rejected(
         self,
         search_tools: dict[str, Callable[..., Awaitable[str]]],

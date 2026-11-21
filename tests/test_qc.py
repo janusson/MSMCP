@@ -376,6 +376,24 @@ class TestQC:
         )
         assert file_line.count("`") == 2
 
+    def test_qc_empty_file_refusal_escapes_the_path(
+        self,
+        qc_tools: dict[str, Callable[..., str]],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The refusal names the file as data, not as report structure."""
+        path = tmp_path / "run & calc`scan`.mgf"
+        path.write_text("", encoding="utf-8")
+        monkeypatch.setattr(qc, "DEFAULT_POLICY", SecurityPolicy(allowed_root=tmp_path))
+
+        with pytest.raises(MalformedFileError) as caught:
+            qc_tools["generate_qc_summary"](str(path))
+
+        message = str(caught.value)
+        assert "run & calc`scan`.mgf" not in message
+        assert "run &amp; calc'scan'.mgf" in message
+
     def test_qc_missing_file(
         self,
         qc_tools: dict[str, Callable[..., str]],

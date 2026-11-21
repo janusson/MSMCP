@@ -480,7 +480,9 @@ def register_tools(mcp: Any) -> None:
                 close()
 
         if n_total == 0:
-            raise MalformedFileError(f"'{file_path}' contains no spectra to analyse.")
+            raise MalformedFileError(
+                f"'{escape_inline(file_path)}' contains no spectra to analyse."
+            )
 
         if source.format == "imzML" and not any(n_peaks_list):
             raise MalformedFileError(

@@ -624,7 +624,8 @@ def _peaks_from_file(
         ]
         if not peaks:
             raise MsmcpError(
-                f"Spectrum #{spectrum_index} of '{file_path}' contains no peaks, "
+                f"Spectrum #{spectrum_index} of '{escape_inline(file_path)}' "
+                f"contains no peaks, "
                 f"so there is nothing to search.  Empty scans are ordinary in "
                 f"real acquisitions; call `load_mzml_summary` to find a "
                 f"populated one and pass its index."
@@ -636,7 +637,8 @@ def _peaks_from_file(
         )
 
     raise SpectrumIndexError(
-        f"'{file_path}' contains no spectrum at index {spectrum_index}.  The "
+        f"'{escape_inline(file_path)}' contains no spectrum at index "
+        f"{spectrum_index}.  The "
         f"file was read successfully, so the index is out of range; check the "
         f"file's spectrum count."
     )
